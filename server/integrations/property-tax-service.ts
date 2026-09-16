@@ -13,37 +13,11 @@
 import {
   type CountySlug,
 } from "./parcel-resolver";
-import {
-  runCountyEstimator,
-  type CountyEstimatorRequest,
-  type CountyEstimatorResult,
-} from "./county-estimator-runner";
+import { runCountyEstimator } from "./county-estimator-runner";
 import { PURCHASE_TAX_LOW_ASSESSMENT_RATIO } from "@shared/property-tax-policy";
-import {
-  isCountyEstimatorVerified,
-} from "@shared/county-estimator-policy";
 import {
   totalNonSchoolHomesteadExemptionForYear,
 } from "./property-tax-cache";
-
-// 2025 effective county tax rates as a share of purchase price. These rates
-// already represent the selected low-end estimate; do not apply the shared
-// 85% purchase-assessment ratio to them a second time. They are the
-// pre-estimator-removal fallback contract and intentionally do not use a
-// parcel's current value or a paid tax-bill lookup.
-export const COUNTY_FORMULA_RATES: Record<string, { h: number; nh: number }> = {
-  hillsborough: { h: 0.0141, nh: 0.0155 },
-  pinellas: { h: 0.01517, nh: 0.0185 },
-  pasco: { h: 0.0141, nh: 0.0172 },
-  manatee: { h: 0.01197, nh: 0.0146 },
-  sarasota: { h: 0.0105, nh: 0.0128 },
-  hernando: { h: 0.01197, nh: 0.0146 },
-  lee: { h: 0.01148, nh: 0.014 },
-  // 2025 Collier parcel millage is roughly 11.05 mills. New-purchase
-  // reassessment at the shared 85% model is about 0.94% before homestead.
-  collier: { h: 0.00825, nh: 0.00939 },
-  polk: { h: 0.01263, nh: 0.0154 },
-};
 
 /**
  * The public route shape remains stable, but unavailable purchase estimates
@@ -58,7 +32,6 @@ export interface PurchaseTaxResult {
   monthlyTax: number | null;
   source: string;
   fromGeneralCache: boolean;
-  estimatorVerified: boolean;
   parcelId?: string;
   folio?: string;
   taxDistrict?: string;
@@ -80,7 +53,6 @@ function unavailablePurchaseResult(params: {
     monthlyTax: null,
     source: `${params.county}-county-estimator-unavailable`,
     fromGeneralCache: false,
-    estimatorVerified: true,
     parcelId: params.parcelId,
     nonAdValoremLines: [],
     nonAdValoremPending: false,
@@ -103,7 +75,6 @@ function resultFromOfficialEstimator(params: {
     monthlyTax: Math.round((adValoremTax / 12) * 100) / 100,
     source: "county-estimator",
     fromGeneralCache: false,
-    estimatorVerified: true,
     parcelId: params.parcelId,
     nonAdValoremLines: [],
     nonAdValoremPending: false,
@@ -115,17 +86,12 @@ async function runOfficialPurchaseEstimator(params: {
   address: string;
   purchasePrice: number;
   isPrimaryResidence: boolean;
-  forceUnavailable?: boolean;
-  runEstimator?: (
-    request: CountyEstimatorRequest,
-  ) => Promise<CountyEstimatorResult>;
 }): Promise<PurchaseTaxResult> {
-  const result = await (params.runEstimator ?? runCountyEstimator)({
+  const result = await runCountyEstimator({
     county: params.county,
     address: params.address,
     purchasePrice: params.purchasePrice,
     homestead: params.isPrimaryResidence,
-    ...(params.forceUnavailable ? { __forceUnavailable: true } : {}),
   });
   if (result.status !== "ok") {
     return unavailablePurchaseResult({
@@ -136,91 +102,6 @@ async function runOfficialPurchaseEstimator(params: {
   return resultFromOfficialEstimator({
     county: params.county,
     adValoremCents: result.adValoremCents,
-  });
-}
-
-function formulaPurchaseResult(params: {
-  county: CountySlug;
-  purchasePrice: number;
-  isPrimaryResidence: boolean;
-}): PurchaseTaxResult {
-  const rates = COUNTY_FORMULA_RATES[params.county];
-  if (!rates) {
-    throw new Error(`No purchase-tax formula rate is configured for ${params.county}.`);
-  }
-  const adValoremTax = Math.round(
-    params.purchasePrice *
-      (params.isPrimaryResidence ? rates.h : rates.nh),
-  );
-  return {
-    adValoremTax,
-    nonAdValoremTax: 0,
-    annualTax: adValoremTax,
-    monthlyTax: Math.round((adValoremTax / 12) * 100) / 100,
-    source: `${params.county}-formula-fallback`,
-    fromGeneralCache: false,
-    estimatorVerified: false,
-    nonAdValoremLines: [],
-    nonAdValoremPending: false,
-  };
-}
-
-interface PurchaseTaxRequest {
-  county: CountySlug;
-  address: string;
-  purchasePrice: number;
-  isPrimaryResidence: boolean;
-}
-
-interface PurchaseTaxExecutionOptions {
-  /**
-   * Only the focused test helper sets this override. Production requests
-   * always consult the shared verified-county registry.
-   */
-  estimatorVerifiedOverride?: boolean;
-  forceEstimatorUnavailable?: boolean;
-  runEstimator?: (
-    request: CountyEstimatorRequest,
-  ) => Promise<CountyEstimatorResult>;
-}
-
-async function getPurchaseTax(
-  params: PurchaseTaxRequest,
-  options: PurchaseTaxExecutionOptions = {},
-): Promise<PurchaseTaxResult> {
-  const estimatorVerified =
-    options.estimatorVerifiedOverride ??
-    isCountyEstimatorVerified(params.county);
-
-  if (!estimatorVerified) {
-    return formulaPurchaseResult(params);
-  }
-
-  return runOfficialPurchaseEstimator({
-    ...params,
-    forceUnavailable: options.forceEstimatorUnavailable,
-    runEstimator: options.runEstimator,
-  });
-}
-
-/**
- * Test-only gate injection. It marks one request as verified without mutating
- * ESTIMATOR_VERIFIED_COUNTIES, allowing failure behavior to be tested while
- * the production registry remains empty.
- */
-export async function getCountyPurchaseTaxForTest(
-  params: PurchaseTaxRequest,
-  options: {
-    forceEstimatorUnavailable?: boolean;
-    runEstimator?: (
-      request: CountyEstimatorRequest,
-    ) => Promise<CountyEstimatorResult>;
-  } = {},
-): Promise<PurchaseTaxResult> {
-  return getPurchaseTax(params, {
-    estimatorVerifiedOverride: true,
-    forceEstimatorUnavailable: options.forceEstimatorUnavailable,
-    runEstimator: options.runEstimator,
   });
 }
 
@@ -302,7 +183,7 @@ export async function getHillsboroughPurchaseTax(params: {
   isPrimaryResidence: boolean;
   now?: Date;
 }): Promise<PurchaseTaxResult> {
-  return getPurchaseTax({
+  return runOfficialPurchaseEstimator({
     county: "hillsborough",
     address: params.address,
     purchasePrice: params.purchasePrice,
@@ -324,9 +205,8 @@ export async function getPinellasPurchaseTax(params: {
   parcelId: string | null;
   millageRate: number | null;
   fromGeneralCache: boolean;
-  estimatorVerified: boolean;
 }> {
-  const result = await getPurchaseTax({
+  const result = await runOfficialPurchaseEstimator({
     county: "pinellas",
     address: params.address,
     purchasePrice: params.purchasePrice,
@@ -341,7 +221,6 @@ export async function getPinellasPurchaseTax(params: {
     parcelId: result.parcelId ?? null,
     millageRate: result.millageRate ?? null,
     fromGeneralCache: result.fromGeneralCache,
-    estimatorVerified: result.estimatorVerified,
   };
 }
 
@@ -358,7 +237,12 @@ export async function getCountyPurchaseTax(params: {
   isPrimaryResidence: boolean;
   now?: Date;
 }): Promise<PurchaseTaxResult> {
-  return getPurchaseTax(params);
+  return runOfficialPurchaseEstimator({
+    county: params.county,
+    address: params.address,
+    purchasePrice: params.purchasePrice,
+    isPrimaryResidence: params.isPrimaryResidence,
+  });
 }
 
 export async function getManateePurchaseTax(params: {
@@ -373,9 +257,8 @@ export async function getManateePurchaseTax(params: {
   source: string;
   parcelId: string | null;
   fromGeneralCache: boolean;
-  estimatorVerified: boolean;
 }> {
-  const result = await getPurchaseTax({
+  const result = await runOfficialPurchaseEstimator({
     county: "manatee",
     address: params.address,
     purchasePrice: params.purchasePrice,
@@ -388,6 +271,5 @@ export async function getManateePurchaseTax(params: {
     source: result.source,
     parcelId: result.parcelId ?? null,
     fromGeneralCache: result.fromGeneralCache,
-    estimatorVerified: result.estimatorVerified,
   };
 }

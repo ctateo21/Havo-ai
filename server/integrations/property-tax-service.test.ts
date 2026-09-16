@@ -7,17 +7,11 @@ import {
   type PropertyTaxCacheRow,
 } from "./property-tax-cache";
 import {
-  COUNTY_FORMULA_RATES,
   computePinellasAdValorem,
   deriveCountyAssessmentBasis,
-  getCountyPurchaseTaxForTest,
   getCountyPurchaseTax,
   getHillsboroughPurchaseTax,
 } from "./property-tax-service";
-import {
-  ESTIMATOR_VERIFIED_COUNTIES,
-  isCountyEstimatorVerified,
-} from "@shared/county-estimator-policy";
 import { calcAdValorem } from "./hillsborough-tax";
 import { PURCHASE_TAX_LOW_ASSESSMENT_RATIO } from "@shared/property-tax-policy";
 
@@ -27,9 +21,8 @@ const BILL_MILLS = [
   { authority: "PINELLAS COUNTY GENERAL", mills: 10.25 },
 ];
 
-test("unverified counties retain positive formula fallback results", async () => {
+test("purchase routes fail closed when no official county estimator is verified", async () => {
   const counties = [
-    "hillsborough",
     "pinellas",
     "manatee",
     "pasco",
@@ -47,16 +40,10 @@ test("unverified counties retain positive formula fallback results", async () =>
       purchasePrice: 525_000,
       isPrimaryResidence: false,
     });
-    const expected = Math.round(525_000 * COUNTY_FORMULA_RATES[county].nh);
-    assert.equal(result.adValoremTax, expected, county);
-    assert.equal(result.annualTax, expected, county);
-    assert.equal(
-      result.monthlyTax,
-      Math.round((expected / 12) * 100) / 100,
-      county,
-    );
-    assert.equal(result.source, `${county}-formula-fallback`, county);
-    assert.equal(result.estimatorVerified, false, county);
+    assert.equal(result.adValoremTax, null, county);
+    assert.equal(result.annualTax, null, county);
+    assert.equal(result.monthlyTax, null, county);
+    assert.match(result.source, /county-estimator-unavailable$/, county);
     assert.equal(result.nonAdValoremTax, 0, county);
   }
 
@@ -65,47 +52,9 @@ test("unverified counties retain positive formula fallback results", async () =>
     purchasePrice: 350_000,
     isPrimaryResidence: true,
   });
-  assert.equal(
-    hillsborough.adValoremTax,
-    Math.round(350_000 * COUNTY_FORMULA_RATES.hillsborough.h),
-  );
-  assert.equal(hillsborough.estimatorVerified, false);
-});
-
-test("Collier formula fallback is the historical baseline, not a parcel sample", async () => {
-  const result = await getCountyPurchaseTax({
-    county: "collier",
-    address: "112 Palmetto Dunes Cir, Naples, FL 34113",
-    purchasePrice: 525_000,
-    isPrimaryResidence: false,
-  });
-  assert.equal(result.adValoremTax, 4_930);
-  assert.equal(result.annualTax, 4_930);
-  assert.equal(result.monthlyTax, 410.83);
-  assert.equal(result.source, "collier-formula-fallback");
-  assert.equal(result.estimatorVerified, false);
-  assert.equal(isCountyEstimatorVerified("collier"), false);
-  assert.deepEqual(ESTIMATOR_VERIFIED_COUNTIES, []);
-});
-
-test("verified estimator failure is unavailable without enabling the registry", async () => {
-  const result = await getCountyPurchaseTaxForTest(
-    {
-      county: "collier",
-      address: "112 Palmetto Dunes Cir, Naples, FL 34113",
-      purchasePrice: 525_000,
-      isPrimaryResidence: false,
-    },
-    { forceEstimatorUnavailable: true },
-  );
-
-  assert.equal(result.adValoremTax, null);
-  assert.equal(result.annualTax, null);
-  assert.equal(result.monthlyTax, null);
-  assert.equal(result.source, "collier-county-estimator-unavailable");
-  assert.equal(result.estimatorVerified, true);
-  assert.equal(result.nonAdValoremTax, 0);
-  assert.deepEqual(ESTIMATOR_VERIFIED_COUNTIES, []);
+  assert.equal(hillsborough.adValoremTax, null);
+  assert.equal(hillsborough.annualTax, null);
+  assert.match(hillsborough.source, /county-estimator-unavailable$/);
 });
 
 test("Pinellas live estimate ignores a higher current just value", () => {

@@ -2,22 +2,17 @@
  * Client-side guard for purchase property-tax responses.
  *
  * A purchase estimate may only display a number when the server identifies a
- * result from the approved official county-estimator adapter, or a clearly
- * labelled formula estimate from a county that has not been verified yet.
- * Parcel-cache, bill-scrape, and millage estimates are not a tax value that
+ * result from the approved official county-estimator adapter. Formula,
+ * parcel-cache, bill-scrape, and millage estimates are not a tax value that
  * can be presented to a borrower. Keep this check in one small,
  * dependency-free helper so every purchase surface applies the same rule.
  */
-
-export type PropertyTaxProvenance = "official" | "estimated";
 
 export type OfficialPropertyTaxResolution =
   | {
       status: "available";
       annualTax: number;
       source: string;
-      /** Stable UI/storage provenance; formula fallbacks are not official. */
-      provenance?: PropertyTaxProvenance;
       municipality?: string;
       millageRate?: number;
       nonAdValoremTax: number;
@@ -30,11 +25,11 @@ export type OfficialPropertyTaxResolution =
     };
 
 /**
- * A resolved response is only current when the amount written into the
+ * An official response is only current when the amount written into the
  * purchase inputs still matches that response. The tuple guard in the
  * purchase page uses this in addition to address/price/occupancy matching so
- * a changed official amount or formula estimate cannot briefly leave stale
- * annual taxes marked complete before the sync effect runs.
+ * a changed official amount cannot briefly leave stale annual taxes marked
+ * complete before the sync effect runs.
  */
 export function hasMatchingOfficialAnnualTax(
   officialAnnualTax: unknown,
@@ -61,10 +56,9 @@ function asRecord(value: unknown): TaxResponse | null {
 
 /**
  * Only the exact approved `county-estimator` label or a supported
- * `${county}-county-estimator` label is official. Formula fallback is
- * accepted only when the server explicitly identifies it as unverified and
- * names one of the supported counties. Explicit bill, situs, and parcel
- * labels are rejected even if annualTax happens to be greater than zero.
+ * `${county}-county-estimator` label is official. Explicit formula/fallback,
+ * bill, situs, and parcel labels are rejected even if annualTax happens to be
+ * greater than zero.
  */
 const OFFICIAL_COUNTIES = new Set([
   "hillsborough",
@@ -85,43 +79,6 @@ function isOfficialSource(source: string): boolean {
   return match !== null && OFFICIAL_COUNTIES.has(match[1]);
 }
 
-function formulaCounty(source: string, data: TaxResponse): string | null {
-  const normalized = source.trim().toLowerCase();
-  const sourceMatch = /^([a-z-]+)-formula(?:-fallback)?(?:-.+)?$/.exec(normalized);
-  const responseCountyRaw =
-    typeof data.county === "string"
-      ? data.county
-      : typeof data.countyName === "string"
-        ? data.countyName
-        : "";
-  const responseCounty = responseCountyRaw
-    .trim()
-    .toLowerCase()
-    .replace(/[-\s]+county$/, "");
-  const sourceCounty = sourceMatch?.[1];
-  if (sourceCounty && responseCounty && sourceCounty !== responseCounty) {
-    return null;
-  }
-  const county = sourceCounty ?? responseCounty;
-  return OFFICIAL_COUNTIES.has(county) ? county : null;
-}
-
-function isUnverifiedFormulaSource(
-  source: string,
-  data: TaxResponse,
-): boolean {
-  // Do not infer an unverified response from a missing flag. This keeps an
-  // unexpected/legacy fallback payload unavailable until the server sends the
-  // explicit per-county gate result.
-  if (data.estimatorVerified !== false) return false;
-  const normalized = source.trim().toLowerCase();
-  const hasFormulaLabel =
-    normalized === "formula" ||
-    normalized.includes("formula-fallback") ||
-    normalized.endsWith("-formula");
-  return hasFormulaLabel && formulaCounty(source, data) !== null;
-}
-
 function unavailableReason(data: TaxResponse): string | undefined {
   for (const key of ["reason", "error", "message", "operationalError"]) {
     const value = data[key];
@@ -139,10 +96,8 @@ function unavailable(data?: TaxResponse): OfficialPropertyTaxResolution {
 
 /**
  * Normalize the current and next server contracts.  In particular, a
- * `useFallback` response, an explicit `status: "unavailable"`, an
- * unrecognized formula source, or a missing source is never converted into a
- * numeric zero. A gated formula fallback is returned as a numeric estimate so
- * purchase calculations can continue without presenting it as official.
+ * `useFallback` response, an explicit `status: "unavailable"`, a formula
+ * source, or a missing source is never converted into a numeric zero.
  */
 export function parseOfficialPropertyTaxResponse(
   value: unknown,
@@ -153,16 +108,16 @@ export function parseOfficialPropertyTaxResponse(
   const status = typeof data.status === "string"
     ? data.status.trim().toLowerCase()
     : "";
-  const source = typeof data.source === "string" ? data.source : "";
-  const estimated = isUnverifiedFormulaSource(source, data);
   if (
-    ((status === "unavailable" || status === "error") && !estimated) ||
-    (data.useFallback === true && !estimated) ||
-    (data.official === false && !estimated)
+    status === "unavailable" ||
+    status === "error" ||
+    data.useFallback === true ||
+    data.official === false
   ) {
     return unavailable(data);
   }
 
+  const source = typeof data.source === "string" ? data.source : "";
   if (data.annualTax == null) {
     return unavailable(data);
   }
@@ -171,8 +126,8 @@ export function parseOfficialPropertyTaxResponse(
     typeof annualTax !== "number" ||
     !Number.isFinite(annualTax) ||
     annualTax < 0 ||
-    (!isOfficialSource(source) && !estimated) ||
-    (data.official === false && !estimated)
+    !isOfficialSource(source) ||
+    data.official === false
   ) {
     return unavailable(data);
   }
@@ -188,7 +143,6 @@ export function parseOfficialPropertyTaxResponse(
     status: "available",
     annualTax,
     source,
-    ...(estimated ? { provenance: "estimated" as const } : {}),
     municipality:
       typeof data.taxDistrict === "string" ? data.taxDistrict :
       typeof data.municipality === "string" ? data.municipality :

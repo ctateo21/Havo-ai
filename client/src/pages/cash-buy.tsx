@@ -22,12 +22,19 @@ import {
   getCashBuyScenarios, saveCashBuyScenarios,
   type CashBuyScenario, type CashBuyOccupancyType, type SellerConcessionsMode,
   type CashBuyInsuranceFactors,
-  clearUnvalidatedCashBuyPropertyTax, applyCashBuyFormulaTax,
-  hasValidatedCashBuyPropertyTax,
+  clearUnvalidatedCashBuyPropertyTax, hasValidatedCashBuyPropertyTax,
 } from "@/lib/auth";
 import { notifyNewScenario } from "@/lib/notify-scenario";
 import { normalizePropertyKey } from "@/lib/property-key";
 import { trackEvent } from "@/lib/posthog";
+import {
+  cashBuyTaxBadge,
+  cashBuyTaxHint,
+  canApplyCashBuyTaxResult,
+  lookupCashBuyPropertyTax,
+  sameCashBuyTaxRequest,
+  type CashBuyTaxLookupState,
+} from "@/lib/cash-buy-property-tax";
 import { calculateDefaultHomeownersInsurance } from "@/lib/insurance-default";
 import { apiRequest } from "@/lib/queryClient";
 import { useQuery } from "@tanstack/react-query";
@@ -54,13 +61,13 @@ function makeId(): string {
 }
 
 /**
- * Legacy Cash Buy rows may carry an "official" or formula marker without the
- * exact address/price/occupancy request tuple that produced it. Do not
- * hydrate those values as verified bills. The parcel-specific official
- * lookup is intentionally owned by the separate Cash Buy task.
+ * Legacy Cash Buy rows may carry an "official" marker without the exact
+ * address/price/occupancy request tuple that produced it. Do not hydrate
+ * those values as verified bills. The parcel-specific official lookup is
+ * intentionally owned by the separate Cash Buy task.
  */
 function hydrateOfficialOnlyPropertyTax(scenario: CashBuyScenario): CashBuyScenario {
-  return applyCashBuyFormulaTax(clearUnvalidatedCashBuyPropertyTax(scenario));
+  return clearUnvalidatedCashBuyPropertyTax(scenario);
 }
 
 function sellerConcessionsApplied(s: CashBuyScenario): number {
@@ -125,6 +132,7 @@ function legacyInsuranceYearIndex(yearBuilt: number): number {
 interface NumRowProps {
   label: string;
   hint?: string;
+  testId?: string;
   value: number;
   onChange: (v: number) => void;
   min: number;
@@ -143,7 +151,7 @@ interface NumRowProps {
 }
 
 function NumRow({
-  label, hint, value, onChange, min, max, step = 1,
+  label, hint, testId, value, onChange, min, max, step = 1,
   prefix, suffix, decimals = 0, badge, slider = true,
   unavailable = false,
 }: NumRowProps) {
@@ -169,7 +177,7 @@ function NumRow({
   // and the editable value pill on the right (25%). Mobile stacks
   // so the slider never gets cramped.
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-1.5" data-testid={testId}>
       <div className="flex items-center gap-2 flex-wrap">
         <Label className="text-xs font-medium">{label}</Label>
         {badge}
@@ -283,7 +291,7 @@ export default function CashBuyPage() {
       : undefined;
     if (byAddr) return hydrateOfficialOnlyPropertyTax(byAddr);
     const now = new Date().toISOString();
-    return applyCashBuyFormulaTax({
+    return {
       id: makeId(),
       address: addressFromUrl || "Unknown Address",
       normalizedPropertyKey: addressFromUrl ? normalizePropertyKey(addressFromUrl).key || undefined : undefined,
@@ -302,7 +310,7 @@ export default function CashBuyPage() {
       sellerConcessionsMode: "percent",
       sellerConcessionsPercent: 0,
       sellerConcessionsAmount: 0,
-    });
+    };
   });
 
   // An official tax value is only valid for the exact lookup context that
@@ -326,14 +334,104 @@ export default function CashBuyPage() {
       occupancyType: scenario.occupancyType,
     };
     if (!changed) return;
-    setScenario(prev =>
-      applyCashBuyFormulaTax(clearUnvalidatedCashBuyPropertyTax(prev)),
-    );
+    setScenario(prev => clearUnvalidatedCashBuyPropertyTax(prev));
   }, [scenario.address, scenario.purchasePrice, scenario.occupancyType]);
 
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const isMountedRef = useRef(true);
   useEffect(() => () => { isMountedRef.current = false; }, []);
+
+  // Tax lookup state is separate from the editable scenario value. The
+  // scenario stores only an official result tied to its exact request tuple;
+  // a manual value always wins over an in-flight response.
+  const [taxLookup, setTaxLookup] = useState<CashBuyTaxLookupState>({
+    status: "idle",
+  });
+  const taxLookupGenerationRef = useRef(0);
+
+  useEffect(() => {
+    const request = {
+      address: scenario.address,
+      purchasePrice: scenario.purchasePrice ?? 0,
+      occupancy: scenario.occupancyType ?? "primary",
+    } as const;
+    const generation = ++taxLookupGenerationRef.current;
+
+    if (scenario.propertyTaxesSource === "manual") {
+      setTaxLookup({ status: "manual", request });
+      return;
+    }
+
+    // A persisted official result is already authoritative for this exact
+    // tuple; do not replace it with a second request during Zillow/photo
+    // hydration.
+    if (
+      hasValidatedCashBuyPropertyTax(scenario) &&
+      scenario.propertyTaxesRequest
+    ) {
+      setTaxLookup({
+        status: "verified",
+        request,
+        annualTax: scenario.propertyTaxes,
+        source: "county-estimator",
+      });
+      return;
+    }
+
+    if (
+      !request.address ||
+      request.address === "Unknown Address" ||
+      request.purchasePrice <= 0
+    ) {
+      setTaxLookup({ status: "fallback", request });
+      return;
+    }
+
+    let cancelled = false;
+    setTaxLookup({ status: "loading", request });
+    lookupCashBuyPropertyTax(request).then(result => {
+      if (cancelled || generation !== taxLookupGenerationRef.current) return;
+      setTaxLookup(result);
+      const resolvedRequest = result.request;
+      if (
+        result.status !== "verified" ||
+        result.annualTax == null ||
+        !resolvedRequest
+      ) return;
+
+      setScenario(prev => {
+        const current = {
+          address: prev.address,
+          purchasePrice: prev.purchasePrice ?? 0,
+          occupancy: prev.occupancyType ?? "primary",
+        } as const;
+        if (!canApplyCashBuyTaxResult(current, resolvedRequest, prev.propertyTaxesSource)) {
+          return prev;
+        }
+        return {
+          ...prev,
+          propertyTaxes: result.annualTax,
+          propertyTaxesSource: "official",
+          propertyTaxesRequest: {
+            address: resolvedRequest.address,
+            purchasePrice: resolvedRequest.purchasePrice,
+            occupancyType: resolvedRequest.occupancy,
+          },
+        };
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    scenario.address,
+    scenario.purchasePrice,
+    scenario.occupancyType,
+    scenario.propertyTaxes,
+    scenario.propertyTaxesSource,
+    scenario.propertyTaxesRequest,
+  ]);
 
   // ─── Debounced auto-save (mirrors seller-estimate / Phase 1 guards) ───
   const firstRenderRef = useRef(true);
@@ -486,7 +584,7 @@ export default function CashBuyPage() {
               yearBuilt: Math.round(p.yearBuilt),
             };
           }
-          return applyCashBuyFormulaTax(clearUnvalidatedCashBuyPropertyTax(next));
+          return clearUnvalidatedCashBuyPropertyTax(next);
         });
 
         if (zPrice != null) {
@@ -576,14 +674,14 @@ export default function CashBuyPage() {
         const pct = prev.closingCostsPercent ?? DEFAULT_CLOSING_PERCENT;
         next.closingCosts = Math.round(v * (pct / 100));
       }
-      return applyCashBuyFormulaTax(clearUnvalidatedCashBuyPropertyTax(next));
+      return clearUnvalidatedCashBuyPropertyTax(next);
     });
   }
 
   function setOccupancy(occ: CashBuyOccupancyType) {
     setScenario(prev => {
       const next: CashBuyScenario = { ...prev, occupancyType: occ, occupancyTypeSource: "manual" };
-      return applyCashBuyFormulaTax(clearUnvalidatedCashBuyPropertyTax(next));
+      return clearUnvalidatedCashBuyPropertyTax(next);
     });
   }
 
@@ -597,12 +695,7 @@ export default function CashBuyPage() {
   }
 
   function setPropertyTaxes(v: number) {
-    setScenario(prev => ({
-      ...prev,
-      propertyTaxes: v,
-      propertyTaxesSource: "manual",
-      propertyTaxesRequest: undefined,
-    }));
+    setScenario(prev => ({ ...prev, propertyTaxes: v, propertyTaxesSource: "manual" }));
   }
 
   function setHomeownersInsurance(v: number) {
@@ -787,10 +880,18 @@ export default function CashBuyPage() {
     ?? simIns
     ?? baselineInsurance;
   const hasPropertyTax = hasValidatedCashBuyPropertyTax(scenario);
-  const propertyTaxEstimate =
-    hasPropertyTax &&
-    (scenario.propertyTaxesSource === "estimated" ||
-      scenario.propertyTaxesSource === "formula");
+  const displayedTaxRequest = {
+    address: scenario.address,
+    purchasePrice: price,
+    occupancy: scenario.occupancyType ?? "primary",
+  } as const;
+  const taxLookupStatus =
+    scenario.propertyTaxesSource === "manual"
+      ? "manual"
+      : taxLookup.status === "verified" &&
+          sameCashBuyTaxRequest(taxLookup.request, displayedTaxRequest)
+        ? "verified"
+        : taxLookup.status;
   const ongoingMonthly = hasPropertyTax
     ? Math.round(
       (scenario.propertyTaxes ?? 0) / 12 +
@@ -896,7 +997,7 @@ export default function CashBuyPage() {
                       heading: "Ongoing Costs",
                       rows: [
                         {
-                          label: `Annual property taxes${propertyTaxEstimate ? " (estimate)" : ""}`,
+                          label: "Annual property taxes",
                           value: hasPropertyTax
                             ? formatCurrency(scenario.propertyTaxes ?? 0)
                             : "Unavailable — enter manually",
@@ -1003,6 +1104,7 @@ export default function CashBuyPage() {
             <CardContent className="space-y-4">
               <NumRow
                 label="Purchase Price"
+                testId="cash-buy-purchase-price"
                 value={price}
                 onChange={setPurchasePrice}
                 min={0} max={sliderMax} step={1000} prefix="$"
@@ -1014,7 +1116,7 @@ export default function CashBuyPage() {
                   value={scenario.occupancyType ?? "primary"}
                   onValueChange={(v) => setOccupancy(v as CashBuyOccupancyType)}
                 >
-                  <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-9 text-sm" data-testid="select-cash-occupancy"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="primary">Primary Residence</SelectItem>
                     <SelectItem value="secondary">Secondary Home</SelectItem>
@@ -1078,6 +1180,7 @@ export default function CashBuyPage() {
                 {closingMode === "percent" ? (
                   <NumRow
                     label="Percent of Price"
+                    testId="cash-buy-closing-percent"
                     hint={`≈ ${formatCurrency(closing)} on the current purchase price.`}
                     value={scenario.closingCostsPercent ?? DEFAULT_CLOSING_PERCENT}
                     onChange={setClosingCostsPercent}
@@ -1086,6 +1189,7 @@ export default function CashBuyPage() {
                 ) : (
                   <NumRow
                     label="Dollar Amount"
+                    testId="cash-buy-closing-dollar"
                     hint={`≈ ${(price > 0 ? (closing / price * 100) : 0).toFixed(2)}% of purchase price.`}
                     value={closing}
                     onChange={setClosingCosts}
@@ -1149,26 +1253,25 @@ export default function CashBuyPage() {
             <CardHeader className="pb-2"><CardTitle className="text-sm">Ongoing Costs</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               <NumRow
-                label={`Annual Property Taxes${propertyTaxEstimate ? " (estimate)" : ""}`}
-                hint={`${(scenario as any).propertyTaxesSource === "manual" && hasPropertyTax
-                  ? "Manually entered. Editing price or property use won't overwrite this."
-                  : (scenario as any).propertyTaxesSource === "official" && hasPropertyTax
-                    ? "Official county estimator result. Editing price or property use won't overwrite this."
-                   : propertyTaxEstimate
-                     ? "Formula estimate for this county. Verify the official bill or enter it manually."
-                     : "Official county data unavailable — enter the annual bill manually."}${hasPropertyTax
-                     ? ` · ≈ ${formatCurrency(Math.round((scenario.propertyTaxes ?? 0) / 12))}/mo`
-                     : ""}`}
+                label="Annual Property Taxes"
+                testId="cash-buy-property-taxes"
+                hint={cashBuyTaxHint(
+                  taxLookupStatus,
+                  Math.round((scenario.propertyTaxes ?? 0) / 12),
+                )}
                 value={scenario.propertyTaxes ?? 0}
                 onChange={setPropertyTaxes}
                 min={0} max={50_000} step={50} prefix="$" suffix="/yr"
                 unavailable={!hasPropertyTax}
                 slider={false}
-                badge={propertyTaxEstimate ? (
-                  <Badge variant="outline" className="text-[10px] font-normal h-5 text-amber-700 border-amber-300">
-                    Estimate
-                  </Badge>
-                ) : undefined}
+                badge={(() => {
+                  const label = cashBuyTaxBadge(taxLookupStatus);
+                  return label ? (
+                    <Badge variant="outline" className="text-[10px] font-normal h-5">
+                      {label}
+                    </Badge>
+                  ) : null;
+                })()}
               />
               <NumRow
                 label="Annual Homeowners Insurance"

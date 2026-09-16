@@ -40,35 +40,7 @@ test("accepts the approved county-estimator response", () => {
   );
 });
 
-test("accepts only an explicitly gated formula fallback for a supported county", () => {
-  const estimated = parseOfficialPropertyTaxResponse({
-    annualTax: 5000,
-    source: "collier-formula-fallback",
-    estimatorVerified: false,
-  });
-  assert.deepEqual(estimated, {
-    status: "available",
-    annualTax: 5000,
-    source: "collier-formula-fallback",
-    provenance: "estimated",
-    municipality: undefined,
-    millageRate: undefined,
-    nonAdValoremTax: 0,
-    nonAdValoremPending: false,
-    operationalError: undefined,
-  });
-  assert.equal(
-    parseOfficialPropertyTaxResponse({
-      annualTax: 5000,
-      source: "formula-fallback",
-      county: "Collier County",
-      estimatorVerified: false,
-      official: false,
-      useFallback: true,
-    }).status,
-    "available",
-  );
-
+test("rejects formula and fallback sources even when they contain a number", () => {
   for (const source of [
     "collier-formula-strict-parcel-unavailable",
     "manatee-formula-plus-arcgis-nav",
@@ -80,25 +52,9 @@ test("accepts only an explicitly gated formula fallback for a supported county",
     const result = parseOfficialPropertyTaxResponse({
       annualTax: 5000,
       source,
-      estimatorVerified: false,
     });
     assert.equal(result.status, "unavailable", source);
   }
-  assert.equal(
-    parseOfficialPropertyTaxResponse({
-      annualTax: 5000,
-      source: "collier-formula-fallback",
-    }).status,
-    "unavailable",
-  );
-  assert.equal(
-    parseOfficialPropertyTaxResponse({
-      annualTax: 5000,
-      source: "orange-formula-fallback",
-      estimatorVerified: false,
-    }).status,
-    "unavailable",
-  );
 });
 
 test("explicit unavailable and legacy useFallback never become zero tax", () => {
