@@ -63,10 +63,10 @@ export default function HeroSection() {
       <div className="relative z-10 w-full max-w-2xl mx-auto px-4 text-center">
         <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-white mb-4 leading-tight">
           <span className="block">100% Free</span>
-          See the real cost of any Florida home — before you sign anything
+          Explore the costs of a Florida home — before you sign anything
         </h1>
         <p className="text-lg md:text-xl text-white/80 mb-10">
-          Type any Florida address and get the true monthly cost in seconds — mortgage, property taxes, insurance, and flood. Free, instant, and no sign-up or personal info needed to see your first home.
+          Start with an address to explore mortgage and insurance costs. Property taxes require an official county estimate or manual entry; complete payment totals are shown only after taxes are provided. Free, with no sign-up needed for your first home.
         </p>
 
         <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3 max-w-xl mx-auto">

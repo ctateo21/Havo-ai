@@ -3,6 +3,11 @@
 -- Paste this entire file into Supabase Dashboard → SQL Editor → New Query → Run
 -- Safe to re-run: uses `if not exists` / `or replace` everywhere.
 -- ============================================================================
+-- Server-managed target tables and restricted RPCs are also maintained in
+-- supabase/migrations/2026_09_06_managed_database_staged_migration.sql and
+-- supabase/migrations/2026_09_07_managed_database_exact_json_v2.sql.
+-- Apply dated migrations incrementally when updating an existing project,
+-- including the later managed-data QuoteRUSH polling upsert upgrade.
 
 -- ----------------------------------------------------------------------------
 -- 1. profiles  (1-to-1 with auth.users; stores app-level account fields)
@@ -602,6 +607,492 @@ create table if not exists public.citizens_property_data (
 create index if not exists citizens_property_data_addr_idx
   on public.citizens_property_data (address_normalized);
 alter table public.citizens_property_data enable row level security;
+
+-- ----------------------------------------------------------------------------
+-- Server-managed records migrated from DATABASE_URL
+-- ----------------------------------------------------------------------------
+-- Purpose-built names avoid the incompatible user-facing submissions and
+-- questionnaire tables above. RLS has no browser policies: service role only.
+create table if not exists public.managed_users (
+  id bigserial primary key, username text not null unique, password text not null,
+  email text not null unique, first_name text not null, last_name text not null,
+  phone text, contact_preference text default 'email',
+  created_at timestamptz default now()
+);
+create table if not exists public.managed_services (
+  id bigserial primary key, name text not null unique, display_name text not null,
+  description text not null, options jsonb not null
+);
+create table if not exists public.managed_submissions (
+  id bigserial primary key, user_id bigint, selected_services jsonb not null,
+  form_data jsonb not null, status text default 'pending',
+  created_at timestamptz default now()
+);
+create table if not exists public.managed_integration_requests (
+  id bigserial primary key, submission_id bigint not null, provider text not null,
+  request_data jsonb not null, response_data jsonb,
+  status text default 'pending', created_at timestamptz default now()
+);
+create table if not exists public.managed_questionnaire_responses (
+  id bigserial primary key, session_id text not null, service_type text not null,
+  step_name text not null, response_data jsonb not null,
+  is_completed boolean default false, created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+create table if not exists public.user_subscriptions (
+  id bigserial primary key, user_id text not null unique, email text,
+  stripe_customer_id text, stripe_subscription_id text,
+  status text not null default 'inactive', current_period_end timestamptz,
+  updated_at timestamptz default now()
+);
+create table if not exists public.private_user_profiles (
+  user_id text primary key, date_of_birth date not null,
+  credit_score_consent_at timestamptz, created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create table if not exists public.private_insurance_properties (
+  user_id text not null, address_normalized text not null,
+  current_policy_expiration_date date, quote_cache_scope text not null default 'unused',
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  primary key(user_id,address_normalized)
+);
+create table if not exists public.insurance_quote_cache (
+  id bigserial primary key, address_normalized text not null, address_display text not null,
+  lead_id integer, status text not null default 'pending', quotes jsonb default '[]',
+  quote_counter integer default 0,
+  quote_poll_attempts integer not null default 0,
+  quote_stable_polls integer not null default 0,
+  quote_previous_counter integer,
+  quote_poll_claimed_at timestamptz,
+  quote_poll_lease_until timestamptz,
+  coverage_a integer default 0,
+  policy_type text not null default 'HO3', cache_scope text not null default 'shared',
+  property_data_snapshot jsonb default '{}', property_data_provenance jsonb default '{}',
+  agency_default_snapshot jsonb default '{}', consumer_property_answers jsonb default '{}',
+  quote_profile_version text not null default 'legacy-v1',
+  raw_quoterush_property_data jsonb, raw_quoterush_property_data_source text,
+  raw_quoterush_property_data_fetched_at timestamptz,
+  raw_quoterush_property_data_expires_at timestamptz,
+  assumptions jsonb default '[]', triggered_at timestamptz not null default now(),
+  completed_at timestamptz, expires_at timestamptz not null,
+  email_recipient text, email_user_id text,
+  email_delivery_status text not null default 'pending',
+  email_claimed_at timestamptz, email_first_attempt_at timestamptz,
+  email_retry_count integer not null default 0,
+  email_quarantine_at timestamptz, email_sent_at timestamptz,
+  email_error text,
+  unique(address_normalized,policy_type)
+);
+create index if not exists insurance_quote_cache_expires_at_idx on public.insurance_quote_cache(expires_at);
+create index if not exists insurance_quote_cache_pending_poll_idx
+  on public.insurance_quote_cache(status, triggered_at)
+  where status = 'pending';
+-- CREATE TABLE IF NOT EXISTS does not add columns to an existing deployment.
+alter table public.insurance_quote_cache
+  add column if not exists quote_poll_attempts integer not null default 0,
+  add column if not exists quote_stable_polls integer not null default 0,
+  add column if not exists quote_previous_counter integer,
+  add column if not exists quote_poll_claimed_at timestamptz,
+  add column if not exists quote_poll_lease_until timestamptz,
+  add column if not exists email_recipient text,
+  add column if not exists email_user_id text,
+  add column if not exists email_delivery_status text not null default 'pending',
+  add column if not exists email_claimed_at timestamptz,
+  add column if not exists email_first_attempt_at timestamptz,
+  add column if not exists email_retry_count integer not null default 0,
+  add column if not exists email_quarantine_at timestamptz,
+  add column if not exists email_sent_at timestamptz,
+  add column if not exists email_error text;
+-- Existing completed rows have no recipient and must not be picked up by the
+-- server-owned result-email worker after this schema is applied.
+update public.insurance_quote_cache
+set email_delivery_status = 'skipped',
+    email_error = 'legacy row has no result-email recipient'
+where status = 'success'
+  and email_delivery_status = 'pending'
+  and email_recipient is null;
+create table if not exists public.non_ad_valorem_cache (
+  id bigserial primary key, folio text not null unique, account_number text,
+  bill_year integer, status text not null default 'pending', lines jsonb default '[]',
+  total_non_ad_valorem integer default 0, total_ad_valorem_cents integer,
+  total_millage integer, ad_valorem_mills jsonb,
+  fetched_at timestamptz not null default now(), expires_at timestamptz not null
+);
+create table if not exists public.ifw_activity_claims (
+  dedupe_key text primary key, user_id text not null,
+  created_at timestamptz not null default now(), expires_at timestamptz not null
+);
+create index if not exists ifw_activity_claims_user_created_at_idx
+  on public.ifw_activity_claims(user_id,created_at);
+create index if not exists ifw_activity_claims_expires_at_idx
+  on public.ifw_activity_claims(expires_at);
+do $$ declare t text; begin foreach t in array array[
+  'managed_users','managed_services','managed_submissions',
+  'managed_integration_requests','managed_questionnaire_responses',
+  'user_subscriptions','private_user_profiles','private_insurance_properties',
+  'insurance_quote_cache','non_ad_valorem_cache','ifw_activity_claims'
+] loop execute format('alter table public.%I enable row level security',t); end loop; end $$;
+
+-- Transactional server-only RPCs (also in the dated migration).
+create or replace function public.claim_ifw_activity(p_user_id text,p_dedupe_key text,p_now timestamptz,p_window_ms bigint,p_max_per_window integer)
+returns text language plpgsql security definer set search_path=public as $$
+declare n integer; begin
+  perform pg_advisory_xact_lock(hashtextextended(p_user_id,0));
+  delete from ifw_activity_claims where user_id=p_user_id and expires_at<=p_now;
+  if exists(select 1 from ifw_activity_claims where dedupe_key=p_dedupe_key and expires_at>p_now) then return 'duplicate'; end if;
+  select count(*) into n from ifw_activity_claims where user_id=p_user_id and created_at>p_now-(p_window_ms*interval '1 millisecond');
+  if n>=p_max_per_window then return 'rate_limited'; end if;
+  insert into ifw_activity_claims(dedupe_key,user_id,created_at,expires_at) values(p_dedupe_key,p_user_id,p_now,p_now+(p_window_ms*interval '1 millisecond'));
+  return 'claimed'; end $$;
+create or replace function public.cleanup_ifw_activity_claims(p_now timestamptz,p_batch_size integer)
+returns integer language plpgsql security definer set search_path=public as $$
+declare n integer; begin with d as (delete from ifw_activity_claims where ctid in (select ctid from ifw_activity_claims where expires_at<=p_now order by expires_at for update skip locked limit p_batch_size) returning 1) select count(*) into n from d; return n; end $$;
+create or replace function public.claim_insurance_quote_cache(p_address_normalized text,p_policy_type text,p_values jsonb,p_now timestamptz)
+returns table(claimed boolean,row_id bigint) language plpgsql security definer set search_path=public as $$
+begin
+  insert into insurance_quote_cache(id,address_normalized,address_display,lead_id,status,quotes,quote_counter,quote_poll_attempts,quote_stable_polls,quote_previous_counter,quote_poll_claimed_at,quote_poll_lease_until,coverage_a,policy_type,cache_scope,property_data_snapshot,property_data_provenance,agency_default_snapshot,consumer_property_answers,quote_profile_version,assumptions,triggered_at,completed_at,expires_at,email_recipient,email_user_id,email_delivery_status,email_claimed_at,email_first_attempt_at,email_retry_count,email_quarantine_at,email_sent_at,email_error)
+  -- Allocate speculative insert ids; ON CONFLICT preserves the existing id.
+  -- Reusing p_values.id can race on the primary key before composite conflict handling.
+  values(nextval(pg_get_serial_sequence('insurance_quote_cache','id')),p_address_normalized,p_values->>'address_display',nullif(p_values->>'lead_id','')::integer,coalesce(p_values->>'status','pending'),coalesce(p_values->'quotes','[]'::jsonb),coalesce((p_values->>'quote_counter')::integer,0),coalesce((p_values->>'quote_poll_attempts')::integer,0),coalesce((p_values->>'quote_stable_polls')::integer,0),(p_values->>'quote_previous_counter')::integer,(p_values->>'quote_poll_claimed_at')::timestamptz,(p_values->>'quote_poll_lease_until')::timestamptz,coalesce((p_values->>'coverage_a')::integer,0),p_policy_type,coalesce(p_values->>'cache_scope','shared'),coalesce(p_values->'property_data_snapshot','{}'::jsonb),coalesce(p_values->'property_data_provenance','{}'::jsonb),coalesce(p_values->'agency_default_snapshot','{}'::jsonb),coalesce(p_values->'consumer_property_answers','{}'::jsonb),coalesce(p_values->>'quote_profile_version','legacy-v1'),coalesce(p_values->'assumptions','[]'::jsonb),coalesce((p_values->>'triggered_at')::timestamptz,p_now),(p_values->>'completed_at')::timestamptz,(p_values->>'expires_at')::timestamptz,p_values->>'email_recipient',p_values->>'email_user_id',coalesce(p_values->>'email_delivery_status','pending'),(p_values->>'email_claimed_at')::timestamptz,(p_values->>'email_first_attempt_at')::timestamptz,coalesce((p_values->>'email_retry_count')::integer,0),(p_values->>'email_quarantine_at')::timestamptz,(p_values->>'email_sent_at')::timestamptz,p_values->>'email_error')
+  on conflict(address_normalized,policy_type) do update set
+    address_display=excluded.address_display,lead_id=excluded.lead_id,status=excluded.status,quotes=excluded.quotes,quote_counter=excluded.quote_counter,quote_poll_attempts=excluded.quote_poll_attempts,quote_stable_polls=excluded.quote_stable_polls,quote_previous_counter=excluded.quote_previous_counter,quote_poll_claimed_at=excluded.quote_poll_claimed_at,quote_poll_lease_until=excluded.quote_poll_lease_until,coverage_a=excluded.coverage_a,cache_scope=excluded.cache_scope,property_data_snapshot=excluded.property_data_snapshot,property_data_provenance=excluded.property_data_provenance,agency_default_snapshot=excluded.agency_default_snapshot,consumer_property_answers=excluded.consumer_property_answers,quote_profile_version=excluded.quote_profile_version,assumptions=excluded.assumptions,triggered_at=greatest(excluded.triggered_at,insurance_quote_cache.triggered_at+interval '1 millisecond'),completed_at=excluded.completed_at,expires_at=excluded.expires_at,email_recipient=excluded.email_recipient,email_user_id=excluded.email_user_id,email_delivery_status=excluded.email_delivery_status,email_claimed_at=excluded.email_claimed_at,email_first_attempt_at=excluded.email_first_attempt_at,email_retry_count=excluded.email_retry_count,email_quarantine_at=excluded.email_quarantine_at,email_sent_at=excluded.email_sent_at,email_error=excluded.email_error
+   where insurance_quote_cache.expires_at<=p_now
+      or insurance_quote_cache.status in ('error','failed')
+  returning true,insurance_quote_cache.id into claimed,row_id;
+  if not found then select false,id into claimed,row_id from insurance_quote_cache where address_normalized=p_address_normalized and policy_type=p_policy_type; end if;
+  return next;
+end $$;
+create or replace function public.reseed_managed_migration_sequences()
+returns void language plpgsql security definer set search_path=public as $$
+declare t text; seq text; n bigint; begin foreach t in array array['managed_users','managed_services','managed_submissions','managed_integration_requests','managed_questionnaire_responses','user_subscriptions','insurance_quote_cache','non_ad_valorem_cache'] loop seq:=pg_get_serial_sequence('public.'||t,'id'); if seq is not null then execute format('select coalesce(max(id),0) from public.%I',t) into n; perform setval(seq,greatest(n,1),n>0); end if; end loop; end $$;
+revoke all on function public.claim_ifw_activity(text,text,timestamptz,bigint,integer) from public,anon,authenticated;
+revoke all on function public.cleanup_ifw_activity_claims(timestamptz,integer) from public,anon,authenticated;
+revoke all on function public.reseed_managed_migration_sequences() from public,anon,authenticated;
+revoke all on function public.claim_insurance_quote_cache(text,text,jsonb,timestamptz) from public,anon,authenticated;
+grant execute on function public.claim_ifw_activity(text,text,timestamptz,bigint,integer) to service_role;
+grant execute on function public.cleanup_ifw_activity_claims(timestamptz,integer) to service_role;
+grant execute on function public.reseed_managed_migration_sequences() to service_role;
+grant execute on function public.claim_insurance_quote_cache(text,text,jsonb,timestamptz) to service_role;
+
+-- Forward exact-json-v2 upserts use canonical JSON text for JSON/JSONB
+-- columns and reserve an outer JSON null for SQL NULL. Keep these casts
+-- explicit: json_populate_record alone cannot preserve JSON null vs SQL NULL.
+create or replace function public.upsert_managed_migration_rows(
+  p_target text,
+  p_primary_key text,
+  p_rows json
+) returns void
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  if p_target = 'managed_users' and p_primary_key = 'id' then
+    insert into public.managed_users (
+      id, username, password, email, first_name, last_name, phone,
+      contact_preference, created_at
+    )
+    select native.id, native.username, native.password, native.email,
+      native.first_name, native.last_name, native.phone,
+      native.contact_preference, native.created_at
+    from json_array_elements(coalesce(p_rows, '[]'::json)) as item(value)
+    cross join lateral json_populate_record(
+      null::public.managed_users, item.value
+    ) as native
+    on conflict (id) do update set
+      username = excluded.username,
+      password = excluded.password,
+      email = excluded.email,
+      first_name = excluded.first_name,
+      last_name = excluded.last_name,
+      phone = excluded.phone,
+      contact_preference = excluded.contact_preference,
+      created_at = excluded.created_at;
+    return;
+  end if;
+
+  if p_target = 'managed_services' and p_primary_key = 'id' then
+    insert into public.managed_services (
+      id, name, display_name, description, options
+    )
+    select native.id, native.name, native.display_name, native.description,
+      (item.value ->> 'options')::jsonb
+    from json_array_elements(coalesce(p_rows, '[]'::json)) as item(value)
+    cross join lateral json_populate_record(
+      null::public.managed_services, item.value
+    ) as native
+    on conflict (id) do update set
+      name = excluded.name,
+      display_name = excluded.display_name,
+      description = excluded.description,
+      options = excluded.options;
+    return;
+  end if;
+
+  if p_target = 'managed_submissions' and p_primary_key = 'id' then
+    insert into public.managed_submissions (
+      id, user_id, selected_services, form_data, status, created_at
+    )
+    select native.id, native.user_id,
+      (item.value ->> 'selected_services')::jsonb,
+      (item.value ->> 'form_data')::jsonb,
+      native.status, native.created_at
+    from json_array_elements(coalesce(p_rows, '[]'::json)) as item(value)
+    cross join lateral json_populate_record(
+      null::public.managed_submissions, item.value
+    ) as native
+    on conflict (id) do update set
+      user_id = excluded.user_id,
+      selected_services = excluded.selected_services,
+      form_data = excluded.form_data,
+      status = excluded.status,
+      created_at = excluded.created_at;
+    return;
+  end if;
+
+  if p_target = 'managed_integration_requests' and p_primary_key = 'id' then
+    insert into public.managed_integration_requests (
+      id, submission_id, provider, request_data, response_data, status, created_at
+    )
+    select native.id, native.submission_id, native.provider,
+      (item.value ->> 'request_data')::jsonb,
+      (item.value ->> 'response_data')::jsonb,
+      native.status, native.created_at
+    from json_array_elements(coalesce(p_rows, '[]'::json)) as item(value)
+    cross join lateral json_populate_record(
+      null::public.managed_integration_requests, item.value
+    ) as native
+    on conflict (id) do update set
+      submission_id = excluded.submission_id,
+      provider = excluded.provider,
+      request_data = excluded.request_data,
+      response_data = excluded.response_data,
+      status = excluded.status,
+      created_at = excluded.created_at;
+    return;
+  end if;
+
+  if p_target = 'managed_questionnaire_responses' and p_primary_key = 'id' then
+    insert into public.managed_questionnaire_responses (
+      id, session_id, service_type, step_name, response_data, is_completed,
+      created_at, updated_at
+    )
+    select native.id, native.session_id, native.service_type, native.step_name,
+      (item.value ->> 'response_data')::jsonb,
+      native.is_completed, native.created_at, native.updated_at
+    from json_array_elements(coalesce(p_rows, '[]'::json)) as item(value)
+    cross join lateral json_populate_record(
+      null::public.managed_questionnaire_responses, item.value
+    ) as native
+    on conflict (id) do update set
+      session_id = excluded.session_id,
+      service_type = excluded.service_type,
+      step_name = excluded.step_name,
+      response_data = excluded.response_data,
+      is_completed = excluded.is_completed,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at;
+    return;
+  end if;
+
+  if p_target = 'user_subscriptions' and p_primary_key = 'user_id' then
+    insert into public.user_subscriptions (
+      id, user_id, email, stripe_customer_id, stripe_subscription_id, status,
+      current_period_end, updated_at
+    )
+    select native.id, native.user_id, native.email, native.stripe_customer_id,
+      native.stripe_subscription_id, native.status, native.current_period_end,
+      native.updated_at
+    from json_array_elements(coalesce(p_rows, '[]'::json)) as item(value)
+    cross join lateral json_populate_record(
+      null::public.user_subscriptions, item.value
+    ) as native
+    on conflict (user_id) do update set
+      id = excluded.id,
+      email = excluded.email,
+      stripe_customer_id = excluded.stripe_customer_id,
+      stripe_subscription_id = excluded.stripe_subscription_id,
+      status = excluded.status,
+      current_period_end = excluded.current_period_end,
+      updated_at = excluded.updated_at;
+    return;
+  end if;
+
+  if p_target = 'private_user_profiles' and p_primary_key = 'user_id' then
+    insert into public.private_user_profiles (
+      user_id, date_of_birth, credit_score_consent_at, created_at, updated_at
+    )
+    select native.user_id, native.date_of_birth, native.credit_score_consent_at,
+      native.created_at, native.updated_at
+    from json_array_elements(coalesce(p_rows, '[]'::json)) as item(value)
+    cross join lateral json_populate_record(
+      null::public.private_user_profiles, item.value
+    ) as native
+    on conflict (user_id) do update set
+      date_of_birth = excluded.date_of_birth,
+      credit_score_consent_at = excluded.credit_score_consent_at,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at;
+    return;
+  end if;
+
+  if p_target = 'private_insurance_properties' and
+     p_primary_key = 'user_id,address_normalized' then
+    insert into public.private_insurance_properties (
+      user_id, address_normalized, current_policy_expiration_date,
+      quote_cache_scope, created_at, updated_at
+    )
+    select native.user_id, native.address_normalized,
+      native.current_policy_expiration_date, native.quote_cache_scope,
+      native.created_at, native.updated_at
+    from json_array_elements(coalesce(p_rows, '[]'::json)) as item(value)
+    cross join lateral json_populate_record(
+      null::public.private_insurance_properties, item.value
+    ) as native
+    on conflict (user_id, address_normalized) do update set
+      current_policy_expiration_date = excluded.current_policy_expiration_date,
+      quote_cache_scope = excluded.quote_cache_scope,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at;
+    return;
+  end if;
+
+  if p_target = 'insurance_quote_cache' and
+     p_primary_key = 'address_normalized,policy_type' then
+    insert into public.insurance_quote_cache (
+      id, address_normalized, address_display, lead_id, status, quotes,
+      quote_counter, quote_poll_attempts, quote_stable_polls,
+      quote_previous_counter, quote_poll_claimed_at, quote_poll_lease_until,
+      coverage_a, policy_type, cache_scope,
+      property_data_snapshot, property_data_provenance, agency_default_snapshot,
+      consumer_property_answers, quote_profile_version, raw_quoterush_property_data,
+      raw_quoterush_property_data_source, raw_quoterush_property_data_fetched_at,
+      raw_quoterush_property_data_expires_at, assumptions, triggered_at,
+      completed_at, expires_at, email_recipient, email_user_id,
+      email_delivery_status, email_claimed_at, email_first_attempt_at,
+      email_retry_count, email_quarantine_at, email_sent_at, email_error
+    )
+    select native.id, native.address_normalized, native.address_display,
+      native.lead_id, native.status,
+      (item.value ->> 'quotes')::jsonb,
+      native.quote_counter, native.quote_poll_attempts, native.quote_stable_polls,
+      native.quote_previous_counter, native.quote_poll_claimed_at,
+      native.quote_poll_lease_until, native.coverage_a, native.policy_type,
+      native.cache_scope,
+      (item.value ->> 'property_data_snapshot')::jsonb,
+      (item.value ->> 'property_data_provenance')::jsonb,
+      (item.value ->> 'agency_default_snapshot')::jsonb,
+      (item.value ->> 'consumer_property_answers')::jsonb,
+      native.quote_profile_version,
+      (item.value ->> 'raw_quoterush_property_data')::jsonb,
+      native.raw_quoterush_property_data_source,
+      native.raw_quoterush_property_data_fetched_at,
+      native.raw_quoterush_property_data_expires_at,
+      (item.value ->> 'assumptions')::jsonb,
+      native.triggered_at, native.completed_at, native.expires_at,
+      native.email_recipient, native.email_user_id,
+      native.email_delivery_status, native.email_claimed_at,
+      native.email_first_attempt_at, native.email_retry_count,
+      native.email_quarantine_at, native.email_sent_at, native.email_error
+    from json_array_elements(coalesce(p_rows, '[]'::json)) as item(value)
+    cross join lateral json_populate_record(
+      null::public.insurance_quote_cache, item.value
+    ) as native
+    on conflict (address_normalized, policy_type) do update set
+      id = excluded.id,
+      address_display = excluded.address_display,
+      lead_id = excluded.lead_id,
+      status = excluded.status,
+      quotes = excluded.quotes,
+      quote_counter = excluded.quote_counter,
+      quote_poll_attempts = excluded.quote_poll_attempts,
+      quote_stable_polls = excluded.quote_stable_polls,
+      quote_previous_counter = excluded.quote_previous_counter,
+      quote_poll_claimed_at = excluded.quote_poll_claimed_at,
+      quote_poll_lease_until = excluded.quote_poll_lease_until,
+      coverage_a = excluded.coverage_a,
+      cache_scope = excluded.cache_scope,
+      property_data_snapshot = excluded.property_data_snapshot,
+      property_data_provenance = excluded.property_data_provenance,
+      agency_default_snapshot = excluded.agency_default_snapshot,
+      consumer_property_answers = excluded.consumer_property_answers,
+      quote_profile_version = excluded.quote_profile_version,
+      raw_quoterush_property_data = excluded.raw_quoterush_property_data,
+      raw_quoterush_property_data_source = excluded.raw_quoterush_property_data_source,
+      raw_quoterush_property_data_fetched_at = excluded.raw_quoterush_property_data_fetched_at,
+      raw_quoterush_property_data_expires_at = excluded.raw_quoterush_property_data_expires_at,
+      assumptions = excluded.assumptions,
+      triggered_at = excluded.triggered_at,
+      completed_at = excluded.completed_at,
+      expires_at = excluded.expires_at,
+      email_recipient = excluded.email_recipient,
+      email_user_id = excluded.email_user_id,
+      email_delivery_status = excluded.email_delivery_status,
+      email_claimed_at = excluded.email_claimed_at,
+      email_first_attempt_at = excluded.email_first_attempt_at,
+      email_retry_count = excluded.email_retry_count,
+      email_quarantine_at = excluded.email_quarantine_at,
+      email_sent_at = excluded.email_sent_at,
+      email_error = excluded.email_error;
+    return;
+  end if;
+
+  if p_target = 'non_ad_valorem_cache' and p_primary_key = 'folio' then
+    insert into public.non_ad_valorem_cache (
+      id, folio, account_number, bill_year, status, lines,
+      total_non_ad_valorem, total_ad_valorem_cents, total_millage,
+      ad_valorem_mills, fetched_at, expires_at
+    )
+    select native.id, native.folio, native.account_number, native.bill_year,
+      native.status, (item.value ->> 'lines')::jsonb,
+      native.total_non_ad_valorem, native.total_ad_valorem_cents,
+      native.total_millage, (item.value ->> 'ad_valorem_mills')::jsonb,
+      native.fetched_at, native.expires_at
+    from json_array_elements(coalesce(p_rows, '[]'::json)) as item(value)
+    cross join lateral json_populate_record(
+      null::public.non_ad_valorem_cache, item.value
+    ) as native
+    on conflict (folio) do update set
+      id = excluded.id,
+      account_number = excluded.account_number,
+      bill_year = excluded.bill_year,
+      status = excluded.status,
+      lines = excluded.lines,
+      total_non_ad_valorem = excluded.total_non_ad_valorem,
+      total_ad_valorem_cents = excluded.total_ad_valorem_cents,
+      total_millage = excluded.total_millage,
+      ad_valorem_mills = excluded.ad_valorem_mills,
+      fetched_at = excluded.fetched_at,
+      expires_at = excluded.expires_at;
+    return;
+  end if;
+
+  if p_target = 'ifw_activity_claims' and p_primary_key = 'dedupe_key' then
+    insert into public.ifw_activity_claims (
+      dedupe_key, user_id, created_at, expires_at
+    )
+    select native.dedupe_key, native.user_id, native.created_at, native.expires_at
+    from json_array_elements(coalesce(p_rows, '[]'::json)) as item(value)
+    cross join lateral json_populate_record(
+      null::public.ifw_activity_claims, item.value
+    ) as native
+    on conflict (dedupe_key) do update set
+      user_id = excluded.user_id,
+      created_at = excluded.created_at,
+      expires_at = excluded.expires_at;
+    return;
+  end if;
+
+  raise exception 'Unknown managed migration target';
+end;
+$$;
+
+-- The API key is service-role only.  Explicit revocation is retained here so
+-- rerunning this idempotent migration cannot inherit a prior broad grant.
+revoke all on function public.upsert_managed_migration_rows(text, text, json)
+  from public, anon, authenticated;
+grant execute on function public.upsert_managed_migration_rows(text, text, json)
+  to service_role;
 
 -- Tell PostgREST to reload its schema cache so new tables are visible to the
 -- REST API immediately (avoids "Could not find the table" errors).

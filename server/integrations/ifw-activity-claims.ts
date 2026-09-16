@@ -1,5 +1,11 @@
 import type { Pool, PoolClient } from "@neondatabase/serverless";
 import { pool } from "../db";
+import { supabaseAdmin } from "../supabase";
+import {
+  type ManagedDataRouting,
+  managedDataRouting,
+  routedWrite,
+} from "../managed-data-routing";
 
 const DEFAULT_CLEANUP_BATCH_SIZE = 500;
 const DEFAULT_CLEANUP_INTERVAL_MS = 15 * 60 * 1000;
@@ -47,6 +53,19 @@ export async function deleteExpiredIfwActivityClaims(
   return result.rowCount ?? 0;
 }
 
+async function deleteExpiredSupabaseClaims(
+  now: Date,
+  batchSize: number,
+): Promise<number> {
+  if (!supabaseAdmin) throw new Error("Supabase admin client is unavailable");
+  const { data, error } = await supabaseAdmin.rpc(
+    "cleanup_ifw_activity_claims",
+    { p_now: now.toISOString(), p_batch_size: batchSize },
+  );
+  if (error) throw error;
+  return Number(data ?? 0);
+}
+
 export function startIfwActivityClaimCleanup(options: {
   intervalMs?: number;
   batchSize?: number;
@@ -55,7 +74,12 @@ export function startIfwActivityClaimCleanup(options: {
   const intervalMs = options.intervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS;
   const run = async () => {
     try {
-      await deleteExpiredIfwActivityClaims(pool, { batchSize: options.batchSize });
+      const batchSize = options.batchSize ?? DEFAULT_CLEANUP_BATCH_SIZE;
+      const now = new Date();
+      await routedWrite(
+        () => deleteExpiredIfwActivityClaims(pool, { now, batchSize }),
+        () => deleteExpiredSupabaseClaims(now, batchSize),
+      );
     } catch (error) {
       options.onError?.(error);
     }
@@ -137,6 +161,63 @@ export class PostgresIfwActivityClaimStore implements IfwActivityClaimStore {
   }
 }
 
+export class SupabaseIfwActivityClaimStore implements IfwActivityClaimStore {
+  async claim(input: {
+    userId: string;
+    dedupeKey: string;
+    now: Date;
+    windowMs: number;
+    maxPerWindow: number;
+  }): Promise<IfwActivityClaimResult> {
+    if (!supabaseAdmin) throw new Error("Supabase admin client is unavailable");
+    const { data, error } = await supabaseAdmin.rpc("claim_ifw_activity", {
+      p_user_id: input.userId,
+      p_dedupe_key: input.dedupeKey,
+      p_now: input.now.toISOString(),
+      p_window_ms: input.windowMs,
+      p_max_per_window: input.maxPerWindow,
+    });
+    if (error) throw error;
+    if (!["claimed", "duplicate", "rate_limited"].includes(String(data))) {
+      throw new Error("Supabase IFW claim RPC returned an invalid result");
+    }
+    return data as IfwActivityClaimResult;
+  }
+}
+
+export class RoutedIfwActivityClaimStore implements IfwActivityClaimStore {
+  constructor(
+    private readonly source = new PostgresIfwActivityClaimStore(),
+    private readonly target = new SupabaseIfwActivityClaimStore(),
+    private readonly routing: ManagedDataRouting = managedDataRouting,
+  ) {}
+
+  claim(input: Parameters<IfwActivityClaimStore["claim"]>[0]) {
+    return routedWrite(
+      () => this.source.claim(input),
+      async sourceResult => {
+        if (sourceResult === undefined) {
+          return this.target.claim(input);
+        }
+        // Dual-write mirrors the source decision; it must never independently
+        // take a target-side rate-limit/dedupe decision.
+        if (sourceResult === "claimed") {
+          if (!supabaseAdmin) throw new Error("Supabase admin client is unavailable");
+          const { error } = await supabaseAdmin.from("ifw_activity_claims").upsert({
+            dedupe_key: input.dedupeKey,
+            user_id: input.userId,
+            created_at: input.now.toISOString(),
+            expires_at: new Date(input.now.getTime() + input.windowMs).toISOString(),
+          }, { onConflict: "dedupe_key" });
+          if (error) throw error;
+        }
+        return sourceResult;
+      },
+      this.routing,
+    );
+  }
+}
+
 export function createIfwActivityClaimHandler(
   store: IfwActivityClaimStore,
   options: {
@@ -165,4 +246,4 @@ export function createIfwActivityClaimHandler(
   };
 }
 
-export const ifwActivityClaimStore = new PostgresIfwActivityClaimStore();
+export const ifwActivityClaimStore = new RoutedIfwActivityClaimStore();

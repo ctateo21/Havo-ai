@@ -19,6 +19,8 @@
 import { db } from "../db";
 import { nonAdValoremCache } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import { supabaseAdmin } from "../supabase";
+import { routedRead, routedWrite } from "../managed-data-routing";
 import { streetAddressMatches } from "./hillsborough-tax";
 
 const CACHE_DAYS = 180;
@@ -220,6 +222,56 @@ interface ParsedBill {
   /** Per-authority millage rates from the bill's Ad Valorem table
    *  ("| NAME | 4.5423 | $assessed | $exempt | $taxable | $tax |"). */
   adValoremMills?: Array<{ authority: string; mills: number }> | null;
+}
+
+async function readNonAdValoremCache(folio: string) {
+  return routedRead(
+    () => db.select().from(nonAdValoremCache)
+      .where(eq(nonAdValoremCache.folio, folio)).limit(1),
+    async () => {
+      if (!supabaseAdmin) throw new Error("Supabase admin client is unavailable");
+      const { data, error } = await supabaseAdmin.from("non_ad_valorem_cache")
+        .select("*").eq("folio", folio).limit(1);
+      if (error) throw error;
+      return (data ?? []).map(row => ({
+        id: row.id, folio: row.folio, accountNumber: row.account_number,
+        billYear: row.bill_year, status: row.status, lines: row.lines,
+        totalNonAdValorem: row.total_non_ad_valorem,
+        totalAdValoremCents: row.total_ad_valorem_cents,
+        totalMillage: row.total_millage, adValoremMills: row.ad_valorem_mills,
+        fetchedAt: new Date(row.fetched_at), expiresAt: new Date(row.expires_at),
+      }));
+    },
+  );
+}
+
+async function writeNonAdValoremCache(value: typeof nonAdValoremCache.$inferInsert) {
+  return routedWrite(
+    async () => {
+      const [row] = await db.insert(nonAdValoremCache).values(value)
+        .onConflictDoUpdate({
+          target: nonAdValoremCache.folio,
+          set: { ...value, fetchedAt: new Date() },
+        }).returning();
+      return row;
+    },
+    async sourceRow => {
+      if (!supabaseAdmin) throw new Error("Supabase admin client is unavailable");
+      const row = sourceRow ?? value;
+      const { data, error } = await supabaseAdmin.from("non_ad_valorem_cache").upsert({
+        ...(sourceRow?.id != null ? { id: sourceRow.id } : {}),
+        folio: row.folio, account_number: row.accountNumber,
+        bill_year: row.billYear, status: row.status, lines: row.lines,
+        total_non_ad_valorem: row.totalNonAdValorem,
+        total_ad_valorem_cents: row.totalAdValoremCents,
+        total_millage: row.totalMillage, ad_valorem_mills: row.adValoremMills,
+        fetched_at: (row.fetchedAt ?? new Date()).toISOString(),
+        expires_at: row.expiresAt.toISOString(),
+      }, { onConflict: "folio" }).select().single();
+      if (error) throw error;
+      return data as any;
+    },
+  );
 }
 
 export interface TaxSysSitusIdentity {
@@ -747,10 +799,7 @@ async function scrapeAndCache(
     );
   }
   try {
-    await db
-      .delete(nonAdValoremCache)
-      .where(eq(nonAdValoremCache.folio, cleanFolio));
-    await db.insert(nonAdValoremCache).values({
+    await writeNonAdValoremCache({
       folio: cleanFolio,
       accountNumber: account,
       billYear: best?.year ?? null,
@@ -823,11 +872,7 @@ export async function getNonAdValoremForFolio(
   const cleanFolio = `v2:${county}:${bareFolio}`;
 
   try {
-    const rows = await db
-      .select()
-      .from(nonAdValoremCache)
-      .where(eq(nonAdValoremCache.folio, cleanFolio))
-      .limit(1);
+    const rows = await readNonAdValoremCache(cleanFolio);
     if (rows.length && rows[0].expiresAt > new Date()) {
       const row = rows[0];
       if (row.status === "success") {

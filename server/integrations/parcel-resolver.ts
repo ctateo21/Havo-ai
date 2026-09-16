@@ -36,6 +36,13 @@ export interface ParcelIdentity {
   source: string;
   justValue?: number;
   assessedValue?: number;
+  /** Current Collier parcel-layer millage components, when available. */
+  countyMillage?: number;
+  schoolMillage?: number;
+  municipalMillage?: number;
+  otherMillage?: number;
+  millageArea?: string;
+  taxYear?: number;
   reason?: string;
   fromCache?: boolean;
 }
@@ -60,8 +67,8 @@ const LEE_LAYER =
   "https://services2.arcgis.com/LvWGAAhHwbCJ2GMP/ArcGIS/rest/services/" +
   "Lee_County_Parcels/FeatureServer/0";
 const COLLIER_LAYER =
-  "https://services2.arcgis.com/SlIq32SqARUHIhSx/arcgis/rest/services/" +
-  "Site_Address_Points_b/FeatureServer/3";
+  "https://services2.arcgis.com/SlIq32SqARUHIhSx/ArcGIS/rest/services/" +
+  "ParcelJoin/FeatureServer/0";
 
 function normalizeCity(value: string): string {
   return value
@@ -79,6 +86,49 @@ function requestedCity(address: string): string {
 
 function requestedStreet(address: string): string {
   return (address.split(",")[0] ?? "").trim();
+}
+
+const COLLIER_STREET_SUFFIXES = new Set([
+  "ALY", "ALLEY", "AVE", "AVENUE", "BLVD", "BOULEVARD", "CIR", "CIRCLE",
+  "CT", "COURT", "DR", "DRIVE", "LN", "LANE", "LOOP", "PKWY", "PARKWAY",
+  "PL", "PLACE", "RD", "ROAD", "ST", "STREET", "TER", "TERRACE",
+  "TRL", "TRAIL", "WAY",
+]);
+
+function collierSearchParts(address: string): {
+  houseNumber: string | null;
+  streetName: string;
+} {
+  const street = requestedStreet(address)
+    .replace(/\s+(?:#|APT(?:ARTMENT)?|UNIT|STE|SUITE)\s*[-A-Z0-9]*.*$/i, "")
+    .trim()
+    .toUpperCase();
+  const tokens = street.split(/\s+/).filter(Boolean);
+  const first = tokens.shift() ?? "";
+  const houseNumber = /^\d+$/.test(first) ? first : null;
+  if (
+    tokens.length > 1 &&
+    COLLIER_STREET_SUFFIXES.has(tokens[tokens.length - 1]!)
+  ) {
+    tokens.pop();
+  }
+  return { houseNumber, streetName: tokens.join(" ") };
+}
+
+function collierCandidateStreet(attributes: Attributes): string {
+  const streetAddress = String(attributes.SiteStreetAddress ?? "").trim();
+  const unit = String(attributes.SiteUnit ?? "").trim();
+  // ParcelJoin stores the unit separately for some condos. Add it only when
+  // the formatted address does not already contain a unit marker.
+  if (
+    !unit ||
+    /(?:^|\s)(?:#|APT|APARTMENT|UNIT|STE|SUITE)\s*[-A-Z0-9]+/i.test(
+      streetAddress,
+    )
+  ) {
+    return streetAddress;
+  }
+  return `${streetAddress} UNIT ${unit}`;
 }
 
 export function normalizeParcelAddress(address: string): string {
@@ -107,6 +157,11 @@ function asPositiveNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function asNonNegativeNumber(value: unknown): number | undefined {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 function missing(county: CountySlug, source: string): ParcelIdentity {
   return {
     status: "not-found",
@@ -131,6 +186,12 @@ function foundFromAttributes(params: {
   taxDistrictField?: string;
   justValueField?: string;
   assessedValueField?: string;
+  countyMillageField?: string;
+  schoolMillageField?: string;
+  municipalMillageField?: string;
+  otherMillageField?: string;
+  millageAreaField?: string;
+  taxYearField?: string;
 }): ParcelIdentity | null {
   const value = params.attributes[params.parcelIdField];
   if (value == null || !String(value).trim()) return null;
@@ -164,6 +225,52 @@ function foundFromAttributes(params: {
       ? {
           assessedValue: asPositiveNumber(
             params.attributes[params.assessedValueField],
+          ),
+        }
+      : {}),
+    ...(params.countyMillageField &&
+    asNonNegativeNumber(params.attributes[params.countyMillageField]) != null
+      ? {
+          countyMillage: asNonNegativeNumber(
+            params.attributes[params.countyMillageField],
+          ),
+        }
+      : {}),
+    ...(params.schoolMillageField &&
+    asNonNegativeNumber(params.attributes[params.schoolMillageField]) != null
+      ? {
+          schoolMillage: asNonNegativeNumber(
+            params.attributes[params.schoolMillageField],
+          ),
+        }
+      : {}),
+    ...(params.municipalMillageField &&
+    asNonNegativeNumber(params.attributes[params.municipalMillageField]) != null
+      ? {
+          municipalMillage: asNonNegativeNumber(
+            params.attributes[params.municipalMillageField],
+          ),
+        }
+      : {}),
+    ...(params.otherMillageField &&
+    asNonNegativeNumber(params.attributes[params.otherMillageField]) != null
+      ? {
+          otherMillage: asNonNegativeNumber(
+            params.attributes[params.otherMillageField],
+          ),
+        }
+      : {}),
+    ...(params.millageAreaField &&
+    params.attributes[params.millageAreaField] != null
+      ? {
+          millageArea: String(params.attributes[params.millageAreaField]),
+        }
+      : {}),
+    ...(params.taxYearField &&
+    asPositiveNumber(params.attributes[params.taxYearField]) != null
+      ? {
+          taxYear: Math.round(
+            asPositiveNumber(params.attributes[params.taxYearField])!,
           ),
         }
       : {}),
@@ -306,34 +413,48 @@ async function lookupCollier(
   fetchImpl: FetchImplementation,
 ): Promise<ParcelIdentity> {
   const county: CountySlug = "collier";
-  const source = "collier-address-points";
-  const street = requestedStreet(address).replace(/'/g, "''");
+  const source = "collier-pa-arcgis-parceljoin";
+  const { houseNumber, streetName } = collierSearchParts(address);
   const city = requestedCity(address).replace(/'/g, "''");
+  const escapedStreetName = streetName.replace(/'/g, "''");
   try {
     const candidates = await queryArcGis({
       url: COLLIER_LAYER,
       where:
-        `FULLADDR LIKE '${street}%' AND MUNICIPALITY='${city}' ` +
-        "AND is_primary=1",
-      outFields: "FULLADDR,MUNICIPALITY,FLN,SITEADDID,is_primary",
+        `${houseNumber ? `SiteStreetNumber=${houseNumber} AND ` : ""}` +
+        `SiteStreetName LIKE '${escapedStreetName}%' AND SiteCity='${city}'`,
+      outFields:
+        "ParcelId,Folio,SiteStreetNumber,SiteStreetName,SiteStreetType," +
+        "SiteStreetAddress,SiteUnit,SiteCity,SiteZipCode,TaxYear," +
+        "TotalJustValue,CountyAssessedValue,MillageArea,CountyMillage," +
+        "SchoolMillage,MunicipalMillage,OtherMillage,TotalNadvTaxes",
       fetchImpl,
     });
     const attributes = candidates.find((candidate) =>
       isStrictParcelAddressMatch(
         address,
-        String(candidate.FULLADDR ?? ""),
-        String(candidate.MUNICIPALITY ?? ""),
+        collierCandidateStreet(candidate),
+        String(candidate.SiteCity ?? ""),
       ),
     );
     return attributes
       ? foundFromAttributes({
           county,
           attributes,
-          parcelIdField: "FLN",
-          folioField: "FLN",
-          streetField: "FULLADDR",
-          cityField: "MUNICIPALITY",
+          parcelIdField: "Folio",
+          folioField: "Folio",
+          streetField: "SiteStreetAddress",
+          cityField: "SiteCity",
           source,
+          taxDistrictField: "MillageArea",
+          justValueField: "TotalJustValue",
+          assessedValueField: "CountyAssessedValue",
+          countyMillageField: "CountyMillage",
+          schoolMillageField: "SchoolMillage",
+          municipalMillageField: "MunicipalMillage",
+          otherMillageField: "OtherMillage",
+          millageAreaField: "MillageArea",
+          taxYearField: "TaxYear",
         }) ?? missing(county, source)
       : missing(county, source);
   } catch (error: any) {
@@ -448,7 +569,12 @@ export async function resolveParcel(
   if (!county) return null;
 
   const now = options.now ?? new Date();
-  if (!options.skipCache) {
+  // Collier's current estimator varies by millage area. The durable identity
+  // row predates those rate fields, so a cache hit there would discard the
+  // official parcel millage and silently fall back to an unrelated area.
+  // Tax-estimate cache rows retain the complete rate components; refresh the
+  // parcel source whenever Collier needs a new tax row.
+  if (!options.skipCache && county !== "collier") {
     const cached = await readIdentityCache(county, address, now);
     if (cached) return cached;
   }

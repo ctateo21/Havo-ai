@@ -11,6 +11,16 @@ import {
   isPropertyValueSyncInFlight,
   type PropertyValueSourceTab,
 } from "./property-value-sync";
+import {
+  clearUnvalidatedCashBuyPropertyTax,
+} from "./cash-buy-tax";
+import type { CashBuyOfficialTaxRequest } from "./cash-buy-tax";
+export {
+  clearUnvalidatedCashBuyPropertyTax,
+  hasValidatedCashBuyPropertyTax,
+  hasValidatedPurchasePropertyTax,
+} from "./cash-buy-tax";
+export type { CashBuyOfficialTaxRequest } from "./cash-buy-tax";
 
 /** Stamp source = "manual" on rows whose value field changed between
  *  two save calls — but only when the change did NOT come from the
@@ -464,8 +474,8 @@ export type CashBuyClosingCostsSource = "default_percent" | "manual";
 export type CashBuyHoaSource = "zillow" | "manual" | "unknown";
 /** Manual-lock provenance for fields whose values have other in-app
  *  writers (defaults / Zillow / property cache / cross-tab sync). Once
- *  stamped `"manual"`, those other writers must skip the field. */
-export type CashBuyManualSource = "manual" | "default" | "zillow";
+ *  stamped `"manual"` or `"official"`, those other writers must skip it. */
+export type CashBuyManualSource = "manual" | "official" | "default" | "zillow";
 export type CashBuyZillowStatus =
   | "loading" | "loaded_from_cache" | "loaded_from_zillow" | "error";
 
@@ -479,6 +489,8 @@ export interface CashBuyInsuranceFactors {
   hurrIdx: number;
   constIdx: number;
   yearIdx: number;
+  /** Exact Zillow/user year when available; older rows use yearIdx. */
+  yearBuilt?: number;
   claimsIdx: number;
 }
 
@@ -503,9 +515,14 @@ export interface CashBuyScenario {
    *  writer; persisted so future defaults can respect it. */
   occupancyTypeSource?: CashBuyManualSource;
   propertyTaxes?: number;        // annual
-  /** Manual-lock for `propertyTaxes` — blocks the price/occupancy-driven
-   *  `computeAnnualTaxes` recompute in `setPurchasePrice`/`setOccupancy`. */
+  /** Provenance for `propertyTaxes`. Only manual or official values may be
+   *  shown as a borrower-visible annual tax amount. */
   propertyTaxesSource?: CashBuyManualSource;
+  /** Request context that produced an official tax value. Official cash-buy
+   * taxes are only reusable while this exact address / price / occupancy
+   * tuple still matches the scenario. Older rows have no tuple and must be
+   * treated as stale rather than displayed as verified taxes. */
+  propertyTaxesRequest?: CashBuyOfficialTaxRequest;
   homeownersInsurance?: number;  // annual (synced from simulator midpoint)
   /** Manual-lock for `homeownersInsurance` — blocks both the 0.75%-of-price
    *  default and the insurance-simulator overwrite. */
@@ -1203,7 +1220,7 @@ function rowToCashBuy(row: any): CashBuyScenario {
     hs === "zillow" || hs === "manual" || hs === "unknown" ? hs : undefined;
 
   const toManualSource = (v: any): CashBuyManualSource | undefined =>
-    v === "manual" || v === "default" || v === "zillow" ? v : undefined;
+    v === "manual" || v === "official" || v === "default" || v === "zillow" ? v : undefined;
   const pps = row.purchase_price_source;
   const purchasePriceSource: CashBuyPurchasePriceSource | undefined =
     pps === "default" || pps === "user" || pps === "zillow_cache" ||
@@ -1564,7 +1581,12 @@ async function loadScenarios(userId: string) {
     notifyError({ table: "cash_buy_scenarios", message: cRes.error.message });
     _cashBuyScenarios = [];
   } else {
-    _cashBuyScenarios = (cRes.data ?? []).map(rowToCashBuy);
+    // Legacy official cash-buy tax values have no request tuple in the
+    // canonical row. Clear them at hydration instead of exposing them as
+    // verified taxes; manual values (including $0) remain untouched.
+    _cashBuyScenarios = (cRes.data ?? [])
+      .map(rowToCashBuy)
+      .map(clearUnvalidatedCashBuyPropertyTax);
   }
   // Tolerate missing seller_scenarios table on environments where the latest
   // schema.sql has not yet been re-run. Other tabs continue to work.

@@ -99,6 +99,89 @@ test("Lee queries by house number and strictly selects the matching parcel", asy
   assert.equal(result.justValue, 390344);
 });
 
+test("Collier uses the official ParcelJoin row and preserves millage area rates", async () => {
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    assert.match(url.pathname, /ParcelJoin\/FeatureServer\/0\/query/);
+    assert.equal(
+      url.searchParams.get("where"),
+      "SiteStreetNumber=112 AND SiteStreetName LIKE 'PALMETTO DUNES%' AND SiteCity='NAPLES'",
+    );
+    return new Response(
+      JSON.stringify({
+        features: [{
+          attributes: {
+            ParcelId: 55252840005,
+            Folio: "55252840005",
+            SiteStreetAddress: "112 PALMETTO DUNES CIRCLE",
+            SiteCity: "NAPLES",
+            TaxYear: 2026,
+            TotalJustValue: 488479,
+            CountyAssessedValue: 488479,
+            MillageArea: 32,
+            CountyMillage: 4.0318,
+            SchoolMillage: 4.147,
+            MunicipalMillage: 0,
+            OtherMillage: 2.3257,
+          },
+        }],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  const result = await resolveParcel(
+    "collier",
+    "112 Palmetto Dunes Cir, Naples, FL 34113",
+    { fetchImpl, skipCache: true },
+  );
+  assert.equal(result.status, "found");
+  assert.equal(result.parcelId, "55252840005");
+  assert.equal(result.millageArea, "32");
+  assert.equal(result.countyMillage, 4.0318);
+  assert.equal(result.schoolMillage, 4.147);
+  assert.equal(result.otherMillage, 2.3257);
+});
+
+test("Collier query keeps suffix variants bounded and matches SiteUnit strictly", async () => {
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    assert.equal(
+      url.searchParams.get("where"),
+      "SiteStreetNumber=112 AND SiteStreetName LIKE 'PALMETTO DUNES%' AND SiteCity='NAPLES'",
+    );
+    return new Response(
+      JSON.stringify({
+        features: [
+          {
+            attributes: {
+              Folio: "wrong-unit",
+              SiteStreetAddress: "112 PALMETTO DUNES CIRCLE",
+              SiteUnit: "2",
+              SiteCity: "NAPLES",
+            },
+          },
+          {
+            attributes: {
+              Folio: "right-unit",
+              SiteStreetAddress: "112 PALMETTO DUNES CIRCLE",
+              SiteUnit: "3",
+              SiteCity: "NAPLES",
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  const result = await resolveParcel(
+    "collier",
+    "112 Palmetto Dunes Cir Unit 3, Naples, FL 34113",
+    { fetchImpl, skipCache: true },
+  );
+  assert.equal(result.status, "found");
+  assert.equal(result.parcelId, "right-unit");
+});
+
 test("SWFWMD Hernando uses ALTKEY as the TaxSys parcel key", async () => {
   const fetchImpl: typeof fetch = async (input) => {
     assert.match(String(input), /MapServer\/5\/query/);

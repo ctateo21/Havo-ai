@@ -229,6 +229,7 @@ async function sendOne(args: {
   html: string;
   text: string;
   headers?: Record<string, string>;
+  idempotencyKey?: string;
 }): Promise<{ status: SendStatus; error: string | null; to: string; from: string }> {
   const from = process.env.ALERT_FROM_EMAIL || DEFAULT_FROM;
   const resend = getResend();
@@ -239,7 +240,12 @@ async function sendOne(args: {
     };
     if (args.replyTo) payload.reply_to = args.replyTo;
     if (args.headers) payload.headers = args.headers;
-    const { error } = await resend.emails.send(payload as any);
+    const { error } = await resend.emails.send(
+      payload as any,
+      args.idempotencyKey
+        ? { idempotencyKey: args.idempotencyKey }
+        : undefined,
+    );
     if (error) return { status: "failed", error: error.message || String(error), to: args.to, from };
     return { status: "sent", error: null, to: args.to, from };
   } catch (e: any) {
@@ -440,6 +446,140 @@ export async function sendWelcomeEmail(args: {
     to: args.to, subject, html, text,
     headers: unsubUrl ? listUnsubHeaders(unsubUrl) : undefined,
   });
+}
+
+export interface QuoteRushEmailQuote {
+  siteName: string;
+  annualPremium: number;
+  monthlyPremium: number;
+  coverageA: number;
+  hurricaneDeductible: string;
+  aop: string;
+}
+
+export const WIND_MITIGATION_DISCLOSURE =
+  "This estimate assumes wind mitigation credits based on the home's age. " +
+  "A wind mitigation inspection is required to confirm them — without one, " +
+  "your premium may be higher.";
+
+function quoteRushMoney(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+export function quoteRushResultsContent(args: {
+  propertyAddress: string;
+  quotes: QuoteRushEmailQuote[];
+  windMitigationReportConfirmed?: boolean;
+  unsubscribeUrl: string;
+  physicalAddress: string;
+}): { subject: string; html: string; text: string } {
+  const quotes = args.quotes.slice(0, 3);
+  const rows = quotes.map((quote, index) => ({
+    ...quote,
+    rank: index + 1,
+  }));
+  const textRows = rows.map(quote =>
+    `${quote.rank}. ${quote.siteName}\n` +
+    `Annual premium: ${quoteRushMoney(quote.annualPremium)}\n` +
+    `Monthly equivalent: ${quoteRushMoney(quote.monthlyPremium)}\n` +
+    `Coverage A: ${quoteRushMoney(quote.coverageA)}\n` +
+    `Hurricane deductible: ${quote.hurricaneDeductible || "—"}\n` +
+    `AOP deductible: ${quote.aop || "—"}`
+  );
+  const disclosure = args.windMitigationReportConfirmed === true
+    ? ""
+    : `\n\n${WIND_MITIGATION_DISCLOSURE}`;
+  const subject = `Your insurance carrier quotes for ${args.propertyAddress}`;
+  const text =
+    `Your preliminary insurance carrier quotes\n\n` +
+    `Property: ${args.propertyAddress}\n\n` +
+    textRows.join("\n\n") +
+    disclosure +
+    `\n\nHavo · Every Step Home · Tateo Insurance Corp · License #L132640\n` +
+    `${args.physicalAddress}\n` +
+    `Unsubscribe: ${args.unsubscribeUrl}`;
+  const htmlRows = rows.map(quote =>
+    `<tr>` +
+    `<td style="padding:8px 10px;vertical-align:top"><strong>${quote.rank}. ${esc(quote.siteName)}</strong></td>` +
+    `<td style="padding:8px 10px;vertical-align:top">` +
+    `Annual premium: ${esc(quoteRushMoney(quote.annualPremium))}<br/>` +
+    `Monthly equivalent: ${esc(quoteRushMoney(quote.monthlyPremium))}<br/>` +
+    `Coverage A: ${esc(quoteRushMoney(quote.coverageA))}<br/>` +
+    `Hurricane deductible: ${esc(quote.hurricaneDeductible || "—")}<br/>` +
+    `AOP deductible: ${esc(quote.aop || "—")}` +
+    `</td></tr>`
+  ).join("");
+  const htmlDisclosure = args.windMitigationReportConfirmed === true
+    ? ""
+    : `<p style="color:#6b4e00;background:#fff8e1;padding:10px;border-radius:6px">${esc(WIND_MITIGATION_DISCLOSURE)}</p>`;
+  const html =
+    `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">` +
+    `<p style="font-size:22px;font-weight:bold;color:${HAVO_NAVY}">Havo</p>` +
+    `<h1 style="font-size:20px;color:${HAVO_NAVY}">Your preliminary insurance carrier quotes</h1>` +
+    `<p>Property: <strong>${esc(args.propertyAddress)}</strong></p>` +
+    `<table cellpadding="0" style="border-collapse:collapse;width:100%;font-size:14px">${htmlRows}</table>` +
+    htmlDisclosure +
+    `<p style="font-size:12px;color:#888;margin-top:20px">` +
+    `Havo · Every Step Home · Tateo Insurance Corp · License #L132640<br/>` +
+    `${esc(args.physicalAddress)}<br/>` +
+    `<a href="${esc(args.unsubscribeUrl)}" style="color:#888">Unsubscribe</a></p>` +
+    `</div>`;
+  return { subject, html, text };
+}
+
+/** Best-effort operational result email. The caller owns the durable atomic
+ * claim; this function only performs suppression, rendering, and the provider
+ * call. The stable idempotency key prevents a retry after a crash from
+ * creating a second Resend message. */
+export async function sendQuoteRushResultsEmail(args: {
+  to: string;
+  userId: string;
+  propertyAddress: string;
+  quotes: QuoteRushEmailQuote[];
+  windMitigationReportConfirmed?: boolean;
+  idempotencyKey: string;
+}): Promise<{ status: SendStatus; error: string | null }> {
+  if (!args.to || !args.userId) {
+    return { status: "skipped", error: "missing recipient identity" };
+  }
+  const unsubscribed = await isUnsubscribed(args.userId);
+  if (unsubscribed !== false) {
+    return {
+      status: "skipped",
+      error: unsubscribed === true
+        ? "user unsubscribed"
+        : "unsubscribe check failed",
+    };
+  }
+  const physicalAddress = process.env.AGENCY_PHYSICAL_ADDRESS?.trim();
+  if (!physicalAddress) {
+    return {
+      status: "failed",
+      error: "AGENCY_PHYSICAL_ADDRESS is not configured",
+    };
+  }
+  const unsubscribeUrl = unsubscribeUrlFor(args.userId);
+  const content = quoteRushResultsContent({
+    propertyAddress: args.propertyAddress,
+    quotes: args.quotes,
+    windMitigationReportConfirmed: args.windMitigationReportConfirmed,
+    unsubscribeUrl,
+    physicalAddress,
+  });
+  const result = await sendOne({
+    to: args.to,
+    subject: content.subject,
+    html: content.html,
+    text: content.text,
+    headers: listUnsubHeaders(unsubscribeUrl),
+    idempotencyKey: args.idempotencyKey,
+  });
+  return { status: result.status, error: result.error };
 }
 
 /** Sent to the internal team whenever any scenario is saved. Best-effort.

@@ -1,21 +1,33 @@
 ---
-name: Supabase vs Neon DB split
-description: Which Postgres holds which tables, and why the agent can't ALTER seller/property tables directly.
+name: Supabase vs managed Postgres split
+description: Which Postgres holds which tables, and why DATABASE_URL must not be confused with an external Neon secret.
 ---
 
-# Two separate Postgres databases
+# Two active Postgres databases, plus an unused external URL
 
-This app talks to TWO Postgres databases:
+This app actively talks to two Postgres databases:
 
-- **Neon** (`DATABASE_URL`) — holds only a small set of server-managed tables
-  (e.g. `user_subscriptions`). The agent CAN run migrations here.
+- **Replit-managed PostgreSQL** (`DATABASE_URL`) — holds a small set of
+  server-managed tables. Replit injects isolated development and production
+  connections under the same variable name.
 - **User's Supabase** (`VITE_SUPABASE_URL` + service role key) — holds the
-  user-facing scenario data: `seller_scenarios`, `purchase_scenarios`,
-  `cash_buy_scenarios`, `property_cache`, alerts, etc. The agent **cannot** run
-  `ALTER TABLE` here — there is no migration runner wired to Supabase from the
-  agent environment.
+  user-facing scenario data, property caches, alerts, and related records.
 
-**Why it matters:** when adding columns to any Supabase-backed table, you must:
+`NEON_DATABASE_URL` is a separate external connection and is not referenced by
+the current application source or Drizzle configuration. Do not assume it is
+the app database, enable it, or migrate it merely because the Drizzle driver is
+`@neondatabase/serverless`.
+
+**Why:** the Neon-compatible driver does not determine who manages the
+database. Confusing the two URLs can direct audits and migrations at the wrong
+database while the actual Replit-managed production database remains unchanged.
+
+**How to apply:** trace the runtime variable used by the client before any
+database operation. For `DATABASE_URL`, use Replit's development/production
+database tooling. Treat `NEON_DATABASE_URL` as unrelated unless source code or a
+user instruction explicitly establishes otherwise.
+
+When adding columns to any Supabase-backed table:
 1. Add the columns to `supabase/schema.sql` (canonical) AND a dated file under
    `supabase/migrations/` (idempotent `add column if not exists`). The USER
    applies it manually in the Supabase SQL editor.

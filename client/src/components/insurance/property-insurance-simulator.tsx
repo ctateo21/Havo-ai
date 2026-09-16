@@ -19,7 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Shield, AlertTriangle, Info } from "lucide-react";
 import { getCountyName } from "@/lib/county-tax-estimator";
 import {
-  DEFAULT_HOMEOWNERS_INSURANCE_PERCENT,
+  getBaselineHomeownersInsuranceRate,
 } from "@/lib/insurance-default";
 
 export type InsRegionKey =
@@ -37,6 +37,8 @@ export interface InsuranceFactors {
   constIdx: number;
   /** 0=2002+ · 1=1990-2001 (standard) · 2=1970-1989 · 3=pre-1970 */
   yearIdx: number;
+  /** Exact year when known; legacy rows continue to use yearIdx. */
+  yearBuilt?: number;
   /** 0=clean · 1=1 claim · 2=2 claims · 3=3+ claims */
   claimsIdx: number;
 }
@@ -77,20 +79,14 @@ export function getInsRegionFromAddress(address: string): InsRegionKey {
 const INS_ROOF_ADJ  = [0.90, 1.00, 1.20, 1.38];
 const INS_WIND_ADJ  = [1.14, 1.00, 0.82];
 const INS_HURR_ADJ  = [1.10, 1.05, 1.00];
-const INS_CONST_ADJ = [0.93, 1.00, 1.08];
-const INS_YEAR_ADJ  = [0.90, 1.00, 1.10, 1.28];
 const INS_CLAIM_ADJ = [1.00, 1.14, 1.26, 1.40];
 
-// Product of every factor table at its default index. The raw `adj`
-// product is divided by this so a property with default factors gets
-// exactly `0.75% × value` (matching the shared estimate everywhere).
-// Moving any single factor still scales the band proportionally.
+// Roof, wind, deductible, and claims continue to refine the age/construction
+// baseline. Construction and age themselves are priced directly below.
 const NEUTRAL_FACTOR_PRODUCT =
   INS_ROOF_ADJ[DEFAULT_INSURANCE_FACTORS.roofIdx]   *
   INS_WIND_ADJ[DEFAULT_INSURANCE_FACTORS.windIdx]   *
   INS_HURR_ADJ[DEFAULT_INSURANCE_FACTORS.hurrIdx]   *
-  INS_CONST_ADJ[DEFAULT_INSURANCE_FACTORS.constIdx] *
-  INS_YEAR_ADJ[DEFAULT_INSURANCE_FACTORS.yearIdx]   *
   INS_CLAIM_ADJ[DEFAULT_INSURANCE_FACTORS.claimsIdx];
 
 export interface InsurancePremiumResult {
@@ -102,22 +98,19 @@ export interface InsurancePremiumResult {
   hurrPct: number;
 }
 
-/** Pure premium calc — shared with persistence code that doesn't render UI.
- *
- *  Midpoint = property value × 0.75% × factor-adjustments (spec:
- *  insurance-default-075-percent). Region notes still surface in the
- *  UI for context, but the regional rate table no longer drives the
- *  baseline premium — every property anchors to the same 0.75%
- *  default, then the user-tunable factors (roof/wind/hurricane/etc)
- *  scale the band up or down. Low/high are a ±15% range around mid
- *  to express estimate uncertainty. */
+/** Pure premium calc shared with persistence code that doesn't render UI. */
 export function calcInsurancePremium(purchasePrice: number, factors: InsuranceFactors): InsurancePremiumResult {
   const rebuild = Math.max(0, purchasePrice);
+  const legacyYearBuilt = [2002, 1995, 1980, 1960][factors.yearIdx] ?? 1995;
   const rawAdj =
     INS_ROOF_ADJ[factors.roofIdx]   * INS_WIND_ADJ[factors.windIdx]   * INS_HURR_ADJ[factors.hurrIdx] *
-    INS_CONST_ADJ[factors.constIdx] * INS_YEAR_ADJ[factors.yearIdx]   * INS_CLAIM_ADJ[factors.claimsIdx];
+    INS_CLAIM_ADJ[factors.claimsIdx];
   const adj = rawAdj / NEUTRAL_FACTOR_PRODUCT;
-  const midRate  = DEFAULT_HOMEOWNERS_INSURANCE_PERCENT * adj;
+  const baselineRate = getBaselineHomeownersInsuranceRate({
+    yearBuilt: factors.yearBuilt ?? legacyYearBuilt,
+    isFrameConstruction: factors.constIdx === 2,
+  });
+  const midRate  = baselineRate * adj;
   const lowRate  = midRate * 0.85;
   const highRate = midRate * 1.15;
   return {

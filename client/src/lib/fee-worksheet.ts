@@ -35,6 +35,8 @@ export interface FeeWorksheetInputs {
   loanType: "conventional" | "fha" | "va" | "usda" | "dscr" | string;
   monthlyPI: number;
   monthlyTax: number;
+  /** False when the strict official county-tax lookup is unavailable. */
+  monthlyTaxAvailable?: boolean;
   monthlyHOIns: number;
   monthlyFlood: number;
   monthlyMI: number;
@@ -244,11 +246,13 @@ export function buildFeeWorksheet(inp: FeeWorksheetInputs): FeeWorksheet {
       note: `${prepaidInterestDays} Days @ ${money(dailyInterest)}`,
       amount: prepaidInterest,
     },
-    {
-      label: "Property Taxes",
-      note: `3 Months @ ${money(inp.monthlyTax)}`,
-      amount: r2(inp.monthlyTax * 3),
-    },
+    ...(inp.monthlyTaxAvailable === false
+      ? []
+      : [{
+          label: "Property Taxes",
+          note: `3 Months @ ${money(inp.monthlyTax)}`,
+          amount: r2(inp.monthlyTax * 3),
+        }]),
   ];
   // FHA requires an escrow account. Enforce this in the calculation as
   // well as the UI so a stale/off client preference can never remove it.
@@ -260,11 +264,13 @@ export function buildFeeWorksheet(inp: FeeWorksheetInputs): FeeWorksheet {
           note: `3 Months @ ${money(inp.monthlyHOIns)}`,
           amount: r2(inp.monthlyHOIns * 3),
         },
-        {
-          label: "Property Taxes Reserve",
-          note: `3 Months @ ${money(inp.monthlyTax)}`,
-          amount: r2(inp.monthlyTax * 3),
-        },
+        ...(inp.monthlyTaxAvailable === false
+          ? []
+          : [{
+              label: "Property Taxes Reserve",
+              note: `3 Months @ ${money(inp.monthlyTax)}`,
+              amount: r2(inp.monthlyTax * 3),
+            }]),
       ]
     : [];
   const prepaidsSubtotal = r2(
@@ -310,7 +316,9 @@ export function buildFeeWorksheet(inp: FeeWorksheetInputs): FeeWorksheet {
       : []),
     { label: "Homeowner's Insurance", amount: r2(inp.monthlyHOIns) },
     ...(inp.monthlyFlood > 0 ? [{ label: "Flood Insurance", amount: r2(inp.monthlyFlood) }] : []),
-    { label: "Property Taxes", amount: r2(inp.monthlyTax) },
+    ...(inp.monthlyTaxAvailable === false
+      ? []
+      : [{ label: "Property Taxes", amount: r2(inp.monthlyTax) }]),
     ...(inp.monthlyMI > 0 ? [{ label: "Mortgage Insurance", amount: r2(inp.monthlyMI) }] : []),
     ...(inp.hoaMonthly > 0 ? [{ label: "HOA Dues", amount: r2(inp.hoaMonthly) }] : []),
     ...(inp.monthlyCDD > 0 ? [{ label: "CDD Assessment", amount: r2(inp.monthlyCDD) }] : []),

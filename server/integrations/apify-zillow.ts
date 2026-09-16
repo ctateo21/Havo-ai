@@ -321,25 +321,66 @@ function parseAddressString(addr: string): ParsedAddr {
  * parsing the joined string if not.
  */
 function parseAddressFromRow(row: any): ParsedAddr {
-  const a = row?.address;
-  if (a && typeof a === "object") {
-    const out: ParsedAddr = {};
-    const street = String(a.streetAddress ?? "").trim();
+  /**
+   * The current actor uses `listingAddress` while older actor builds used
+   * `address.streetAddress`. Parse the full address first so a sparse object
+   * (for example, one with only `full`) still participates in the strong
+   * identifier checks below, then let discrete fields override it.
+   */
+  const parseAddressValue = (value: any): ParsedAddr => {
+    if (typeof value === "string") return parseAddressString(value);
+    if (!value || typeof value !== "object") return {};
+
+    const full = typeof value.full === "string"
+      ? parseAddressString(value.full)
+      : {};
+    const out: ParsedAddr = { ...full };
+    const street = String(
+      value.streetAddress ??
+      value.street ??
+      value.addressLine1 ??
+      value.line1 ??
+      "",
+    ).trim();
     const m = street.match(/^(\d+\w?)\s+(.+)$/);
     if (m) {
       out.streetNum = m[1];
       out.streetName = normalizeStreetName(m[2]);
     }
-    if (a.city) {
-      out.cityRaw = String(a.city);
+    if (value.city) {
+      out.cityRaw = String(value.city);
       out.city = normalizeCity(out.cityRaw);
     }
-    if (a.state) out.state = String(a.state).toUpperCase().slice(0, 2);
-    if (a.zipcode) out.zip5 = String(a.zipcode).slice(0, 5);
+    const state = value.state ?? value.stateCode;
+    if (state) out.state = String(state).toUpperCase().slice(0, 2);
+    const zip = value.zipcode ?? value.zipCode ?? value.postalCode ?? value.zip;
+    if (zip) out.zip5 = String(zip).slice(0, 5);
     return out;
+  };
+
+  // Prefer the explicit current-actor field, but retain the old field and
+  // string fallbacks for rows produced by previous actor versions.
+  for (const value of [row?.listingAddress, row?.address]) {
+    const parsed = parseAddressValue(value);
+    if (
+      parsed.streetNum ||
+      parsed.streetName ||
+      parsed.zip5 ||
+      parsed.state ||
+      parsed.city
+    ) {
+      return parsed;
+    }
   }
-  // String fallback.
-  return parseAddressString(typeof a === "string" ? a : String(row?.streetAddress ?? ""));
+
+  // Some actor responses flatten the address at the row level.
+  return parseAddressString(
+    typeof row?.streetAddress === "string"
+      ? row.streetAddress
+      : typeof row?.fullAddress === "string"
+        ? row.fullAddress
+        : "",
+  );
 }
 
 interface MatchDecision {
@@ -480,10 +521,30 @@ function normalizeHoaMonthly(raw: any): number | null {
   return value; // monthly by default
 }
 
+/** Read a numeric amount from either a legacy scalar or a current actor
+ * amount object such as `{ amount, currency, formatted }`. */
+function amountValue(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const value = raw as Record<string, unknown>;
+  return value.amount ??
+    value.value ??
+    value.price ??
+    value.unformattedPrice ??
+    value.formatted ??
+    null;
+}
+
 function pickAddress(p: any): string {
+  if (typeof p.listingAddress === "string") return p.listingAddress;
+  if (typeof p.listingAddress?.full === "string") return p.listingAddress.full;
   if (typeof p.address === "string") return p.address;
-  const a = p.address ?? {};
-  return [a.streetAddress, a.city, a.state, a.zipcode].filter(Boolean).join(", ");
+  const a = p.listingAddress ?? p.address ?? {};
+  return [
+    a.streetAddress ?? a.street ?? a.addressLine1,
+    a.city,
+    a.state,
+    a.zipcode ?? a.zipCode ?? a.postalCode,
+  ].filter(Boolean).join(", ");
 }
 
 /**
@@ -502,10 +563,11 @@ function pickAddress(p: any): string {
  *     wins for `primaryPhotoUrl`)
  *   - never throws: returns [] for any unexpected shape
  */
-function pickPhotos(p: any): string[] {
+export function pickPhotos(p: any): string[] {
   if (!p || typeof p !== "object") return [];
   const out: string[] = [];
   const seen = new Set<string>();
+  const visited = new Set<object>();
   const push = (raw: any) => {
     const url =
       typeof raw === "string"
@@ -539,30 +601,51 @@ function pickPhotos(p: any): string[] {
     "listingPhotos",
     "propertyPhotos",
   ];
-  for (const f of arrayFields) {
-    const v = (p as any)[f];
-    if (Array.isArray(v)) v.forEach(push);
-  }
+  const visit = (node: any, depth: number) => {
+    if (!node || typeof node !== "object" || depth > 4 || visited.has(node)) return;
+    visited.add(node);
+    if (Array.isArray(node)) {
+      node.forEach(item => visit(item, depth + 1));
+      return;
+    }
 
-  // `media` / `mediaContents` are often arrays of objects with a
-  // `mediaUrl` or nested `images[]`.
-  for (const f of ["media", "mediaContents"]) {
-    const v = (p as any)[f];
-    if (Array.isArray(v)) {
-      for (const m of v) {
-        if (!m) continue;
-        push(m.mediaUrl ?? m.url ?? m);
-        if (Array.isArray(m.images)) m.images.forEach(push);
+    // The current actor names its primary image `mainImage`. Visit it before
+    // the gallery so the normalized first photo remains the primary photo.
+    push(node.mainImage);
+    push(node.mainImageUrl);
+
+    for (const f of arrayFields) {
+      const value = node[f];
+      if (Array.isArray(value)) value.forEach(push);
+    }
+
+    // `media` / `mediaContents` are often arrays of objects with a
+    // `mediaUrl` or nested `images[]`.
+    for (const f of ["media", "mediaContents"]) {
+      const value = node[f];
+      if (Array.isArray(value)) {
+        for (const media of value) {
+          if (!media) continue;
+          push(media.mediaUrl ?? media.url ?? media);
+          if (Array.isArray(media.images)) media.images.forEach(push);
+        }
       }
     }
-  }
 
-  // Singletons.
-  push(p.imgSrc);
-  push(p.hiResImageLink);
-  push(p.primaryPhotoUrl);
-  push(p.attributionInfo?.photoUrl);
+    // Singletons.
+    push(node.imgSrc);
+    push(node.hiResImageLink);
+    push(node.primaryPhotoUrl);
+    push(node.attributionInfo?.photoUrl);
 
+    // Common actor wrappers. This is deliberately bounded and does not
+    // recurse through arbitrary response fields.
+    for (const key of ["property", "listing", "home", "data", "result"]) {
+      visit(node[key], depth + 1);
+    }
+  };
+
+  visit(p, 0);
   return out;
 }
 
@@ -835,7 +918,9 @@ function normalizeOne(row: any): PropertyScenario {
     homeStatusRaw.includes("SOLD") ||
     homeStatusRaw === "RECENTLY_SOLD";
   const rawSoldPrice = num(
-    row.lastSoldPrice ?? row.soldPrice ?? row.hdpData?.homeInfo?.lastSoldPrice,
+    amountValue(
+      row.lastSoldPrice ?? row.soldPrice ?? row.hdpData?.homeInfo?.lastSoldPrice,
+    ),
   );
   const soldPrice =
     isSold && rawSoldPrice != null && rawSoldPrice >= MIN_PURCHASE_PRICE
@@ -863,9 +948,13 @@ function normalizeOne(row: any): PropertyScenario {
   const zestimate =
     rawZestimate != null && rawZestimate >= MIN_PURCHASE_PRICE ? rawZestimate : null;
 
-  // Listing price — only trust `row.price` / `row.listPrice` for
-  // sale listings, never for rentals. Also reject obvious rent values.
-  const rawListingPrice = num(row.price ?? row.listPrice ?? row.unformattedPrice);
+  // Listing price — trust the current actor's `listingPrice.amount` or the
+  // legacy scalar fields for sale listings, never for rentals. Also reject
+  // obvious rent values.
+  // The current actor wraps this as `{ amount, currency, formatted }`.
+  const rawListingPrice = num(amountValue(
+    row.listingPrice ?? row.price ?? row.listPrice ?? row.unformattedPrice,
+  ));
   const listingPrice =
     !isRentalListing && rawListingPrice != null && rawListingPrice >= MIN_PURCHASE_PRICE
       ? rawListingPrice
@@ -885,7 +974,7 @@ function normalizeOne(row: any): PropertyScenario {
   return {
     source: "Zillow via Apify",
     address: pickAddress(row),
-    zillowUrl: String(row.url ?? row.hdpUrl ?? row.detailUrl ?? ""),
+    zillowUrl: String(row.propertyUrl ?? row.url ?? row.hdpUrl ?? row.detailUrl ?? ""),
     zestimate,
     listingPrice,
     purchasePrice,

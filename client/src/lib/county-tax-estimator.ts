@@ -19,6 +19,8 @@ const FL_COUNTY_RATES: Record<string, CountyRates> = {
   "charlotte":     { homestead: 1.2874, nonHomestead: 1.57 },
   "citrus":        { homestead: 1.2710, nonHomestead: 1.55 },
   "clay":          { homestead: 1.2546, nonHomestead: 1.53 },
+  // Conservative fallback for unverified Collier parcels. Verified server
+  // responses use the official ParcelJoin millage components.
   "collier":       { homestead: 0.8250, nonHomestead: 0.939 },
   "columbia":      { homestead: 1.2054, nonHomestead: 1.47 },
   "miami-dade":    { homestead: 1.5170, nonHomestead: 1.85 },

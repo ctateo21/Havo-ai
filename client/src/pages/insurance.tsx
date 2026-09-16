@@ -16,6 +16,7 @@ import {
 } from "@/lib/quoterush-auto";
 import {
   DEFAULT_HOMEOWNERS_INSURANCE_PERCENT,
+  getBaselineHomeownersInsuranceRate,
   getInsuranceCoverageMultiplier,
 } from "@/lib/insurance-default";
 import {
@@ -35,6 +36,10 @@ import {
 } from "lucide-react";
 import { getCountyName } from "@/lib/county-tax-estimator";
 import { normalizePropertyKey } from "@/lib/property-key";
+import {
+  isInsuranceAddressDismissed,
+  readDismissedInsuranceKeys,
+} from "@/lib/insurance-dismissals";
 import { fetchFloodZone } from "@/lib/flood-zone";
 import { useGooglePlaces } from "@/hooks/use-google-places";
 import LeadCaptureDialog from "@/components/ui/lead-capture-dialog";
@@ -73,8 +78,6 @@ const OPENING_PROTECTION_ADJ = [1.00, 0.92]; // no, yes
 const ROOF_SHAPE_ADJ = [0.92, 1.06, 1.00]; // hip, flat, other / unsure
 const SWR_ADJ = [1.00, 1.00, 0.94]; // no, unsure, yes
 const HURR_ADJ  = [1.10, 1.05, 1.00];
-const CONST_ADJ = [0.93, 1.00, 1.08];
-const YEAR_ADJ  = [0.90, 1.00, 1.10, 1.28];
 const CURRENT_YEAR = new Date().getFullYear();
 const DEFAULT_ROOF_YEAR = CURRENT_YEAR - 10;
 const DEFAULT_YEAR_BUILT = 1995;
@@ -99,17 +102,14 @@ function getRegionFromAddress(address: string): RegionKey {
   return "tampa";
 }
 
-// Product of every factor table at its default index — used to normalize
-// the raw factor product so a property with default factors yields
-// exactly `0.75% × rebuild` (matches the shared estimate everywhere).
+// Product of the non-baseline factors at their default index. Home age and
+// frame construction are priced directly by the baseline rate helper.
 const NEUTRAL_FACTOR_PRODUCT =
   ROOF_ADJ[1] *
   OPENING_PROTECTION_ADJ[0] *
   ROOF_SHAPE_ADJ[2] *
   SWR_ADJ[1] *
-  HURR_ADJ[0] *
-  CONST_ADJ[0] *
-  YEAR_ADJ[1];
+  HURR_ADJ[0];
 
 function roofFactorIndex(roofYear: number): number {
   const age = CURRENT_YEAR - roofYear;
@@ -1274,13 +1274,21 @@ export default function InsuranceDashboard() {
   // 2) If the user has zero saved scenarios, an empty state is rendered
   //    below (no redirect, no auto-mounting of the simulator content).
   // 3) Guests are untouched — they keep the simulator-first experience.
+  const currentUserId = getSession()?.id ?? null;
+  const visibleSavedInsuranceScenarios = () => {
+    const dismissed = readDismissedInsuranceKeys(currentUserId);
+    return getInsuranceScenarios().filter(s => {
+      const normalizedKey = normalizePropertyKey(s.address).key;
+      return !isInsuranceAddressDismissed(dismissed, s.address, normalizedKey);
+    });
+  };
   const savedInsuranceCount = isAuthenticated && !addressParam
-    ? getInsuranceScenarios().length
+    ? visibleSavedInsuranceScenarios().length
     : -1; // sentinel: don't read when not needed
   useEffect(() => {
     if (!isAuthenticated) return;
     if (addressParam) return;
-    const saved = getInsuranceScenarios();
+    const saved = visibleSavedInsuranceScenarios();
     if (saved.length === 0) return;
     const first = saved[0];
     const target = first?.address;
@@ -1304,8 +1312,8 @@ export default function InsuranceDashboard() {
     if (didHydrateTabsRef.current) return;
     if (!isAuthenticated) return;
     if (!addressParam) return; // wait for the auto-jump above to land us on an address
-    const saved = getInsuranceScenarios();
-    if (saved.length === 0) return;
+    const dismissed = readDismissedInsuranceKeys(currentUserId);
+    const saved = visibleSavedInsuranceScenarios();
     didHydrateTabsRef.current = true;
 
     // Use the SAME normalization primitive the overview uses
@@ -1317,6 +1325,18 @@ export default function InsuranceDashboard() {
     const keyFor = (addr: string) => normalizePropertyKey(addr).key
       || (addr ?? "").trim().toLowerCase();
     const activeKey = keyFor(addressParam);
+    const activeIsDismissed = isInsuranceAddressDismissed(
+      dismissed,
+      addressParam,
+      activeKey,
+    );
+    if (saved.length === 0 && activeIsDismissed) {
+      didHydrateTabsRef.current = true;
+      setScenarios([]);
+      setLocation("/dashboard?tab=insurance", { replace: true });
+      return;
+    }
+    if (saved.length === 0) return;
     const seen = new Map<string, string>(); // key → address (kept tab)
     const tabs: Scenario[] = [];
     let activeId = "";
@@ -1338,13 +1358,19 @@ export default function InsuranceDashboard() {
     // URL address isn't in saved scenarios yet (e.g. brand-new property the
     // user navigated into but hasn't saved) — keep it as a tab so we don't
     // strand them on a blank UI.
-    if (activeKey && !seen.has(activeKey)) {
+    if (activeKey && !seen.has(activeKey) && !activeIsDismissed) {
       const id = `sc_current_${Date.now()}`;
       tabs.unshift({ id, address: addressParam, savedSettings: null });
       seen.set(activeKey, addressParam);
       activeId = id;
     }
     if (!activeId) activeId = tabs[0].id;
+    if (activeIsDismissed && tabs[0]?.address) {
+      setLocation(
+        `/insurance?address=${encodeURIComponent(tabs[0].address)}`,
+        { replace: true },
+      );
+    }
 
     // Parity check: any overview-source address whose normalized key is
     // not represented in the detail tab set. Should be empty after the
@@ -1454,11 +1480,13 @@ export default function InsuranceDashboard() {
           * OPENING_PROTECTION_ADJ[openingProtectionIdx]
           * ROOF_SHAPE_ADJ[roofShapeIdx]
           * SWR_ADJ[swrIdx]
-          * HURR_ADJ[hurrIdx]
-          * CONST_ADJ[constIdx]
-          * YEAR_ADJ[yearIdx];
+          * HURR_ADJ[hurrIdx];
         const adj = rawAdj / NEUTRAL_FACTOR_PRODUCT;
-        return rebuild * DEFAULT_HOMEOWNERS_INSURANCE_PERCENT * adj;
+        const baselineRate = getBaselineHomeownersInsuranceRate({
+          yearBuilt,
+          isFrameConstruction: constIdx === 2,
+        });
+        return rebuild * baselineRate * adj;
       })();
       // Detect manual factor edits by comparing against defaults
       // (1,1,0,0,1,0). Any drift stamps discountsSource = "manual"
@@ -1873,42 +1901,35 @@ export default function InsuranceDashboard() {
         );
         const data = await res.json();
         const counter: number = data.quoteCounter ?? 0;
+        const serverStatus = data.status ?? "pending";
+        setQrQuotes(data.quotes ?? []);
+        setQrQuoteCounter(counter);
+        setInsuranceQRCache(address, {
+          status: serverStatus === "success" ? "success" : "pending",
+          quotes: data.quotes ?? [],
+          quoteCounter: counter,
+        }, policyType);
 
-        if (counter > 0) {
-          setQrQuotes(data.quotes ?? []);
-          setQrQuoteCounter(counter);
+        if (serverStatus === "success") {
           setQrStatus("success");
-          setInsuranceQRCache(address, {
-            status: "success",
-            quotes: data.quotes ?? [],
-            quoteCounter: counter,
-          }, policyType);
-
-          // Stop only after 3 consecutive stable polls.
-          if (counter === qrPrevCounterRef.current) {
-            qrStableRef.current += 1;
-          } else {
-            qrStableRef.current = 0;
-          }
-          qrPrevCounterRef.current = counter;
-
-          if (
-            qrStableRef.current >= 3 ||
-            pollCount >= MAX_POLLS
-          ) {
-            if (qrPollRef.current)
-              clearInterval(qrPollRef.current);
-            if (qrTimerRef.current)
-              clearInterval(qrTimerRef.current);
-          }
-        } else if (pollCount >= MAX_POLLS) {
           if (qrPollRef.current)
             clearInterval(qrPollRef.current);
           if (qrTimerRef.current)
             clearInterval(qrTimerRef.current);
-          if (qrQuotes.length === 0) {
-            setQrStatus("error");
-          }
+        } else if (serverStatus === "error") {
+          setQrStatus("error");
+          if (qrPollRef.current)
+            clearInterval(qrPollRef.current);
+          if (qrTimerRef.current)
+            clearInterval(qrTimerRef.current);
+        } else if (pollCount >= MAX_POLLS) {
+          // The server owns the terminal timeout. Stop this reader timer but
+          // leave the durable row untouched so a reconnect can see its final
+          // state.
+          if (qrPollRef.current)
+            clearInterval(qrPollRef.current);
+          if (qrTimerRef.current)
+            clearInterval(qrTimerRef.current);
         }
       } catch (e) {
         console.error("[qr-poll]", e);
@@ -2135,22 +2156,21 @@ export default function InsuranceDashboard() {
   const region = REGIONS[regionKey];
 
   const calc = useMemo(() => {
-    // Anchor the midpoint to the shared 0.75%-of-value default so this
-    // tab always agrees with Purchase with Loan, Cash Buy, and the
-    // Ongoing Costs row for the same property. Factors still scale the
-    // band, but they're normalized against the default product so a
-    // property with neutral factors lands exactly on the 0.75% number.
+    // Start with the six home-age bands and add 0.15% for frame homes.
+    // Roof, wind, and deductible selections refine that baseline.
     // Claims are not a user input: general estimates always assume no
     // claims during the past five years.
     const rawAdj = ROOF_ADJ[roofIdx]
       * OPENING_PROTECTION_ADJ[openingProtectionIdx]
       * ROOF_SHAPE_ADJ[roofShapeIdx]
       * SWR_ADJ[swrIdx]
-      * HURR_ADJ[hurrIdx]
-      * CONST_ADJ[constIdx]
-      * YEAR_ADJ[yearIdx];
+      * HURR_ADJ[hurrIdx];
     const adj = rawAdj / NEUTRAL_FACTOR_PRODUCT;
-    const midRate  = DEFAULT_HOMEOWNERS_INSURANCE_PERCENT * adj;
+    const baselineRate = getBaselineHomeownersInsuranceRate({
+      yearBuilt,
+      isFrameConstruction: constIdx === 2,
+    });
+    const midRate  = baselineRate * adj;
     const hurrDeductiblePct = [0.02, 0.05, 0.10][hurrIdx];
     return {
       mid: rebuild * midRate,
@@ -2159,7 +2179,7 @@ export default function InsuranceDashboard() {
     };
   }, [
     rebuild, roofIdx, openingProtectionIdx, roofShapeIdx, swrIdx,
-    hurrIdx, constIdx, yearIdx,
+    hurrIdx, constIdx, yearBuilt,
   ]);
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -2609,9 +2629,9 @@ export default function InsuranceDashboard() {
                         {qrStatus === "idle" &&
                           "Get real-time rates from your Florida-appointed carriers."}
                         {qrStatus === "starting" &&
-                          "Submitting to QuoteRUSH…"}
+                          "We're getting your quotes. This takes a few minutes. We'll email you the results, and they'll be here when you come back."}
                         {qrStatus === "pending" &&
-                          `QuoteBot is quoting your carriers — ${qrQuoteCounter} quote${qrQuoteCounter !== 1 ? "s" : ""} so far · ${qrElapsed}s`}
+                          `We're getting your quotes. This takes a few minutes. We'll email you the results, and they'll be here when you come back. ${qrQuoteCounter} quote${qrQuoteCounter !== 1 ? "s" : ""} so far · ${qrElapsed}s`}
                         {qrStatus === "success" &&
                           `${qrQuoteCounter} carrier${qrQuoteCounter !== 1 ? "s" : ""} quoted${
                             qrExpiresAt

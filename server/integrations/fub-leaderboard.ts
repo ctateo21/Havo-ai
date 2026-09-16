@@ -114,6 +114,7 @@ export interface AgentRow {
   texts: number;
   emails: number;
   showings: number;
+  showingDays: number;
   closedDeals: number;
   closedDealsAllTime: number;
   underContract: number;
@@ -134,6 +135,7 @@ export interface LeaderboardPayload {
     texts: number;
     emails: number;
     showings: number;
+    showingDays: number;
     closedDeals: number;
     underContract: number;
     totalActivity: number;
@@ -416,8 +418,8 @@ async function collectLeaderboardData(apiKey: string, period: Period): Promise<L
     Object.entries(FUB_ID_TO_TEAM_EMAIL).map(([id, e]) => [e as TeamEmail, Number(id)]),
   );
 
-  const counts: Record<string, { calls: number; texts: number; emails: number; showings: number }> = {};
-  for (const m of LEADERBOARD_TEAM) counts[m.email] = { calls: 0, texts: 0, emails: 0, showings: 0 };
+  const counts: Record<string, { calls: number; texts: number; emails: number; showings: number; showingDays: number }> = {};
+  for (const m of LEADERBOARD_TEAM) counts[m.email] = { calls: 0, texts: 0, emails: 0, showings: 0, showingDays: 0 };
 
   // ── CALLS ────────────────────────────────────────────────────────────────
   try {
@@ -432,17 +434,28 @@ async function collectLeaderboardData(apiKey: string, period: Period): Promise<L
     console.log(`[fub-lb] calls: ${calls.length} fetched, ${matched} matched`);
   } catch (err) { noteCollectionFailure("calls", err); }
 
-  // ── SHOWINGS ─────────────────────────────────────────────────────────────
+  // ── SHOWINGS — notes starting "Showed Homes: N" ──────────────────────────
+  // Homes shown sums N; showing days counts notes, not unique calendar dates.
   try {
-    const appts = await fetchAllPages(apiKey, "/appointments", { since: startIso });
+    const notes = await fetchAllPages(apiKey, "/notes", { since: startIso });
     let matched = 0;
-    for (const appt of appts) {
-      const apptMs = getCreatedMs(appt);
-      if (apptMs < startMs || apptMs >= endMs) continue;
-      const email = resolveEmail(appt, idMap, nameMap);
-      if (email && counts[email]) { counts[email].showings++; matched++; }
+    const SHOWING_PREFIX = "showed homes:";
+    for (const note of notes) {
+      const noteMs = getCreatedMs(note);
+      if (noteMs < startMs || noteMs >= endMs) continue;
+      const body = (note.body ?? "").toLowerCase().trim();
+      if (!body.startsWith(SHOWING_PREFIX)) continue;
+      const raw = body.slice(SHOWING_PREFIX.length).trim();
+      const homesShown = parseInt(raw, 10);
+      if (!homesShown || isNaN(homesShown) || homesShown <= 0) continue;
+      const email = resolveEmail({ userId: note.createdById }, idMap, nameMap);
+      if (email && counts[email]) {
+        counts[email].showings += homesShown;
+        counts[email].showingDays += 1;
+        matched++;
+      }
     }
-    console.log(`[fub-lb] appointments: ${appts.length} fetched, ${matched} matched`);
+    console.log(`[fub-lb] showings: ${matched} notes matched — homes shown and showing days both tracked`);
   } catch (err) { noteCollectionFailure("showings", err); }
 
   // ── PIPELINE + NEW LEADS ─────────────────────────────────────────────────
@@ -513,26 +526,9 @@ async function collectLeaderboardData(apiKey: string, period: Period): Promise<L
     } catch (err) { noteCollectionFailure(`emails for ${m.name}`, err); }
   }
 
-  // ── CLOSED DEALS ─────────────────────────────────────────────────────────
-  const closedThisPeriod: Record<string, number> = {};
-  const closedAllTime: Record<string, number>    = {};
-  for (const m of LEADERBOARD_TEAM) { closedThisPeriod[m.email] = 0; closedAllTime[m.email] = 0; }
-  try {
-    const closedPeople = await fetchAllPages(apiKey, "/people", { stage: "Closed" });
-    for (const person of closedPeople) {
-      const email = resolveEmail(person, idMap, nameMap);
-      if (!email) continue;
-      if (closedAllTime[email] !== undefined) closedAllTime[email]++;
-      const updMs = getUpdatedMs(person);
-      if (updMs >= startMs && updMs < endMs && closedThisPeriod[email] !== undefined) closedThisPeriod[email]++;
-    }
-  } catch (err: any) {
-    noteCollectionFailure("closed deals", err);
-    for (const m of LEADERBOARD_TEAM) {
-      closedAllTime[m.email]    = pipeline[m.email]?.["Closed"] ?? 0;
-      closedThisPeriod[m.email] = closedAllTime[m.email];
-    }
-  }
+  const activityUnderContract: Record<string, number> = {};
+  const activityClosed: Record<string, number> = {};
+  for (const m of LEADERBOARD_TEAM) { activityUnderContract[m.email] = 0; activityClosed[m.email] = 0; }
 
   // ── DEALS — always full year, independent of activity period ─────────────
   // Active stages (Active Listing, Under Contract) = always shown.
@@ -548,13 +544,33 @@ async function collectLeaderboardData(apiKey: string, period: Period): Promise<L
       const { category, isActive } = classifyDeal(deal);
       if (!category) continue;
 
+      const dealUsers: Array<{ id: number; name: string }> = deal.users ?? [];
+      // Activity counts use the selected period, independently of pipeline year.
+      for (const u of dealUsers) {
+        const email =
+          idMap.get(Number(u.id)) ??
+          nameMap.get((u.name ?? "").toLowerCase().trim());
+        if (!email) continue;
+        if (isActive && category !== "reActiveListing") {
+          const rawDate = deal.mutualAcceptanceDate ?? deal.enteredStageAt ?? null;
+          const ucMs = rawDate ? new Date(rawDate).getTime() : 0;
+          if (ucMs > 0 && ucMs >= startMs && ucMs < endMs && activityUnderContract[email] !== undefined) {
+            activityUnderContract[email]++;
+          }
+        } else if (!isActive) {
+          const closeMs = deal.projectedCloseDate ? new Date(deal.projectedCloseDate).getTime() : 0;
+          if (closeMs > 0 && closeMs >= startMs && closeMs < endMs && activityClosed[email] !== undefined) {
+            activityClosed[email]++;
+          }
+        }
+      }
+
       // Closed deals: filter by projectedCloseDate within current calendar year
       if (!isActive) {
         const closeMs = deal.projectedCloseDate ? new Date(deal.projectedCloseDate).getTime() : 0;
         if (!closeMs || closeMs < dealYearStart || closeMs > dealYearEnd) continue;
       }
 
-      const dealUsers: Array<{ id: number; name: string }> = deal.users ?? [];
       for (const u of dealUsers) {
         const email =
           idMap.get(Number(u.id)) ??
@@ -565,7 +581,7 @@ async function collectLeaderboardData(apiKey: string, period: Period): Promise<L
       }
     }
 
-    console.log(`[fub-lb] deals: ${allDeals.length} total, ${matched} attributions (full year view)`);
+    console.log(`[fub-lb] deals: ${allDeals.length} total, ${matched} pipeline attributions`);
   } catch (err) { noteCollectionFailure("deal pipeline", err); }
 
   // Compute deal totals per agent
@@ -597,9 +613,10 @@ async function collectLeaderboardData(apiKey: string, period: Period): Promise<L
       texts:              c.texts,
       emails:             c.emails,
       showings:           c.showings,
-      closedDeals:        closedThisPeriod[m.email] ?? 0,
-      closedDealsAllTime: closedAllTime[m.email]    ?? 0,
-      underContract:      p["Under Contract"] ?? 0,
+      showingDays:        c.showingDays,
+      closedDeals:        activityClosed[m.email] ?? 0,
+      closedDealsAllTime: pipeline[m.email]?.["Closed"] ?? 0,
+      underContract:      activityUnderContract[m.email] ?? 0,
       pipeline:           p,
       totalActivity,
       totalLeads,
@@ -619,6 +636,7 @@ async function collectLeaderboardData(apiKey: string, period: Period): Promise<L
     texts:          agents.reduce((s, r) => s + r.texts, 0),
     emails:         agents.reduce((s, r) => s + r.emails, 0),
     showings:       agents.reduce((s, r) => s + r.showings, 0),
+    showingDays:    agents.reduce((s, r) => s + r.showingDays, 0),
     closedDeals:    agents.reduce((s, r) => s + r.closedDeals, 0),
     underContract:  agents.reduce((s, r) => s + r.underContract, 0),
     totalActivity:  agents.reduce((s, r) => s + r.totalActivity, 0),

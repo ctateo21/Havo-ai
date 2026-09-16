@@ -28,6 +28,7 @@ import {
   type CashBuyScenario,
   type InsuranceScenario, type PurchaseScenario,
   type SellerScenario, type SellerScenarioStatus,
+  hasValidatedCashBuyPropertyTax, hasValidatedPurchasePropertyTax,
 } from "@/lib/auth";
 import {
   normalizePropertyKey,
@@ -41,6 +42,15 @@ import {
   isCondoOrTownhomePropertyType,
 } from "@/lib/insurance-policy-type";
 import { calculateDefaultHomeownersInsurance } from "@/lib/insurance-default";
+import {
+  readDismissedInsuranceKeys,
+  writeDismissedInsuranceKeys,
+} from "@/lib/insurance-dismissals";
+import {
+  calcInsurancePremium,
+  DEFAULT_INSURANCE_FACTORS,
+  type InsuranceFactors,
+} from "@/components/insurance/property-insurance-simulator";
 import { fetchFloodZone } from "@/lib/flood-zone";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -639,7 +649,8 @@ function PurchaseTab() {
       {/* Property rows */}
       <div className="space-y-3">
         {scenarios.map(s => {
-          const dtiPct = s.dti != null ? Math.round(s.dti * 100) : null;
+          const taxesComplete = hasValidatedPurchasePropertyTax(s);
+          const dtiPct = taxesComplete && s.dti != null ? Math.round(s.dti * 100) : null;
           return (
             <Card
               key={s.id}
@@ -657,12 +668,17 @@ function PurchaseTab() {
                         <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
                           <Calendar className="h-3 w-3" /> Saved {formatDate(s.savedAt)}
                         </p>
+                        {!taxesComplete && (
+                          <p className="text-xs text-amber-700 mt-1">
+                            Annual property taxes required for complete payment and qualification
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
 
                   {/* Qualifies badge */}
-                  {s.qualifies != null && (
+                  {s.qualifies != null && taxesComplete && (
                     <div className="flex lg:block">
                       <Badge
                         variant="outline"
@@ -686,13 +702,13 @@ function PurchaseTab() {
                           <p className="font-semibold">{formatCurrency(s.price)}</p>
                         </div>
                       )}
-                      {s.monthlyPayment != null && (
+                      {s.monthlyPayment != null && taxesComplete && (
                         <div>
                           <p className="text-xs text-muted-foreground">Est. Payment</p>
                           <p className="font-semibold">{formatCurrency(s.monthlyPayment)}/mo</p>
                         </div>
                       )}
-                      {s.cashToClose != null && (
+                      {s.cashToClose != null && taxesComplete && (
                         <div>
                           <p className="text-xs text-muted-foreground">Cash to Close</p>
                           <p className="font-semibold">{formatCurrency(s.cashToClose)}</p>
@@ -813,43 +829,6 @@ interface InsuranceRow {
   /** ISO timestamp of the most-recent record contributing to this row. */
   lastUpdated: string;
   linkedSources: ("Purchase" | "Refinance" | "Insurance")[];
-}
-
-// ── Insurance-tab "dismissed" (deleted) property keys ──────────────────────
-// The Insurance tab auto-creates a row for every Purchase / Cash / Refi
-// property (see the sync() backfill below). Deleting the underlying
-// `insurance_scenarios` row alone isn't enough — the backfill would just
-// recreate it from the still-present source scenario, so the card never
-// goes away. We therefore record the normalized property key of any
-// explicitly-deleted Insurance card here (per-user localStorage, the same
-// device-local pattern used for occupancy overrides + tab order). The
-// backfill skips dismissed keys and `buildInsuranceRows` hides them, so a
-// delete sticks across refresh / logout / login on this device. Purchase /
-// Cash / Refi / Seller data is never touched.
-const INSURANCE_DISMISSED_PREFIX = "dashboard:insurance-dismissed:";
-function readDismissedInsuranceKeys(userId: string | null | undefined): Set<string> {
-  if (!userId || typeof window === "undefined") return new Set();
-  try {
-    const raw = window.localStorage.getItem(INSURANCE_DISMISSED_PREFIX + userId);
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr)
-      ? new Set(arr.filter((x): x is string => typeof x === "string"))
-      : new Set();
-  } catch {
-    return new Set();
-  }
-}
-function writeDismissedInsuranceKeys(userId: string | null | undefined, keys: Set<string>): void {
-  if (!userId || typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(
-      INSURANCE_DISMISSED_PREFIX + userId,
-      JSON.stringify(Array.from(keys)),
-    );
-  } catch {
-    /* localStorage quota / privacy mode — dismissal persists for the session only. */
-  }
 }
 
 function buildInsuranceRows(
@@ -1759,25 +1738,39 @@ function cashBuyCashToCloseSnapshot(s: CashBuyScenario): number | null {
 }
 
 // Insurance value shown on the dashboard overview. Mirrors the
-// precedence used by the cash-buy detail page (spec:
-// insurance-default-075-percent):
+// precedence used by the cash-buy detail page:
 //   1. Manual `homeownersInsurance` (preserved)
 //   2. Simulator-supplied `insurancePremiumAnnual`
-//   3. 0.75%-of-purchase-price default
+//   3. Age/construction baseline
 // Returns null when there's no price to base a default on.
 function cashBuyInsuranceAnnual(s: CashBuyScenario): number | null {
-  if (s.homeownersInsurance && s.homeownersInsurance > 0) return s.homeownersInsurance;
-  if (s.insurancePremiumAnnual && s.insurancePremiumAnnual > 0) return s.insurancePremiumAnnual;
-  if (s.purchasePrice && s.purchasePrice > 0) {
-    return calculateDefaultHomeownersInsurance(s.purchasePrice).annualInsurance;
+  if (!s.purchasePrice || s.purchasePrice <= 0) return null;
+  const oldFlat = calculateDefaultHomeownersInsurance(s.purchasePrice).annualInsurance;
+  const legacyManual =
+    s.homeownersInsuranceSource == null &&
+    (s.homeownersInsurance ?? 0) > 0 &&
+    Math.abs((s.homeownersInsurance ?? 0) - oldFlat) > 1;
+  if (
+    (s.homeownersInsuranceSource === "manual" || legacyManual) &&
+    s.homeownersInsurance &&
+    s.homeownersInsurance > 0
+  ) {
+    return s.homeownersInsurance;
   }
-  return null;
+  if (s.insurancePremiumAnnual && s.insurancePremiumAnnual > 0) return s.insurancePremiumAnnual;
+  const factors: InsuranceFactors = (s.insuranceFactors as InsuranceFactors | undefined) ?? {
+    regionKey: "tampa",
+    ...DEFAULT_INSURANCE_FACTORS,
+  };
+  return calcInsurancePremium(s.purchasePrice, factors).mid;
 }
 
 // Ongoing monthly carry — matches the "Monthly carrying cost"
-// summary on the cash-buy detail page (taxes + insurance + HOA).
-function cashBuyMonthlyOngoing(s: CashBuyScenario): number {
-  const taxesMo = (s.propertyTaxes ?? 0) / 12;
+// summary on the cash-buy detail page when taxes are validated. A missing
+// tax value returns null rather than silently adding $0 to a "total".
+function cashBuyMonthlyOngoing(s: CashBuyScenario): number | null {
+  if (!hasValidatedCashBuyPropertyTax(s)) return null;
+  const taxesMo = (s.propertyTaxes as number) / 12;
   const insAnnual = cashBuyInsuranceAnnual(s) ?? 0;
   const insMo = insAnnual / 12;
   const hoaMo = s.hoaMonthly ?? 0;
@@ -1915,6 +1908,7 @@ function CashBuyTab() {
           const ctc = cashBuyCashToCloseSnapshot(s);
           const insAnnual = cashBuyInsuranceAnnual(s);
           const monthlyOngoing = cashBuyMonthlyOngoing(s);
+          const taxesComplete = hasValidatedCashBuyPropertyTax(s);
           const occLabel = s.occupancyType ? CASH_OCCUPANCY_LABEL[s.occupancyType] : null;
           return (
             <Card
@@ -1937,10 +1931,11 @@ function CashBuyTab() {
                     </div>
                   </div>
 
-                  {/* Six-field overview. 2 cols on mobile, 3 on sm, 6 across
+                   {/* Six-field overview. 2 cols on mobile, 3 on sm, 6 across
                       on lg so all fields fit on a single row on desktop.
                       Insurance + Ongoing Monthly Costs are derived to match
-                      the cash-buy detail page exactly (same helpers). */}
+                       the cash-buy detail page (same helpers); ongoing cost
+                       is explicitly unavailable until taxes are entered. */}
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-2 text-sm flex-1">
                     {s.purchasePrice != null && (
                       <div>
@@ -1960,10 +1955,16 @@ function CashBuyTab() {
                         <p className="font-semibold">{formatCurrency(s.closingCosts)}</p>
                       </div>
                     )}
-                    {s.propertyTaxes != null && (
+                    {taxesComplete ? (
                       <div>
                         <p className="text-xs text-muted-foreground">Annual Taxes</p>
-                        <p className="font-semibold">{formatCurrency(s.propertyTaxes)}</p>
+                        <p className="font-semibold">{formatCurrency(s.propertyTaxes as number)}</p>
+                      </div>
+                    ) : s.purchasePrice != null && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Annual Taxes</p>
+                        <p className="font-semibold text-amber-700">Unavailable</p>
+                        <p className="text-[11px] text-muted-foreground">Enter manually</p>
                       </div>
                     )}
                     {insAnnual != null && (
@@ -1979,10 +1980,19 @@ function CashBuyTab() {
                     )}
                     {s.purchasePrice != null && (
                       <div data-testid={`cash-overview-monthly-${s.id}`}>
-                        <p className="text-xs text-muted-foreground">Ongoing Monthly</p>
-                        <p className="font-semibold">
-                          {formatCurrency(monthlyOngoing)}<span className="text-xs font-normal text-muted-foreground">/mo</span>
-                        </p>
+                         <p className="text-xs text-muted-foreground">
+                           Ongoing Monthly{monthlyOngoing == null ? " (incomplete)" : ""}
+                         </p>
+                         {monthlyOngoing == null ? (
+                           <p className="font-semibold text-amber-700">Unavailable</p>
+                         ) : (
+                           <p className="font-semibold">
+                             {formatCurrency(monthlyOngoing)}<span className="text-xs font-normal text-muted-foreground">/mo</span>
+                           </p>
+                         )}
+                         {monthlyOngoing == null && (
+                           <p className="text-[11px] text-muted-foreground">Enter annual taxes</p>
+                         )}
                         {s.hoaMonthly != null && s.hoaMonthly > 0 && (
                           <p className="text-[11px] text-muted-foreground">
                             incl. HOA {formatCurrency(s.hoaMonthly)}

@@ -70,6 +70,21 @@ export interface PropertyTaxCacheRow {
 }
 
 /**
+ * A cache row is eligible for purchase-tax reuse only when it was seeded by
+ * the official county purchase estimator.  Parcel millage arithmetic,
+ * tax-bill-derived rates, and historical formula labels are not estimator
+ * output and must not become a successful purchase estimate on a later hit.
+ */
+export function isOfficialEstimatorCacheSource(source: unknown): boolean {
+  if (typeof source !== "string") return false;
+  const normalized = source.trim().toLowerCase();
+  return (
+    normalized === "county-estimator" ||
+    normalized.endsWith("-county-estimator")
+  );
+}
+
+/**
  * Determines whether a cached row is valid for the given purchase price.
  * Returns true only when ALL of:
  *   1. parcelId or folio is non-empty (verified parcel identity)
@@ -102,6 +117,7 @@ export function isCacheRowValid(
   purchasePrice: number,
   now: Date = new Date(),
 ): boolean {
+  if (!isOfficialEstimatorCacheSource(row.source)) return false;
   // Must have verified parcel identity
   const hasParcel = (row.parcelId && row.parcelId.trim()) ||
                     (row.folio && row.folio.trim());
@@ -113,6 +129,8 @@ export function isCacheRowValid(
       row.assessmentRatio! - PURCHASE_TAX_LOW_ASSESSMENT_RATIO,
     ) > Number.EPSILON
   ) {
+    // A complete parcel-millage row still describes a local calculation, not
+    // an official estimator output.  It cannot bypass the shared basis guard.
     return false;
   }
   if (!hasExactMillage && (
@@ -219,17 +237,18 @@ export function computeFromCache(
     | "homesteadAdValoremPct"
     | "nonHomesteadAdValoremPct"
     | "nonAdValoremAmtCents"
-  > & Partial<MillageInputs>,
+   > &
+   Partial<MillageInputs> &
+   Partial<Pick<PropertyTaxCacheRow, "source">>,
   purchasePrice: number,
   homestead: boolean
 ): { adValoremTax: number; nonAdValoremTax: number; annualTax: number } {
   let adValoremTax: number;
   if (hasCompleteMillageInputs(row)) {
-    // Exact-millage purchase estimates always use Havo's selected low end.
-    // isCacheRowValid rejects stale rows with a different persisted ratio;
-    // using the policy constant here also protects unvalidated callers.
-    const assessedValue =
-      purchasePrice * PURCHASE_TAX_LOW_ASSESSMENT_RATIO;
+    // Millage arithmetic is retained only as an isolated legacy helper.  It
+    // is never accepted as an official estimator cache row (see
+    // isCacheRowValid above), and always uses the shared low-end basis.
+    const assessedValue = purchasePrice * PURCHASE_TAX_LOW_ASSESSMENT_RATIO;
     const schoolTaxableValue = homestead
       ? Math.max(0, assessedValue - row.homesteadSchoolExemption!)
       : assessedValue;
@@ -243,10 +262,10 @@ export function computeFromCache(
     const nonSchoolTaxableValue = homestead
       ? Math.max(0, assessedValue - 25_000 - additionalExemption)
       : assessedValue;
-    adValoremTax = Math.round(
+    const calculatedTax =
       (schoolTaxableValue * row.schoolMillage! +
-        nonSchoolTaxableValue * row.nonSchoolMillage!) / 1000,
-    );
+        nonSchoolTaxableValue * row.nonSchoolMillage!) / 1000;
+    adValoremTax = Math.round(calculatedTax);
   } else {
     const pct = homestead
       ? row.homesteadAdValoremPct
@@ -345,6 +364,12 @@ export async function writePropertyTaxCache(
   params: WritePropertyTaxCacheParams
 ): Promise<void> {
   if (!supabaseAdmin) return;
+  if (!isOfficialEstimatorCacheSource(params.source)) {
+    console.warn(
+      `[ptc] refusing non-estimator purchase cache row: ${params.source}`,
+    );
+    return;
+  }
   const now = params.now ?? new Date();
   const expiresAt = nextTaxRefreshBoundary(now);
   try {

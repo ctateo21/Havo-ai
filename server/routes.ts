@@ -37,14 +37,9 @@ import { currentTaxBillRequestSchema } from "./integrations/current-tax-contract
 import { fetchGoogleReviews, getMockReviews } from "./integrations/google-reviews";
 import { fetchZillowProperty, derivePolicyType, buildNormalizedPropertyKey, type PropertyScenario } from "./integrations/apify-zillow";
 import { supabaseAdmin } from "./supabase";
-import { db } from "./db";
 import {
-  userSubscriptions,
   insuranceQuoteCache,
-  privateInsuranceProperties,
-  privateUserProfiles,
 } from "@shared/schema";
-import { and, eq, lte, or } from "drizzle-orm";
 import {
   createSubscriptionCheckout,
   retrieveCheckoutSession,
@@ -52,6 +47,7 @@ import {
   isActiveStatus,
 } from "./stripe";
 import { sendWelcomeEmail, sendInternalAlert } from "./integrations/property-alert-emails";
+import { sendLiveInsuranceLeadAlert } from "./integrations/live-insurance-lead-alert";
 import { startOnboardingCampaign, resumeOnboardingCampaigns, unsubscribeFromCampaign } from "./integrations/onboarding-emails";
 import { getOrGenerateMarketAnalysis, type ListingInput } from "./integrations/listing-market-analysis";
 import { enrichListingFromPropertyCache } from "./integrations/listing-enrichment";
@@ -63,12 +59,12 @@ import {
 import { resolveQuoteRushPropertyInputs } from "./integrations/quoterush-inputs";
 import { claimQuoteRushAddress } from "./integrations/quoterush-cache-claim";
 import { selectReusableSharedQuoteCandidate } from "./integrations/quoterush-shared-cache";
+import { registerInsuranceCacheRoutes } from "./integrations/insurance-cache-routes";
 import {
   prepareQuoteRushStartRequest,
   toQuoteCachePolicyEffectiveDate,
 } from "./integrations/quoterush-start-request";
 import {
-  isValidQuoteRushDate,
   resolveQuoteRushPropertyDefaults,
 } from "@shared/quoterush-property-defaults";
 import {
@@ -87,6 +83,26 @@ import {
   createIfwActivityClaimHandler,
   ifwActivityClaimStore,
 } from "./integrations/ifw-activity-claims";
+import {
+  readPrivateInsuranceProperty,
+  readPrivateProfile,
+  readSubscription,
+  savePrivateInsuranceProperty,
+  savePrivateProfile,
+  saveSubscription,
+} from "./managed-account-records";
+import {
+  claimNewQuoteCache,
+  readQuoteCache,
+  reclaimQuoteCache,
+  updateQuoteCache,
+  type QuoteCacheGeneration,
+  type QuoteCacheRow,
+} from "./managed-quote-cache";
+import {
+  scheduleQuoteJob,
+  startQuoteJobSweeper,
+} from "./integrations/quoterush-background";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // API routes
@@ -661,14 +677,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const params = schema.parse(req.body);
 
         if (!isHillsboroughCountyAddress(params.address)) {
-          console.log(
-            "[hcpa-tax] ZIP is outside Hillsborough, using client fallback",
-          );
-          return res.json({ useFallback: true });
+          return res.json({
+            annualTax: null,
+            monthlyTax: null,
+            adValoremTax: null,
+            nonAdValoremTax: 0,
+            nonAdValoremLines: [],
+            nonAdValoremPending: false,
+            homestead: params.isPrimaryResidence,
+            source: "hillsborough-county-estimator-unavailable",
+            operationalError:
+              "The address is not in Hillsborough County; no purchase-tax estimate was returned.",
+          });
         }
 
-        // Try via the general purchase-tax service (general cache first,
-        // then the live HCPA API).
+        // Ask the official county estimator boundary.  It fails closed when
+        // the county page/output is unavailable; no client formula fallback
+        // is used here.
         const result = await getHillsboroughPurchaseTax({
           address: params.address,
           purchasePrice: params.purchasePrice,
@@ -683,21 +708,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
             nonAdValoremTax: result.nonAdValoremTax,
             nonAdValoremLines: result.nonAdValoremLines ?? [],
             nonAdValoremPending: result.nonAdValoremPending ?? false,
-            taxDistrict: result.taxDistrict ?? "",
-            millageRate: result.millageRate ?? 0,
+            taxDistrict: result.taxDistrict ?? null,
+            millageRate: result.millageRate ?? null,
             homestead: params.isPrimaryResidence,
             source: result.source,
             operationalError: result.operationalError,
           });
         }
 
-        // Parcel not found — tell client to use its formula fallback
-        console.log(
-          "[hcpa-tax] parcel not found, " +
-          "using client fallback for:",
-          params.address
-        );
-        res.json({ useFallback: true });
+        return res.json({
+          annualTax: null,
+          monthlyTax: null,
+          adValoremTax: null,
+          nonAdValoremTax: 0,
+          nonAdValoremLines: [],
+          nonAdValoremPending: false,
+          homestead: params.isPrimaryResidence,
+          source: "hillsborough-county-estimator-unavailable",
+          operationalError:
+            "The official Hillsborough purchase estimator is unavailable.",
+        });
 
       } catch (err: any) {
         console.error("[hcpa-tax] error:", err);
@@ -706,14 +736,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
             error: "Invalid parameters"
           });
         }
-        res.json({ useFallback: true });
+        return res.json({
+          annualTax: null,
+          monthlyTax: null,
+          adValoremTax: null,
+          nonAdValoremTax: 0,
+          nonAdValoremLines: [],
+          nonAdValoremPending: false,
+          homestead: true,
+          source: "hillsborough-county-estimator-unavailable",
+          operationalError:
+            "The official Hillsborough purchase estimator is unavailable.",
+        });
       }
     }
   );
 
-  // All non-Hillsborough counties use one shared resolver → TaxSys bill →
-  // exact millage cache path. Polk resolves parcel identity but remains an
-  // explicitly labeled formula fallback until its Phenix collector is parsed.
+  // Non-Hillsborough purchase estimates are served only by a verified
+  // official county-estimator driver.  Parcel/bill integrations belong to
+  // the separate current-owner refinance route and are not substitutes.
   app.post("/api/property-tax/county", async (req, res) => {
     try {
       const schema = z.object({
@@ -742,8 +783,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         nonAdValoremPending: result.nonAdValoremPending ?? false,
         county,
         parcelId: result.parcelId,
-        millageRate: result.millageRate ?? 0,
-        taxDistrict: result.taxDistrict ?? county,
+        millageRate: result.millageRate ?? null,
+        taxDistrict: result.taxDistrict ?? null,
         homestead: p.isPrimaryResidence,
         source: result.source,
         operationalError: result.operationalError,
@@ -753,7 +794,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ error: "Invalid parameters" });
       }
-      res.json({ useFallback: true });
+      return res.json({
+        annualTax: null,
+        monthlyTax: null,
+        adValoremTax: null,
+        nonAdValoremTax: 0,
+        nonAdValoremLines: [],
+        nonAdValoremPending: false,
+        county: typeof req.body?.county === "string"
+          ? req.body.county.toLowerCase().trim()
+          : null,
+        parcelId: null,
+        millageRate: null,
+        taxDistrict: null,
+        homestead: Boolean(req.body?.isPrimaryResidence ?? true),
+        source: "county-estimator-unavailable",
+        operationalError:
+          "The official county purchase estimator is unavailable.",
+      });
     }
   });
 
@@ -914,38 +972,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     userId: string,
     dateOfBirth: string,
   ): Promise<void> {
-    await db
-      .insert(privateUserProfiles)
-      .values({ userId, dateOfBirth })
-      .onConflictDoUpdate({
-        target: privateUserProfiles.userId,
-        set: { dateOfBirth, updatedAt: new Date() },
-      });
+    await savePrivateProfile(userId, dateOfBirth);
   }
 
   async function getPrivateDateOfBirth(
     userId: string,
   ): Promise<string | null> {
-    const rows = await db
-      .select({ dateOfBirth: privateUserProfiles.dateOfBirth })
-      .from(privateUserProfiles)
-      .where(eq(privateUserProfiles.userId, userId))
-      .limit(1);
-    return rows[0]?.dateOfBirth ?? null;
+    return (await readPrivateProfile(userId))?.dateOfBirth ?? null;
   }
 
   async function getPrivateInsuranceProfile(userId: string): Promise<{
     dateOfBirth: string | null;
   }> {
-    const rows = await db
-      .select({
-        dateOfBirth: privateUserProfiles.dateOfBirth,
-      })
-      .from(privateUserProfiles)
-      .where(eq(privateUserProfiles.userId, userId))
-      .limit(1);
+    const row = await readPrivateProfile(userId);
     return {
-      dateOfBirth: rows[0]?.dateOfBirth ?? null,
+      dateOfBirth: row?.dateOfBirth ?? null,
     };
   }
 
@@ -955,20 +996,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   ): Promise<{
     currentPolicyExpirationDate: string | null;
   }> {
-    const rows = await db
-      .select({
-        currentPolicyExpirationDate:
-          privateInsuranceProperties.currentPolicyExpirationDate,
-      })
-      .from(privateInsuranceProperties)
-      .where(and(
-        eq(privateInsuranceProperties.userId, userId),
-        eq(privateInsuranceProperties.addressNormalized, normalizeAddr(address)),
-      ))
-      .limit(1);
+    const row = await readPrivateInsuranceProperty(
+      userId,
+      normalizeAddr(address),
+    );
     return {
       currentPolicyExpirationDate:
-        rows[0]?.currentPolicyExpirationDate ?? null,
+        row?.currentPolicyExpirationDate ?? null,
     };
   }
 
@@ -1087,19 +1121,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     address: string,
     policyType: "HO3" | "HO6" | "DP3",
   ) {
-    const rows = await db
-      .select({
-        id: insuranceQuoteCache.id,
-        agencyDefaultSnapshot: insuranceQuoteCache.agencyDefaultSnapshot,
-        assumptions: insuranceQuoteCache.assumptions,
-      })
-      .from(insuranceQuoteCache)
-      .where(and(
-        eq(insuranceQuoteCache.leadId, leadId),
-        eq(insuranceQuoteCache.addressNormalized, normalizeAddr(address)),
-        eq(insuranceQuoteCache.policyType, policyType),
-      ))
-      .limit(20);
+    const rows = await readQuoteCache({
+      leadId,
+      addressNormalized: normalizeAddr(address),
+      policyType,
+    });
     return selectReusableSharedQuoteCandidate(rows);
   }
 
@@ -1274,47 +1300,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   );
 
-  app.put(
-    "/api/profile/insurance-property",
-    async (req, res) => {
-      try {
-        const user = await optionalUser(req);
-        if (!user) return res.status(401).json({ error: "Sign in required" });
-        const input = z.object({
-          address: z.string().trim().min(5).max(300),
-          currentPolicyExpirationDate: z.union([
-            z.string().refine(isValidQuoteRushDate),
-            z.null(),
-          ]),
-        }).parse(req.body);
-        await db
-          .insert(privateInsuranceProperties)
-          .values({
-            userId: user.id,
-            addressNormalized: normalizeAddr(input.address),
-            currentPolicyExpirationDate: input.currentPolicyExpirationDate,
-            quoteCacheScope: "unused",
-          })
-          .onConflictDoUpdate({
-            target: [
-              privateInsuranceProperties.userId,
-              privateInsuranceProperties.addressNormalized,
-            ],
-            set: {
-              currentPolicyExpirationDate: input.currentPolicyExpirationDate,
-              updatedAt: new Date(),
-            },
-          });
-        return res.json({ ok: true });
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          return res.status(400).json({ error: "Enter a valid policy expiration date" });
-        }
-        return res.status(500).json({ error: "Private insurance details could not be saved" });
-      }
-    },
-  );
-
   // Persist DOB against the authenticated Havo user in a private,
   // server-owned table. The optional Supabase profile row is mirrored when
   // its additive DOB column is available.
@@ -1369,64 +1354,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   );
 
-  // The preliminary paid cache is shared solely by normalized address and
-  // policy type. Private underwriting data never changes this identity.
-  app.get(
-    "/api/insurance/qr-cache",
-    async (req, res) => {
-      try {
-        const address = String(req.query.address ?? "");
-        const policyType = z
-          .enum(["HO3", "HO6", "DP3"])
-          .default("HO3")
-          .parse(req.query.policyType);
-        if (!address) {
-          return res
-            .status(400)
-            .json({ error: "address required" });
-        }
-        const norm = normalizeAddr(address);
-        const user = await optionalUser(req);
-        const rows = await db
-          .select()
-          .from(insuranceQuoteCache)
-          .where(and(
-            eq(insuranceQuoteCache.addressNormalized, norm),
-            eq(insuranceQuoteCache.policyType, policyType),
-          ))
-          .limit(20);
-
-        const row = selectReusableSharedQuoteCandidate(rows);
-        if (!row) {
-          return res.json({ found: false });
-        }
-
-        const now = new Date();
-        const expired = row.expiresAt < now;
-
-        return res.json({
-          found: true,
-          expired,
-          status: row.status,
-          leadId: row.leadId,
-          quotes: topThreePositiveQuotes(row.quotes),
-          quoteCounter: row.quoteCounter ?? 0,
-          coverageA: row.coverageA ?? 0,
-          propertyDataSnapshot: row.propertyDataSnapshot ?? {},
-          propertyDataProvenance: row.propertyDataProvenance ?? {},
-          consumerPropertyAnswers:
-            publicConsumerPropertyAnswers(row.consumerPropertyAnswers),
-          quoteProfileVersion: row.quoteProfileVersion,
-          assumptions: row.assumptions ?? [],
-          triggeredAt: row.triggeredAt,
-          expiresAt: row.expiresAt,
-        });
-      } catch (err: any) {
-        console.error("[qr-cache] error:", err);
-        res.status(500).json({ found: false });
-      }
-    }
-  );
+  registerInsuranceCacheRoutes(app, {
+    optionalUser,
+    normalizeAddress: normalizeAddr,
+  });
 
   app.get(
     "/api/insurance/qr-agent-verification",
@@ -1440,20 +1371,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           address: z.string().min(5),
           policyType: z.enum(["HO3", "HO6", "DP3"]),
         }).parse(req.query);
-        const rows = await db
-          .select({
-            agencyDefaultSnapshot: insuranceQuoteCache.agencyDefaultSnapshot,
-            assumptions: insuranceQuoteCache.assumptions,
-          })
-          .from(insuranceQuoteCache)
-          .where(and(
-            eq(
-              insuranceQuoteCache.addressNormalized,
-              normalizeAddr(input.address),
-            ),
-            eq(insuranceQuoteCache.policyType, input.policyType),
-          ))
-          .limit(20);
+        const rows = await readQuoteCache({
+          addressNormalized: normalizeAddr(input.address),
+          policyType: input.policyType,
+        });
         const row = selectReusableSharedQuoteCandidate(rows);
         const snapshot = row?.agencyDefaultSnapshot as
           | { fieldsRequiringVerification?: unknown }
@@ -1492,21 +1413,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
           policyType: z.enum(["HO3", "HO6", "DP3"]).default("HO3"),
         }).parse(req.body);
         const norm = normalizeAddr(cacheRequest.address);
-        const cacheIdentity = and(
-          eq(insuranceQuoteCache.addressNormalized, norm),
-          eq(insuranceQuoteCache.policyType, cacheRequest.policyType),
-        );
         const now = new Date();
         let reclaimedExpiredCacheRow = false;
         let activeCacheRowId: number | null = null;
+        let activeCacheGeneration: QuoteCacheGeneration | null = null;
         let retainedRawProvenance: Record<string, unknown> = {};
 
+        // Every write after the paid cache claim must remain attached to the
+        // exact pending generation that this request won. A row can be
+        // reclaimed while property enrichment or QuoteRUSH is in flight.
+        const updateClaimedCache = async (
+          values: Partial<QuoteCacheRow>,
+        ): Promise<boolean> => {
+          if (activeCacheRowId == null || !activeCacheGeneration) return false;
+          const updated = await updateQuoteCache(
+            activeCacheRowId,
+            values,
+            activeCacheGeneration,
+          );
+          if (!updated) {
+            activeCacheGeneration = null;
+            return false;
+          }
+          if (
+            "leadId" in values &&
+            typeof values.leadId === "number" &&
+            values.leadId > 0
+          ) {
+            activeCacheGeneration = {
+              ...activeCacheGeneration,
+              leadId: values.leadId,
+            };
+          }
+          return true;
+        };
+
         // ── Shared cache check ──────────────────────────────────────
-        const existingRows = await db
-          .select()
-          .from(insuranceQuoteCache)
-          .where(cacheIdentity)
-          .limit(20);
+        const existingRows = await readQuoteCache({
+          addressNormalized: norm,
+          policyType: cacheRequest.policyType,
+        });
         const existingRow =
           selectReusableSharedQuoteCandidate(existingRows);
         const existing = existingRow ? [existingRow] : [];
@@ -1538,16 +1484,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
               ...cachePropertyDataProvenance,
               quoteRushRawPropertyData: { available: false },
             };
-            await db
-              .update(insuranceQuoteCache)
-              .set({
+            await updateQuoteCache(row.id, {
                 rawQuoterushPropertyData: null,
                 rawQuoterushPropertyDataSource: null,
                 rawQuoterushPropertyDataFetchedAt: null,
                 rawQuoterushPropertyDataExpiresAt: null,
                 propertyDataProvenance: cachePropertyDataProvenance,
-              })
-              .where(eq(insuranceQuoteCache.id, row.id));
+              }, {
+                triggeredAt: row.triggeredAt,
+                leadId: row.leadId,
+                expectedStatus: row.status,
+              });
           }
 
           if (
@@ -1557,6 +1504,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             (row.quotes as any[]).length > 0
           ) {
             console.log("[qr-start] cache hit (success):", norm);
+            // A prior process may have crashed after the provider accepted
+            // the result email but before its durable sent marker. Re-enter
+            // the idempotent delivery worker on a cache hit.
+            scheduleQuoteJob(row.id, 0);
             return res.json({
               leadId: row.leadId,
               fromCache: true,
@@ -1764,25 +1715,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
           triggeredAt: now,
           completedAt: null,
           expiresAt: claimExpiresAt,
+          quotePollAttempts: 0,
+          quoteStablePolls: 0,
+          quotePreviousCounter: null,
+          quotePollClaimedAt: null,
+          quotePollLeaseUntil: null,
+        };
+        // Server-only delivery metadata is deliberately separate from the
+        // reusable property and consumer-answer snapshots.
+        const initialDeliveryValues = {
+          emailRecipient: userEmail || null,
+          emailUserId: user.id,
+          emailDeliveryStatus: "pending",
+          emailClaimedAt: null,
+          emailFirstAttemptAt: null,
+          emailRetryCount: 0,
+          emailQuarantineAt: null,
+          emailSentAt: null,
+          emailError: null,
         };
 
         if (existing.length > 0) {
           // Reclaim atomically only after every submission gate has passed.
           // Every run-specific field is replaced; independently-retained raw
           // provider evidence is left in its server-only columns.
-          const reclaimed = await db
-            .update(insuranceQuoteCache)
-            .set(initialRunValues)
-            .where(and(
-              eq(insuranceQuoteCache.id, existing[0].id),
-              or(
-                lte(insuranceQuoteCache.expiresAt, now),
-                eq(insuranceQuoteCache.status, "error"),
-              ),
-            ))
-            .returning({ id: insuranceQuoteCache.id });
+          const reclaimed = await reclaimQuoteCache(
+            existing[0].id,
+            now,
+            {
+              addressNormalized: norm,
+              policyType: b.policyType,
+              ...initialRunValues,
+              ...initialDeliveryValues,
+            },
+          );
           reclaimedExpiredCacheRow = reclaimed.length > 0;
           activeCacheRowId = reclaimed[0]?.id ?? null;
+           if (reclaimed[0]) {
+             activeCacheGeneration = {
+               triggeredAt: reclaimed[0].triggeredAt,
+               leadId: reclaimed[0].leadId,
+               expectedStatus: "pending",
+             };
+           }
           if (!reclaimedExpiredCacheRow) {
             return res.json({ fromCache: true, status: "pending" });
           }
@@ -1817,32 +1792,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // constraint means onConflictDoNothing lets exactly one concurrent
         // request win the insert; the loser gets 0 rows back and returns
         // the pending state instead of firing a second (paid) submission.
-        let insertedCacheRowId: number | null = null;
+         let insertedCacheRowId: number | null = null;
+         let claimedCacheRow: QuoteCacheRow | undefined;
         const claim = reclaimedExpiredCacheRow
           ? { claimed: true as const, row: undefined }
           : await claimQuoteRushAddress(
             async () => {
-              const rows = await db
-                .insert(insuranceQuoteCache)
-                .values({
+              const rows = await claimNewQuoteCache({
                   addressNormalized: norm,
                   policyType: b.policyType,
                   ...initialRunValues,
-                })
-                // No target keeps rolling deployments compatible with both
-                // the withdrawn three-column constraint and the restored
-                // two-column identity.
-                .onConflictDoNothing()
-                .returning({ id: insuranceQuoteCache.id });
+                  ...initialDeliveryValues,
+                });
+               claimedCacheRow = rows[0];
               insertedCacheRowId = rows[0]?.id ?? null;
               return rows;
             },
             async () => {
-              const rows = await db
-                .select()
-                .from(insuranceQuoteCache)
-                .where(cacheIdentity)
-                .limit(20);
+              const rows = await readQuoteCache({
+                addressNormalized: norm,
+                policyType: cacheRequest.policyType,
+              });
               return selectReusableSharedQuoteCandidate(rows);
             },
           );
@@ -1858,6 +1828,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
         activeCacheRowId ??= insertedCacheRowId;
+        if (!activeCacheGeneration && claimedCacheRow) {
+          activeCacheGeneration = {
+            triggeredAt: claimedCacheRow.triggeredAt,
+            leadId: claimedCacheRow.leadId,
+            expectedStatus: "pending",
+          };
+        }
         if (activeCacheRowId == null) {
           return res.status(503).json({
             error: "The shared quote cache could not be claimed safely.",
@@ -1869,10 +1846,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const county = await resolveCountyForAddress(b.address);
         const countySlug = county.toLowerCase() as CountySlug;
         if (!county || !SUPPORTED_COUNTY_SLUGS.includes(countySlug)) {
-          await db
-            .update(insuranceQuoteCache)
-            .set({ status: "error" })
-            .where(eq(insuranceQuoteCache.id, activeCacheRowId));
+          if (!await updateClaimedCache({ status: "error" })) {
+            return res.status(409).json({
+              error: "This quote request was superseded by a newer run.",
+            });
+          }
           return res.status(422).json({
             error:
               "We couldn't verify the county for this property address.",
@@ -1952,9 +1930,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Store only non-PII quote assumptions/context. In particular, do
         // not copy params: it contains the applicant's DOB and contact data.
-        await db
-          .update(insuranceQuoteCache)
-          .set({
+        if (!await updateClaimedCache({
             propertyDataSnapshot: {
               county,
               floodZone: params.floodZone,
@@ -2030,8 +2006,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 ? ["Property characteristics were loaded from the shared property cache."]
                 : []),
             ],
-          })
-          .where(eq(insuranceQuoteCache.id, activeCacheRowId));
+          })) {
+          return res.status(409).json({
+            error: "This quote request was superseded by a newer run.",
+          });
+        }
 
         const result = await importAndSubmit(params);
 
@@ -2042,17 +2021,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const rawFetchedAt = new Date();
           const rawExpiresAt = new Date(rawFetchedAt);
           rawExpiresAt.setFullYear(rawExpiresAt.getFullYear() + 1);
-          const current = await db
-            .select({
-              propertyDataProvenance:
-                insuranceQuoteCache.propertyDataProvenance,
-            })
-            .from(insuranceQuoteCache)
-            .where(eq(insuranceQuoteCache.id, activeCacheRowId))
-            .limit(1);
-          await db
-            .update(insuranceQuoteCache)
-            .set({
+          const current = await readQuoteCache({ id: activeCacheRowId }, 1);
+          if (!await updateClaimedCache({
               rawQuoterushPropertyData: result.rawPropertyData,
               rawQuoterushPropertyDataSource: "quoterush",
               rawQuoterushPropertyDataFetchedAt: rawFetchedAt,
@@ -2066,15 +2036,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   expiresAt: rawExpiresAt.toISOString(),
                 },
               },
-            })
-            .where(eq(insuranceQuoteCache.id, activeCacheRowId));
+            })) {
+            return res.status(409).json({
+              error: "This quote request was superseded by a newer run.",
+            });
+          }
         }
 
         if (!result.leadId) {
-          await db
-            .update(insuranceQuoteCache)
-            .set({ status: "error" })
-            .where(eq(insuranceQuoteCache.id, activeCacheRowId));
+          if (!await updateClaimedCache({ status: "error" })) {
+            return res.status(409).json({
+              error: "This quote request was superseded by a newer run.",
+            });
+          }
           return res.status(500).json({
             error:
               result.error ??
@@ -2086,12 +2060,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // SubmitQuoteRequest returns an error or times out. Re-importing would
         // risk a duplicate paid submission; callers should keep polling or
         // have an agent reconcile this existing lead instead.
-        await db
-          .update(insuranceQuoteCache)
-          .set({ leadId: result.leadId })
-          .where(eq(insuranceQuoteCache.id, activeCacheRowId));
+        let leadCacheWriteSucceeded = false;
+        try {
+          leadCacheWriteSucceeded = await updateClaimedCache({
+            leadId: result.leadId,
+          });
+        } catch {
+          // A transient cache outage after provider acceptance may leave the
+          // lead durable only at QuoteRUSH. Retry it only if a fresh read
+          // proves that this exact pending generation still owns the row.
+          const currentRows = await readQuoteCache(
+            { id: activeCacheRowId },
+            1,
+          );
+          const current = currentRows[0];
+          const generation = activeCacheGeneration;
+          if (
+            current &&
+            generation &&
+            current.status === "pending" &&
+            current.triggeredAt.getTime() === generation.triggeredAt.getTime() &&
+            (current.leadId == null || current.leadId === result.leadId) &&
+            generation.leadId == null
+          ) {
+            scheduleQuoteJob(activeCacheRowId, 0, result.leadId, generation.triggeredAt);
+            return res.status(202).json({
+              leadId: result.leadId,
+              status: "pending",
+              warning:
+                "The quote lead was accepted and is being reconciled. Results will be emailed when ready.",
+            });
+          }
+          throw new Error("The quote request was superseded by a newer run.");
+        }
+        if (!leadCacheWriteSucceeded) {
+          return res.status(409).json({
+            error: "This quote request was superseded by a newer run.",
+          });
+        }
 
         if (!result.submitted) {
+          // Preserve and reconcile the imported lead; never re-import it.
+          scheduleQuoteJob(activeCacheRowId, 0);
           return res.status(202).json({
             leadId: result.leadId,
             status: "pending",
@@ -2100,8 +2110,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
 
+        // Polling is server-owned. The browser only reads the cache, so the
+        // paid run completes even if the requester closes the tab.
+        scheduleQuoteJob(activeCacheRowId, 0);
+
         // Notify FUB (non-blocking) only when we know who the user is.
         if (userEmail) {
+          void sendLiveInsuranceLeadAlert({
+            address: b.address,
+            name: `${firstName} ${lastName}`.trim(),
+            email: userEmail,
+            phone: userPhone,
+            requestId: String(result.leadId),
+          });
           createFollowUpBossContact({
             firstName,
             lastName,
@@ -2109,6 +2130,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             phone: userPhone,
             address: b.address,
             agent: "Christian Tateo",
+            source: "havofl.com - INSURANCE LIVE QUOTE",
             scenarioDetails:
               `QuoteRUSH quotes started: ` +
               `${b.address} · Coverage A: ` +
@@ -2162,29 +2184,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .json({ error: "Unknown quote cache entry" });
         }
 
-        const result = await getQuotes(leadId);
-
-        // Persist quotes to the shared cache when they arrive. Update the
-        // row BOUND to this leadId (never a caller-supplied address) so a
-        // known leadId can't poison another address's cached quotes.
-        if (
-          result.status === "success" &&
-          result.quotes.length > 0
-        ) {
-          await db
-            .update(insuranceQuoteCache)
-            .set({
-              status: "success",
-              quotes: topThreePositiveQuotes(result.quotes as any),
-              quoteCounter: result.quoteCounter,
-              completedAt: new Date(),
-            })
-            .where(eq(insuranceQuoteCache.id, cacheLead.id));
-        }
-
-        res.json({
-          ...result,
-          quotes: topThreePositiveQuotes(result.quotes as any),
+        // Cache-only read. The server-owned background worker is the only
+        // caller that contacts QuoteRUSH; this route preserves the existing
+        // authenticated lead/address/policy binding for IDOR protection.
+        return res.json({
+          status: cacheLead.status === "failed" || cacheLead.status === "error"
+            ? "error"
+            : cacheLead.status,
+          quotes: topThreePositiveQuotes(cacheLead.quotes as any),
+          leadId: cacheLead.leadId ?? leadId,
+          quoteCounter: cacheLead.quoteCounter ?? 0,
+          errorMessage:
+            cacheLead.status === "failed"
+              ? "Quote request timed out before carrier results stabilized."
+              : undefined,
         });
       } catch (err: any) {
         console.error("[qr-quotes] error:", err);
@@ -2231,17 +2244,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const result = await getQuotes(leadId);
 
         // Bind the update to the leadId's own row (never a caller-supplied
-        // address) to prevent cross-address cache poisoning.
+        // address) to prevent cross-address cache poisoning. The status and
+        // generation are captured before the provider call so a delayed
+        // refresh cannot overwrite a newer polling transition.
         if (result.quotes.length > 0) {
-          await db
-            .update(insuranceQuoteCache)
-            .set({
+          await updateQuoteCache(cacheLead.id, {
               status: "success",
               quotes: topThreePositiveQuotes(result.quotes as any),
               quoteCounter: result.quoteCounter,
               completedAt: new Date(),
-            })
-            .where(eq(insuranceQuoteCache.id, cacheLead.id));
+            }, {
+              triggeredAt: cacheLead.triggeredAt,
+              leadId: cacheLead.leadId,
+              expectedStatus: cacheLead.status,
+            });
         }
 
         res.json({
@@ -2778,6 +2794,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     firstName: string; lastName: string; email: string;
     phone: string; address?: string; agent?: string; scenarioDetails?: string;
     messageHeader?: string;
+    source?: string;
     referral?: ReferralPayload;
   }) {
     const apiKey = process.env.FOLLOWUPBOSS_API_KEY;
@@ -2841,7 +2858,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       if (phoneDigits) person.phone = phoneDigits;
       const payload: Record<string, any> = {
-        source:  "Tateo & Co Website",
+        source:  params.source ?? "Tateo & Co Website",
         type:    "Property Inquiry",
         message: noteBody,
         person,
@@ -3162,65 +3179,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ ok: true, message: "Leaderboard cache cleared" });
   });
 
-  app.get("/api/fub/leaderboard/debug", async (_req, res) => {
+  app.get("/api/fub/leaderboard/debug", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    if (req.query.key !== "tateo-debug-2026") return res.status(401).json({ error: "Not authorized" });
     const apiKey = process.env.FOLLOWUPBOSS_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "FOLLOWUPBOSS_API_KEY not set" });
 
+    const results: Record<string, any> = {};
+
+    // Each diagnostic is isolated so a failed request preserves the other results.
     try {
-      let allDeals: any[] = [];
-      let offset = 0;
-      while (true) {
-        const r = await fetch(
-          `https://api.followupboss.com/v1/deals?limit=200&offset=${offset}`,
-          { headers: fubHeaders(apiKey) }
-        );
-        const d = await r.json();
-        const items: any[] = d.deals ?? [];
-        allDeals.push(...items);
-        const total: number = d._metadata?.total ?? items.length;
-        offset += 200;
-        if (offset >= total || items.length === 0) break;
+      const r = await fetch("https://api.followupboss.com/v1/people?limit=1", { headers: fubHeaders(apiKey) });
+      const d = await r.json();
+      const p = d?.people?.[0];
+      results.listPersonSample = p ? {
+        id: p.id, name: p.name,
+        customNumberOfShowings: p.customNumberOfShowings ?? "FIELD NOT PRESENT",
+        allCustomKeys: Object.keys(p).filter(k => k.startsWith("custom")),
+        allCustomValues: Object.fromEntries(Object.entries(p).filter(([k]) => k.startsWith("custom"))),
+      } : "no people returned";
+    } catch (e: any) { results.listPersonSample = { error: e.message }; }
+
+    try {
+      const r1 = await fetch("https://api.followupboss.com/v1/people?limit=1", { headers: fubHeaders(apiKey) });
+      const d1 = await r1.json();
+      const firstId = d1?.people?.[0]?.id;
+      if (firstId) {
+        const r2 = await fetch(`https://api.followupboss.com/v1/people/${firstId}`, { headers: fubHeaders(apiKey) });
+        const d2 = await r2.json();
+        const p = d2?.person ?? d2;
+        results.singlePersonFetch = {
+          id: p?.id, name: p?.name,
+          customNumberOfShowings: p?.customNumberOfShowings ?? "FIELD NOT PRESENT",
+          allCustomKeys: Object.keys(p ?? {}).filter(k => k.startsWith("custom")),
+          allCustomValues: Object.fromEntries(Object.entries(p ?? {}).filter(([k]) => k.startsWith("custom"))),
+        };
       }
+    } catch (e: any) { results.singlePersonFetch = { error: e.message }; }
 
-      // Show every commission-related field on every deal
-      const commissionBreakdown = allDeals.map((d: any) => ({
-        id:                d.id,
-        name:              d.name,
-        pipelineName:      d.pipelineName,
-        stageName:         d.stageName,
-        price:             d.price,
-        // All commission fields — we need to see which one holds the right value
-        commissionValue:   d.commissionValue,
-        agentCommission:   d.agentCommission,
-        teamCommission:    d.teamCommission,
-        users:             (d.users ?? []).map((u: any) => ({ id: u.id, name: u.name })),
-      }));
+    try {
+      const r = await fetch(
+        "https://api.followupboss.com/v1/people?customNumberOfShowings[gte]=1&limit=5",
+        { headers: fubHeaders(apiKey) }
+      );
+      const d = await r.json();
+      results.filterByShowings = {
+        status: r.status,
+        total: d?._metadata?.total ?? 0,
+        sample: (d?.people ?? []).slice(0, 3).map((p: any) => ({
+          id: p.id, name: p.name, assignedTo: p.assignedTo,
+          customNumberOfShowings: p.customNumberOfShowings ?? "FIELD NOT PRESENT",
+        })),
+      };
+    } catch (e: any) { results.filterByShowings = { error: e.message }; }
 
-      // Flag any deals where commissionValue !== agentCommission + teamCommission
-      const mismatches = commissionBreakdown.filter((d: any) => {
-        const sum = (d.agentCommission ?? 0) + (d.teamCommission ?? 0);
-        return Math.abs(sum - (d.commissionValue ?? 0)) > 1;
-      });
-
-      // Summary: which field has non-zero values
-      const agentCommissionNonZero = commissionBreakdown.filter((d: any) => (d.agentCommission ?? 0) > 0).length;
-      const commissionValueNonZero = commissionBreakdown.filter((d: any) => (d.commissionValue ?? 0) > 0).length;
-      const teamCommissionNonZero  = commissionBreakdown.filter((d: any) => (d.teamCommission  ?? 0) > 0).length;
-
-      res.json({
-        totalDeals: allDeals.length,
-        fieldSummary: {
-          dealsWithAgentCommission: agentCommissionNonZero,
-          dealsWithCommissionValue: commissionValueNonZero,
-          dealsWithTeamCommission:  teamCommissionNonZero,
-        },
-        mismatchCount: mismatches.length,
-        mismatches,
-        allDeals: commissionBreakdown,
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
+    res.json(results);
   });
 
   // POST /api/fub/showing-request
@@ -3655,8 +3668,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // re-scrape — old cache entries from before the photo-fix
           // may have empty arrays.
           if (cachedPhotosCount > 0) {
+            console.info("[zillow-lookup] photo source", {
+              source: "cache",
+              photoCount: cachedPhotosCount,
+            });
             return res.json({ cached: true, property: cached.normalized });
           }
+          console.info("[zillow-lookup] photo source", {
+            source: "cache-empty",
+            photoCount: 0,
+          });
           cachedNormalized = cached.normalized;
         } else {
         }
@@ -3690,6 +3711,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .catch(() => {});
       }
       property = await inFlight;
+      console.info("[zillow-lookup] photo source", {
+        source: "apify",
+        photoCount: Array.isArray(property.photos) ? property.photos.length : 0,
+      });
       // Data safety: if the fresh scrape returned 0 photos but the
       // existing cache row had some, preserve the cached photos so we
       // don't blank out a good record because of a one-off scrape miss.
@@ -3914,13 +3939,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         cancelUrl,
       });
       // Ensure a row exists so status checks have something to read.
-      await db
-        .insert(userSubscriptions)
-        .values({ userId: user.id, email: user.email ?? null, status: "pending" })
-        .onConflictDoUpdate({
-          target: userSubscriptions.userId,
-          set: { email: user.email ?? null, updatedAt: new Date() },
-        });
+      await saveSubscription({
+        userId: user.id,
+        email: user.email ?? null,
+        status: "pending",
+      });
       return res.json({ url });
     } catch (e: any) {
       console.error("[subscription] create-checkout-session error:", e?.message);
@@ -3959,26 +3982,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         : null;
       const currentPeriodEnd = periodEndSec ? new Date(periodEndSec * 1000) : null;
 
-      await db
-        .insert(userSubscriptions)
-        .values({
+      await saveSubscription({
           userId: user.id,
           email: user.email ?? null,
           stripeCustomerId: customerId,
           stripeSubscriptionId: subscriptionId,
           status,
           currentPeriodEnd,
-        })
-        .onConflictDoUpdate({
-          target: userSubscriptions.userId,
-          set: {
-            email: user.email ?? null,
-            stripeCustomerId: customerId,
-            stripeSubscriptionId: subscriptionId,
-            status,
-            currentPeriodEnd,
-            updatedAt: new Date(),
-          },
         });
       return res.json({ active: isActiveStatus(status), status });
     } catch (e: any) {
@@ -4034,11 +4044,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({ active: true, status: "comped" });
     }
     try {
-      const rows = await db
-        .select()
-        .from(userSubscriptions)
-        .where(eq(userSubscriptions.userId, user.id));
-      const row = rows[0];
+      const row = await readSubscription(user.id);
       if (!row || !row.stripeSubscriptionId) {
         return res.json({ active: false, status: row?.status ?? "inactive" });
       }
@@ -4047,10 +4053,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const currentPeriodEnd = snap.currentPeriodEnd
           ? new Date(snap.currentPeriodEnd * 1000)
           : null;
-        await db
-          .update(userSubscriptions)
-          .set({ status: snap.status, currentPeriodEnd, updatedAt: new Date() })
-          .where(eq(userSubscriptions.userId, user.id));
+        await saveSubscription({ ...row, status: snap.status, currentPeriodEnd });
         return res.json({
           active: isActiveStatus(snap.status),
           status: snap.status,
@@ -4261,6 +4264,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   resumeOnboardingCampaigns().catch(err =>
     console.error("[onboarding] resume failed:", err?.message)
   );
+  startQuoteJobSweeper();
 
   const httpServer = createServer(app);
   return httpServer;

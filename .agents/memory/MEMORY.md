@@ -1,6 +1,6 @@
 - [Insurance policy type & property-type resolution](insurance-policy-type.md) — condo/townhome→HO6 resolution priority, Zillow-type-on-client, dual TrackedLoan gotcha, manual locks.
 - [Adding a persisted tracked_loans field](tracked-loans-persistence.md) — the 5-place checklist + migration, plus hydration-sync & onValueCommit gotchas for refi inputs.
-- [Supabase vs Neon DB split](supabase-vs-neon-split.md) — scenario/property tables live in user's Supabase (can't ALTER); new cols need schema.sql + migration + *_OPTIONAL_COLUMNS in auth.ts.
+- [Supabase vs managed Postgres split](supabase-vs-neon-split.md) — DATABASE_URL is Replit-managed and separate from unused NEON_DATABASE_URL; user-facing data lives in Supabase.
 - [Supabase persistence communication](supabase-persistence-communication.md) — always flag required SQL/migrations and design user-entered settings to survive return visits.
 - [Transactional emails & scenario-save hook](transactional-emails.md) — Resend best-effort senders (skip without RESEND_API_KEY/ALERT_FROM_EMAIL); scenarios save client-side, notify-new-scenario is the only server save hook.
 - [Havo access mode](havo-paywall.md) — ACTIVE: FREE_ACCESS (no payment anywhere, /subscribe redirects to dashboard, FUB notify on register/login only); paid Stripe/trial model dormant but retained, flip via FREE_ACCESS_MODE.
@@ -19,8 +19,11 @@
 - [Hillsborough property tax estimate](hillsborough-tax-estimate.md) — HCPA estimator range = assessed-value range (85%–100% of price); Havo matches the LOWER bound via 85% assessed ratio.
 - [Private applicant DOB](private-applicant-dob.md) — DOB stays server-only in Neon; browser gets only a boolean status, and QuoteRUSH resolves DOB at the server boundary.
 - [Google Places autocomplete sessions](google-places-autocomplete.md) — independently invalidate prediction/detail races and rotate billing tokens when a search is abandoned.
-- [Two-part property-tax architecture](property-tax-two-part.md) — purchase estimates and refinance owner bills stay separate; current-bill lookups are address-only and actual-total-only.
+- [Property-tax source policy](property-tax-two-part.md) — purchase requires official estimator output, never formula fallbacks; refinance bills remain address-only and actual-total-only.
 - [Refinance financing defaults](refinance-financing-defaults.md) — escrow-bearing loans default to financing both closing costs and the new escrow reserve; preserve saved choices.
 - [Refinance VA funding fee](refinance-va-funding-fee.md) — require disability Yes/No; exempt=$0, non-exempt=3.3% subsequent-use financed into the note.
 - [Refinance escrow-refund estimate](refinance-escrow-refund.md) — prefer statement balance; CD/manual fallback is 2 monthly escrow payments; never include it in guaranteed cash figures.
 - [DPA program-points APR allocation](dpa-program-points-apr.md) — 5% silent-second program points belong once to first-lien finance charges, never the second lien.
+- [Database route-test isolation](database-route-test-isolation.md) — keep local-HTTP database tests separate from suites that replace global fetch, because top-level Node tests can overlap.
+- [Database rehearsal boundaries](database-rehearsal-boundaries.md) — real SQL/HTTP codecs and independent source fixtures catch failures that checksum and claim mocks miss.
+- [Managed-data disaster recovery](managed-data-disaster-recovery.md) — retired-source recovery needs uninterrupted writer freeze and precision-preserving data boundaries.

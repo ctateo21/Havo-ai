@@ -70,7 +70,8 @@ function baseRow(): ValidInput {
     homesteadNonSchoolExemption: null,
     rateYear: null,
     nonAdValoremAmtCents: 0,
-    source: "manatee-formula-plus-arcgis-nav",
+    // Only an official estimator seed may be reused for a purchase estimate.
+    source: "county-estimator",
     expiresAt: new Date(Date.UTC(2027, 10, 1)), // far future
   };
 }
@@ -203,6 +204,22 @@ test("complete millage row with a stale non-low-end ratio is rejected", () => {
   assert.equal(isCacheRowValid(row, 400_000, NOW), false);
 });
 
+test("stale Collier 85%-basis millage rows are rejected", () => {
+  const row = {
+    ...baseRow(),
+    homesteadAdValoremPct: 0,
+    nonHomesteadAdValoremPct: 0,
+    schoolMillage: 4.147,
+    nonSchoolMillage: 6.3575,
+    assessmentRatio: PURCHASE_TAX_LOW_ASSESSMENT_RATIO,
+    homesteadSchoolExemption: 25_000,
+    homesteadNonSchoolExemption: 51_411,
+    rateYear: 2026,
+    source: "collier-bill-live-low-end-purchase-value-situs-v2",
+  };
+  assert.equal(isCacheRowValid(row, 525_000, NOW), false);
+});
+
 test("incomplete millage does not bypass legacy sample-price guard", () => {
   const row = { ...baseRow(), schoolMillage: 5.5, nonSchoolMillage: 12 };
   assert.equal(isCacheRowValid(row, 800_000, NOW), false);
@@ -288,6 +305,25 @@ test("computeFromCache: exact millage applies Florida homestead exemptions separ
   assert.equal(nonHomestead.adValoremTax, 5_100);
 });
 
+test("Collier parcel millage is not accepted as official estimator cache", () => {
+  const row = {
+    parcelId: "55252840005",
+    folio: "55252840005",
+    homesteadAdValoremPct: 0,
+    nonHomesteadAdValoremPct: 0,
+    nonAdValoremAmtCents: 0,
+    schoolMillage: 4.147,
+    nonSchoolMillage: 6.3575,
+    assessmentRatio: 1,
+    homesteadSchoolExemption: 25_000,
+    homesteadNonSchoolExemption: 51_411,
+    rateYear: 2026,
+    source: "collier-pa-millage-situs-v2",
+    expiresAt: new Date(Date.UTC(2027, 10, 1)),
+  };
+  assert.equal(isCacheRowValid(row, 525_000, NOW), false);
+});
+
 test("computeFromCache: exact millage enforces the low end at arbitrary price", () => {
   const row = {
     homesteadAdValoremPct: 0,
@@ -323,8 +359,8 @@ test("computeFromCache phases in the additional exemption above $50k", () => {
 
 // ── Source label requirements ─────────────────────────────────────
 
-test("source labels: pinellas-formula-pending is NOT valid for cache (sample_price=0 seed)", () => {
-  // A formula-pending row should never be cached as live; if stored, sample_price=0 ensures miss.
+test("source labels: pinellas-formula-pending is NOT valid for cache", () => {
+  // A pending formula row is never an official estimator result.
   const row: ValidInput = {
     parcelId: "1234",
     folio: "1234",
@@ -338,7 +374,7 @@ test("source labels: pinellas-formula-pending is NOT valid for cache (sample_pri
   assert.equal(isCacheRowValid(row, 400_000, NOW), false);
 });
 
-test("source labels: pinellas-bill-live is valid for cache when sample_price set", () => {
+test("source labels: pinellas-bill-live is NOT valid for purchase cache", () => {
   const row: ValidInput = {
     parcelId: "1234",
     folio: "1234",
@@ -349,10 +385,10 @@ test("source labels: pinellas-bill-live is valid for cache when sample_price set
     source: "pinellas-bill-live",
     expiresAt: new Date(Date.UTC(2027, 10, 1)),
   };
-  assert.equal(isCacheRowValid(row, 400_000, NOW), true);
+  assert.equal(isCacheRowValid(row, 400_000, NOW), false);
 });
 
-test("source labels: manatee-formula-plus-arcgis-nav is valid for cache", () => {
+test("source labels: manatee-formula-plus-arcgis-nav is NOT valid for purchase cache", () => {
   const row: ValidInput = {
     parcelId: "M123",
     folio: "M123",
@@ -363,5 +399,5 @@ test("source labels: manatee-formula-plus-arcgis-nav is valid for cache", () => 
     source: "manatee-formula-plus-arcgis-nav",
     expiresAt: new Date(Date.UTC(2027, 10, 1)),
   };
-  assert.equal(isCacheRowValid(row, 350_000, NOW), true);
+  assert.equal(isCacheRowValid(row, 350_000, NOW), false);
 });

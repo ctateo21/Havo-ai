@@ -523,6 +523,18 @@ export const insuranceQuoteCache = pgTable(
       .default([]),
     quoteCounter: integer("quote_counter")
       .default(0),
+    // Background polling state is durable so a deploy can resume a run
+    // without relying on in-memory timers. These fields do not belong in the
+    // public/shared quote snapshots.
+    quotePollAttempts: integer("quote_poll_attempts")
+      .notNull()
+      .default(0),
+    quoteStablePolls: integer("quote_stable_polls")
+      .notNull()
+      .default(0),
+    quotePreviousCounter: integer("quote_previous_counter"),
+    quotePollClaimedAt: timestamp("quote_poll_claimed_at"),
+    quotePollLeaseUntil: timestamp("quote_poll_lease_until"),
     coverageA: integer("coverage_a").default(0),
     policyType: text("policy_type")
       .notNull()
@@ -569,6 +581,22 @@ export const insuranceQuoteCache = pgTable(
     completedAt: timestamp("completed_at"),
     expiresAt: timestamp("expires_at")
       .notNull(),
+    // Delivery metadata is separate from the shared property/quote snapshots.
+    // It lets the first authenticated requester receive the result without
+    // copying identity data into propertyDataSnapshot.
+    emailRecipient: text("email_recipient"),
+    emailUserId: text("email_user_id"),
+    emailDeliveryStatus: text("email_delivery_status")
+      .notNull()
+      .default("pending"),
+    emailClaimedAt: timestamp("email_claimed_at"),
+    emailFirstAttemptAt: timestamp("email_first_attempt_at"),
+    emailRetryCount: integer("email_retry_count")
+      .notNull()
+      .default(0),
+    emailQuarantineAt: timestamp("email_quarantine_at"),
+    emailSentAt: timestamp("email_sent_at"),
+    emailError: text("email_error"),
   },
   table => ({
     addressPolicyUnique: unique(

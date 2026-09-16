@@ -34,7 +34,7 @@ test("leaderboard refreshes are single-flight and stale data stays available", a
 
     assert.equal(first.refreshState, "fresh");
     assert.equal(duplicate.refreshState, "fresh");
-    assert.equal(requestCount, 5, "duplicate callers must share one FUB collection");
+    assert.equal(requestCount, 4, "duplicate callers must share one FUB collection");
 
     bustLeaderboardCache("today");
     const [cached, cachedDuplicate] = await Promise.all([
@@ -46,12 +46,12 @@ test("leaderboard refreshes are single-flight and stale data stays available", a
     assert.equal(cachedDuplicate.refreshState, "cached");
     assert.deepEqual(cached.data, first.data);
 
-    // The paced background refresh makes five endpoint requests at 300ms
+    // The paced background refresh makes four endpoint requests at 300ms
     // intervals. Waiting here also ensures fetch is restored only after it ends.
     await new Promise((resolve) => setTimeout(resolve, 1_700));
     const refreshed = await getLeaderboardData("test-key", "today");
     assert.equal(refreshed.refreshState, "fresh");
-    assert.equal(requestCount, 10, "cached callers must not fan out refresh traffic");
+    assert.equal(requestCount, 8, "cached callers must not fan out refresh traffic");
 
     const beforeOtherPeriods = requestCount;
     const [week, month] = await Promise.all([
@@ -83,7 +83,7 @@ test("leaderboard refreshes are single-flight and stale data stays available", a
       undefined,
       "a rate-limited refresh must not overwrite a complete snapshot with zeros",
     );
-    assert.equal(requestCount, 17, "rate-limited calls must stop after the bounded retry count");
+    assert.equal(requestCount, 15, "rate-limited calls must stop after the bounded retry count");
 
     callsRetryAfter = new Date(Date.now() + 30_000).toUTCString();
     const coldPartial = await getLeaderboardData("test-key", "yesterday");
@@ -92,7 +92,7 @@ test("leaderboard refreshes are single-flight and stale data stays available", a
     assert.ok(coldPartial.data.collectionWarnings?.includes("calls"));
     assert.equal(
       requestCount,
-      18,
+      16,
       "an HTTP-date shared cooldown must fail remaining metric requests fast",
     );
   } finally {

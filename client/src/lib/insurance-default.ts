@@ -1,24 +1,65 @@
 /**
  * Shared default-homeowners-insurance helper.
  *
- * One canonical formula used everywhere we need a *default* estimate
- * for annual / monthly homeowners insurance: 0.75% of the property
- * value (purchase price for Purchase-with-Loan / Cash, estimated
- * home value for Refinance, Zillow value for property-cache flows).
+ * The 0.75% formula remains the fallback when a property has no usable
+ * year-built/construction answers. General-estimate screens use the
+ * age/construction helper below before live carrier quotes.
  *
- * This intentionally lives outside the regional FL insurance
- * simulator's pricing engine. The simulator's user-tunable factors
- * (region/roof/wind/etc) still adjust the displayed premium *band*,
- * but the baseline midpoint is now anchored to 0.75% so every flow
- * starts from the same number.
+ * Manual overrides and real carrier quotes always win.
  *
- * Manual overrides and real carrier quotes always win — callers are
- * expected to check for `homeownersInsurance` / `annualPremium` /
- * `insurance_source === "manual" | "quote"` BEFORE falling back to
- * this default.
+ * Callers are expected to check for `homeownersInsurance` /
+ * `annualPremium` / `insurance_source === "manual" | "quote"` before
+ * falling back to a planning estimate.
  */
 
 export const DEFAULT_HOMEOWNERS_INSURANCE_PERCENT = 0.0075;
+export const FRAME_CONSTRUCTION_SURCHARGE_PERCENT = 0.0015;
+
+export interface BaselineHomeownersInsuranceRateInput {
+  yearBuilt?: number | null;
+  /** Frame is the only construction class with the additive 0.15% surcharge. */
+  isFrameConstruction?: boolean;
+  /** Test seam; production callers use the current calendar year. */
+  asOfYear?: number;
+}
+
+/**
+ * General-estimate baseline before live carrier quotes.
+ *
+ * Home-age bands are intentionally additive with the frame surcharge:
+ * a default-factor $300,000 frame home is exactly $450/year above the
+ * same block/concrete home.
+ */
+export function getBaselineHomeownersInsuranceRate(
+  input: BaselineHomeownersInsuranceRateInput,
+): number {
+  const asOfYear = Number.isInteger(input.asOfYear)
+    ? Number(input.asOfYear)
+    : new Date().getFullYear();
+  const yearBuilt =
+    typeof input.yearBuilt === "number" && Number.isFinite(input.yearBuilt)
+      ? Math.round(input.yearBuilt)
+      : null;
+  const age = yearBuilt == null
+    ? null
+    : Math.max(0, asOfYear - yearBuilt);
+
+  let ageRate = DEFAULT_HOMEOWNERS_INSURANCE_PERCENT;
+  if (age != null) {
+    if (age < 5) ageRate = 0.0040;
+    else if (age <= 10) ageRate = 0.0050;
+    else if (age <= 20) ageRate = 0.0055;
+    else if (age <= 25) ageRate = 0.0060;
+    else if (age <= 50) ageRate = 0.0075;
+    else ageRate = 0.0090;
+  }
+
+  return ageRate + (
+    input.isFrameConstruction
+      ? FRAME_CONSTRUCTION_SURCHARGE_PERCENT
+      : 0
+  );
+}
 
 /**
  * Coverage A multiplier per policy type (spec: insurance-ho6-half-coverage-and-premium).

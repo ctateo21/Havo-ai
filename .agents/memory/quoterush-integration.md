@@ -83,8 +83,29 @@ Client GetQuotes polling waits for **3 consecutive stable polls**
 (unchanging QuoteCounter) before declaring success, so it doesn't stop
 at the first carrier while others are still arriving.
 
-## 30-day PolicyEffectiveDate
-The HO payload in `quoterush.ts` sets PolicyEffectiveDate to today+30d.
+## Effective-date precedence
+New purchases use the consumer-confirmed closing date. Existing homes use the
+explicit requested effective date when supplied, then the user's private,
+property-specific current-policy expiration. Only when both existing-home dates are
+unavailable may the quote use today + 30 days, and that fallback must be
+labeled as an assumption in provenance. New purchases must never use the
+30-day fallback.
+
+PurchaseDate is a separate transaction-history value. A confirmed new-purchase
+closing date may populate both PurchaseDate and PolicyEffectiveDate; rewrite
+requested dates, current-policy expirations, and +30 fallbacks must never
+populate PurchaseDate. Unknown historical purchase dates are omitted.
+
+**Why:** silently regenerating today + 30 inside the importer discarded a
+confirmed transaction date and made a material rating input untraceable.
+Changing a private expiration must not invalidate or replace a still-valid
+shared preliminary quote.
+
+**How to apply:** return valid address+policy cache hits before resolving private
+dates. For a first paid run, resolve the date at the server boundary and keep
+expiration values only in the private user/property store. Never use legacy
+scope columns for lookup, claim, polling, uniqueness, or expiration rotation;
+omit effective-date values from shared snapshots and browser local storage.
 
 ## Explicit property answers always win
 When a user provides exact property answers for a live quote, send those
@@ -128,11 +149,15 @@ underwriting answers.
 Havo cannot click the Apply Defaults control inside the QuoteRUSH desktop
 application. Policy-specific defaults must be resolved in Havo and sent as
 explicit importer fields so a new lead arrives in the same intended state.
-The current property-information rules are HO3 → Primary, DP3 → Investment,
-HO6 → user-selected Primary/Secondary/Investment with a required rental term
-for Investment, and 9 months or more occupied for every policy. QuoteRUSH
-purchase price is the Havo rebuild cost for HO3/DP3 and twice that cost for
-HO6.
+The current property-information rules require Primary/Secondary for HO3,
+force Investment for DP3, allow Primary/Secondary/Investment for HO6, and
+require annual/monthly/weekly rental terms for DP3 and investment HO6. Every
+policy uses 9 months or more occupied.
+
+PurchasePrice and Coverage A are independent. PurchasePrice precedence is
+consumer-confirmed value → exact listing → prior sale → market estimate →
+explicitly requested manual value. It must never be derived from rebuild cost,
+insurance premium, or an HO6 multiplier.
 
 **Why:** the integration has only the JSON importer and quote-submission API;
 it has no control channel into the desktop UI.
@@ -141,10 +166,57 @@ it has no control channel into the desktop UI.
 fields rather than attempting UI automation, and should resolve material
 policy defaults at the server boundary before the address cache is claimed.
 
+## Expired/error cache reclaim integrity
+Valid unexpired cache hits remain readable without collecting a new person's
+private answers. For a stale/error row, however, all consent, claims,
+occupancy/rental, purchase-price/date, and prior-insurance gates must pass
+before the row is mutated to pending.
+
+Reclaim must atomically replace every run-specific snapshot, provenance,
+assumption, answer, profile-version, and timestamp field while preserving
+independently retained server-only raw property evidence.
+
+**Why:** mutating first lets invalid callers poison the shared slot for 30 days,
+and partial reset causes new paid inputs to be paired with stale public context.
+
+**How to apply:** keep valid-hit returns before private gates; keep every stale
+reclaim mutation after those gates and guarded by the same expired/error
+predicate used for the atomic claim.
+
 ## Top-3 for 30 days then expired
 Cache stores the top-3 ranked quotes; after the 30-day TTL the entry is
 served with an `expired` flag → UI shows stale top-3 plus a re-run
 prompt (Refresh = GetQuotes only, no re-submit, no cost).
+
+## Credit-score authorization handling
+Quote requests do not ask the consumer for credit permission and are never
+blocked by the private consent timestamp. The importer always sends
+`CreditPermission: "Yes"` while the agent verification view labels permission
+and Excellent credit as unverified assumptions to confirm on follow-up.
+
+Keep the historical private consent column physically present to avoid a
+destructive migration, but do not restore its removed consumer API/status flow.
+
+**Why:** product policy treats credit permission as an agent follow-up item;
+the consumer checkbox and five consent gates contradicted that low-friction
+flow and blocked otherwise valid quote requests.
+
+**How to apply:** do not add a consumer consent question, disabled-button
+condition, pre-cache gate, or pre-import recheck unless product policy changes.
+Never place any recorded consent state in the shared quote context.
+
+## Wind-mitigation premium disclosure
+Current paid-quote inputs infer wind credits from property answers and do not
+include a reviewed inspection report. Carrier results must therefore identify
+the report as unconfirmed and show the dedicated higher-premium warning beside
+the premium, with a direct report-send action.
+
+**Why:** a generic preliminary disclaimer does not adequately reveal that an
+unverified wind credit can materially understate the premium.
+
+**How to apply:** do not change the existing rating assumptions merely to hide
+the warning. Hide it only when a future trusted review flow records explicit
+confirmation in the cached property provenance.
 
 ## Address parsing
 qr-start splits the formatted address on commas and scans segments
@@ -169,3 +241,42 @@ must, on active-address change, clear the interval AND reset leadId, gate
 the poll callback ignore results when unmounted or `addrRef.current !== addr`.
 **Why:** cached pending/success for a new address otherwise leaves the old
 interval running and a stale leadId ref blocking the new poll → wrong quotes.
+
+## Server-owned completion and bounded email recovery
+Quote completion must not depend on an open browser. Treat every paid run as
+its own generation even though the shared address/policy cache row is reused.
+Guard delayed start responses, worker writes, and email updates against both
+generation and expected status; an in-memory lead override must also carry its
+original generation.
+
+**Why:** a timeout/reclaim can occur while an old provider request is still
+in flight. A row ID or lead check alone can then attach the old response to
+the next borrower's run. Concurrent restart workers also need durable leases.
+
+**How to apply:** retain the existing atomic paid-run claim and 30-day shared
+key. Resume server work after restart, preserve usable partial quotes on
+transient errors, and keep delivery-recipient metadata out of public responses.
+
+Result emails need provider idempotency as well as persistent local state.
+Never blindly resend an ambiguous delivery outside the provider's idempotency
+window; quarantine it for reconciliation instead.
+
+**Why:** marking sent only after provider acceptance leaves a crash window;
+marking before acceptance can lose delivery. Resend's idempotency protection
+expires after 24 hours, so unlimited recovery retries can create duplicates.
+
+**How to apply:** bound retries from the first delivery attempt and retain the
+same generation-specific key and message payload. Require a real configured
+agency mailing address rather than inventing a compliance footer.
+
+## Exact internal lead-alert subjects
+Use a direct team email for exact requested subject wording while retaining
+the FUB contact update separately. Do not encode each property's address into
+a new FUB lead source merely to influence notification subjects.
+
+**Why:** the events API exposes source and event type, not a supported exact
+notification-subject override. Per-property sources would also fragment lead
+source reporting without guaranteeing the requested email format.
+
+**How to apply:** keep the insurance FUB source stable; put the property in
+the direct email subject and restrict its body to the requested contact fields.

@@ -43,6 +43,7 @@ interface AgentRow {
   texts: number;
   emails: number;
   showings: number;
+  showingDays: number;
   closedDeals: number;
   underContract: number;
   pipeline: Record<string, number>;
@@ -64,6 +65,7 @@ interface LeaderboardData {
     texts: number;
     emails: number;
     showings: number;
+    showingDays: number;
     closedDeals: number;
     underContract: number;
     totalActivity: number;
@@ -179,11 +181,12 @@ function AgentCard({ agent, rank }: { agent: AgentRow; rank: number }) {
           </span>
         )}
       </div>
-      <div className="grid grid-cols-4 gap-2 pt-1">
+      <div className="grid grid-cols-5 gap-2 pt-1">
         <StatBadge value={agent.calls}    label="Calls"    color="text-blue-400" />
         <StatBadge value={agent.texts}    label="Texts"    color="text-purple-400" />
         <StatBadge value={agent.emails}   label="Emails"   color="text-orange-400" />
-        <StatBadge value={agent.showings} label="Showings" color="text-teal-400" />
+        <StatBadge value={agent.showings} label="Homes" color="text-teal-400" />
+        <StatBadge value={agent.showingDays} label="Show Days" color="text-cyan-400" />
       </div>
       <div className="flex flex-wrap gap-3">
         {agent.underContract > 0 && (
@@ -230,6 +233,7 @@ function AgentTableRow({ agent, rank }: { agent: AgentRow; rank: number }) {
       <td className="px-4 py-4 text-center"><span className="text-lg font-bold text-purple-400">{agent.texts}</span></td>
       <td className="px-4 py-4 text-center"><span className="text-lg font-bold text-orange-400">{agent.emails}</span></td>
       <td className="px-4 py-4 text-center"><span className="text-lg font-bold text-teal-400">{agent.showings}</span></td>
+      <td className="px-4 py-4 text-center"><span className="text-lg font-bold text-cyan-400">{agent.showingDays}</span></td>
       <td className="px-4 py-4 text-center"><span className="text-lg font-bold text-yellow-400">{agent.underContract}</span></td>
       <td className="px-4 py-4 text-center">
         {agent.closedDeals > 0 ? (
@@ -245,7 +249,37 @@ function AgentTableRow({ agent, rank }: { agent: AgentRow; rank: number }) {
   );
 }
 
+function sumBuckets(agents: AgentRow[], getter: (a: AgentRow) => DealBucket): DealBucket {
+  return agents.reduce(
+    (acc, a) => {
+      const b = getter(a);
+      return { count: acc.count + b.count, volume: acc.volume + b.volume, commission: acc.commission + b.commission };
+    },
+    { count: 0, volume: 0, commission: 0 },
+  );
+}
+
 function DealPipelineSection({ agents }: { agents: AgentRow[] }) {
+  // Pre-compute team totals
+  const reActiveListing    = sumBuckets(agents, a => a.deals.reActiveListing);
+  const reUnderContractBuy = sumBuckets(agents, a => a.deals.reUnderContractBuy);
+  const reUnderContractSell= sumBuckets(agents, a => a.deals.reUnderContractSell);
+  const re2026Buy          = sumBuckets(agents, a => a.deals.re2026Buy);
+  const re2026Sell         = sumBuckets(agents, a => a.deals.re2026Sell);
+  const reTeamVol  = reActiveListing.volume + reUnderContractBuy.volume + reUnderContractSell.volume + re2026Buy.volume + re2026Sell.volume;
+  const reTeamComm = reActiveListing.commission + reUnderContractBuy.commission + reUnderContractSell.commission + re2026Buy.commission + re2026Sell.commission;
+
+  const mtgUnderContract = sumBuckets(agents, a => a.deals.mortgageUnderContract);
+  const mtg2026          = sumBuckets(agents, a => a.deals.mortgage2026);
+  const mtgTeamVol  = mtgUnderContract.volume + mtg2026.volume;
+  const mtgTeamComm = mtg2026.commission; // closed only
+
+  const sortedAgents = [...agents].sort((a, b) => {
+    const lastA = a.name.split(" ").pop() ?? a.name;
+    const lastB = b.name.split(" ").pop() ?? b.name;
+    return lastA.localeCompare(lastB);
+  });
+
   const hasAnyRE  = agents.some(a =>
     a.deals.reActiveListing.count + a.deals.reUnderContractBuy.count +
     a.deals.reUnderContractSell.count + a.deals.re2026Buy.count + a.deals.re2026Sell.count > 0
@@ -287,7 +321,19 @@ function DealPipelineSection({ agents }: { agents: AgentRow[] }) {
                 </tr>
               </thead>
               <tbody>
-                {agents.map((agent) => {
+                <tr className="border-b-2 border-gray-600 bg-gray-900/60">
+                  <td className="px-4 py-3">
+                    <span className="text-white font-bold text-sm uppercase tracking-wide">Team Total</span>
+                  </td>
+                  <td className="px-4 py-3 text-center"><BucketCell bucket={reActiveListing} dimCommission /></td>
+                  <td className="px-4 py-3 text-center"><BucketCell bucket={reUnderContractBuy} /></td>
+                  <td className="px-4 py-3 text-center"><BucketCell bucket={reUnderContractSell} /></td>
+                  <td className="px-4 py-3 text-center"><BucketCell bucket={re2026Buy} /></td>
+                  <td className="px-4 py-3 text-center"><BucketCell bucket={re2026Sell} /></td>
+                  <td className="px-4 py-3 text-center"><span className="font-bold text-teal-300 text-sm">{fmt$(reTeamVol)}</span></td>
+                  <td className="px-4 py-3 text-center"><span className="font-bold text-green-300 text-sm">{fmt$(reTeamComm)}</span></td>
+                </tr>
+                {sortedAgents.map((agent) => {
                   const d = agent.deals;
                   const reVol  = d.reActiveListing.volume     + d.reUnderContractBuy.volume  +
                                  d.reUnderContractSell.volume + d.re2026Buy.volume            + d.re2026Sell.volume;
@@ -342,7 +388,16 @@ function DealPipelineSection({ agents }: { agents: AgentRow[] }) {
                 </tr>
               </thead>
               <tbody>
-                {agents.map((agent) => {
+                <tr className="border-b-2 border-gray-600 bg-gray-900/60">
+                  <td className="px-4 py-3">
+                    <span className="text-white font-bold text-sm uppercase tracking-wide">Team Total</span>
+                  </td>
+                  <td className="px-4 py-3 text-center"><BucketCell bucket={mtgUnderContract} /></td>
+                  <td className="px-4 py-3 text-center"><BucketCell bucket={mtg2026} /></td>
+                  <td className="px-4 py-3 text-center"><span className="font-bold text-teal-300 text-sm">{fmt$(mtgTeamVol)}</span></td>
+                  <td className="px-4 py-3 text-center"><span className="font-bold text-green-300 text-sm">{fmt$(mtgTeamComm)}</span></td>
+                </tr>
+                {sortedAgents.map((agent) => {
                   const d       = agent.deals;
                   const mtgVol  = d.mortgageUnderContract.volume + d.mortgage2026.volume;
                   const mtgComm = d.mortgage2026.commission; // closed deals only
@@ -362,7 +417,7 @@ function DealPipelineSection({ agents }: { agents: AgentRow[] }) {
                         <span className="font-bold text-white">{fmt$(mtgVol)}</span>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <span className="font-bold text-green-400">{fmt$(mtgComm)}</span>
+                          <span className="font-bold text-green-400">{fmt$(mtgComm)}</span>
                       </td>
                     </tr>
                   );
@@ -448,6 +503,11 @@ export default function Leaderboard() {
   if (!user || !TEAM_EMAILS.has((user.email ?? "").toLowerCase())) return null;
 
   const totals = data?.teamTotals;
+  const activityAgents = [...(data?.agents ?? [])].sort((a, b) => {
+    const lastA = a.name.split(" ").pop() ?? a.name;
+    const lastB = b.name.split(" ").pop() ?? b.name;
+    return lastA.localeCompare(lastB);
+  });
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100">
@@ -514,12 +574,13 @@ export default function Leaderboard() {
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-8">
         {/* Activity totals strip */}
         {totals && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-9 gap-3">
             {[
               { label: "📞 Calls",     value: totals.calls,         color: "text-blue-400" },
               { label: "💬 Texts",     value: totals.texts,         color: "text-purple-400" },
               { label: "📧 Emails",    value: totals.emails,        color: "text-orange-400" },
-              { label: "🏠 Showings",  value: totals.showings,      color: "text-teal-400" },
+              { label: "🏠 Homes Shown", value: totals.showings,    color: "text-teal-400" },
+              { label: "📅 Showing Days", value: totals.showingDays, color: "text-cyan-400" },
               { label: "🔑 Contract",  value: totals.underContract, color: "text-yellow-400" },
               { label: "🏆 Closed",    value: totals.closedDeals,   color: "text-green-400" },
               { label: "⚡ Total",      value: totals.totalActivity, color: "text-white" },
@@ -533,21 +594,42 @@ export default function Leaderboard() {
           </div>
         )}
 
-        {/* Deal totals strip */}
-        {totals && totals.dealCount > 0 && (
-          <div className="grid grid-cols-3 gap-3">
-            {[
-              { label: `📋 ${CURRENT_YEAR} Deals`,      value: totals.dealCount.toString(),  color: "text-white" },
-              { label: `💵 ${CURRENT_YEAR} Volume`,     value: fmt$(totals.dealVolume),      color: "text-teal-400" },
-              { label: `💰 ${CURRENT_YEAR} Commission`, value: fmt$(totals.dealCommission),  color: "text-green-400" },
-            ].map(({ label, value, color }) => (
-              <div key={label} className="bg-gray-800 rounded-xl p-3 text-center border border-gray-700">
-                <p className={`text-2xl font-bold ${color}`}>{value}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{label}</p>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* Deal totals strip — total row + RE/Mortgage split below */}
+        {totals && totals.dealCount > 0 && data && (() => {
+          const reCount = data.agents.reduce((s, a) => s + a.deals.reActiveListing.count + a.deals.reUnderContractBuy.count + a.deals.reUnderContractSell.count + a.deals.re2026Buy.count + a.deals.re2026Sell.count, 0);
+          const reVol = data.agents.reduce((s, a) => s + a.deals.reActiveListing.volume + a.deals.reUnderContractBuy.volume + a.deals.reUnderContractSell.volume + a.deals.re2026Buy.volume + a.deals.re2026Sell.volume, 0);
+          const reComm = data.agents.reduce((s, a) => s + a.deals.reActiveListing.commission + a.deals.reUnderContractBuy.commission + a.deals.reUnderContractSell.commission + a.deals.re2026Buy.commission + a.deals.re2026Sell.commission, 0);
+          const mtgCount = data.agents.reduce((s, a) => s + a.deals.mortgageUnderContract.count + a.deals.mortgage2026.count, 0);
+          const mtgVol = data.agents.reduce((s, a) => s + a.deals.mortgageUnderContract.volume + a.deals.mortgage2026.volume, 0);
+          const mtgComm = data.agents.reduce((s, a) => s + a.deals.mortgage2026.commission, 0);
+
+          return (
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: `📋 ${CURRENT_YEAR} Deals`, value: totals.dealCount, color: "text-white", re: reCount, mtg: mtgCount, reColor: "text-teal-400", mtgColor: "text-blue-400" },
+                { label: `💵 ${CURRENT_YEAR} Volume`, value: fmt$(totals.dealVolume), color: "text-teal-400", re: fmt$(reVol), mtg: fmt$(mtgVol), reColor: "text-teal-400", mtgColor: "text-blue-400" },
+                { label: `💰 ${CURRENT_YEAR} Commission`, value: fmt$(totals.dealCommission), color: "text-green-400", re: fmt$(reComm), mtg: fmt$(mtgComm), reColor: "text-green-400", mtgColor: "text-green-400" },
+              ].map(({ label, value, color, re, mtg, reColor, mtgColor }) => (
+                <div key={label} className="space-y-2">
+                  <div className="bg-gray-800 rounded-xl p-3 text-center border border-gray-700">
+                    <p className={`text-2xl font-bold ${color}`}>{value}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{label}</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="bg-gray-800/60 rounded-xl p-2 text-center border border-gray-700">
+                      <p className={`text-lg font-bold ${reColor}`}>{re}</p>
+                      <p className="text-xs text-gray-500">🏠 Real Estate</p>
+                    </div>
+                    <div className="bg-gray-800/60 rounded-xl p-2 text-center border border-gray-700">
+                      <p className={`text-lg font-bold ${mtgColor}`}>{mtg}</p>
+                      <p className="text-xs text-gray-500">💰 Mortgage</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
 
         {error && (
           <div className="bg-red-900/30 border border-red-700 rounded-xl p-4 text-red-300 text-sm">
@@ -582,7 +664,8 @@ export default function Leaderboard() {
                       <th className="px-4 py-3 text-center text-xs font-semibold text-blue-400   uppercase tracking-wide">📞 Calls</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-purple-400 uppercase tracking-wide">💬 Texts</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-orange-400 uppercase tracking-wide">📧 Emails</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-teal-400   uppercase tracking-wide">🏠 Showings</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-teal-400   uppercase tracking-wide">🏠 Homes</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-cyan-400   uppercase tracking-wide">📅 Days</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-yellow-400 uppercase tracking-wide">🔑 Contract</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-green-400  uppercase tracking-wide">🏆 Closed</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-white      uppercase tracking-wide">⚡ Total</th>
@@ -591,7 +674,7 @@ export default function Leaderboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.agents.map((agent, i) => (
+                    {activityAgents.map((agent, i) => (
                       <AgentTableRow key={agent.email} agent={agent} rank={i + 1} />
                     ))}
                   </tbody>
@@ -599,7 +682,7 @@ export default function Leaderboard() {
               </div>
             </div>
             <div className="md:hidden space-y-3">
-              {data.agents.map((agent, i) => (
+              {activityAgents.map((agent, i) => (
                 <AgentCard key={agent.email} agent={agent} rank={i + 1} />
               ))}
             </div>

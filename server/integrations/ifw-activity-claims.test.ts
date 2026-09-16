@@ -5,7 +5,9 @@ import {
   deleteExpiredIfwActivityClaims,
   type IfwActivityClaimResult,
   type IfwActivityClaimStore,
+  RoutedIfwActivityClaimStore,
 } from "./ifw-activity-claims";
+import { resolveManagedDataRouting } from "../managed-data-routing";
 
 class SharedMemoryClaimStore implements IfwActivityClaimStore {
   private readonly claims = new Map<string, { userId: string; createdAt: number; expiresAt: number }>();
@@ -114,4 +116,55 @@ test("deletes only a bounded batch of expired claims and retains active claims",
     claims.map(claim => claim.key),
     ["newer-expired", "active"],
   );
+});
+
+test("Supabase read cutover makes IFW claims in the target authority", async () => {
+  const calls: string[] = [];
+  const source: IfwActivityClaimStore = {
+    async claim() { calls.push("source"); return "claimed"; },
+  };
+  const target: IfwActivityClaimStore = {
+    async claim() { calls.push("target"); return "duplicate"; },
+  };
+  const store = new RoutedIfwActivityClaimStore(
+    source,
+    target,
+    resolveManagedDataRouting({ MANAGED_DATA_MODE: "supabase-read" }),
+  );
+
+  assert.equal(await store.claim({
+    userId: "user-1",
+    dedupeKey: "worksheet-action",
+    now: new Date("2026-09-06T12:00:00Z"),
+    windowMs: 60_000,
+    maxPerWindow: 2,
+  }), "duplicate");
+  assert.deepEqual(calls, ["target"]);
+});
+
+test("rollback restores IFW claims to the source authority", async () => {
+  const calls: string[] = [];
+  const source: IfwActivityClaimStore = {
+    async claim() { calls.push("source"); return "rate_limited"; },
+  };
+  const target: IfwActivityClaimStore = {
+    async claim() { calls.push("target"); return "claimed"; },
+  };
+  const store = new RoutedIfwActivityClaimStore(
+    source,
+    target,
+    resolveManagedDataRouting({
+      MANAGED_DATA_MODE: "supabase-canary",
+      MANAGED_DATA_ROLLBACK: "true",
+    }),
+  );
+
+  assert.equal(await store.claim({
+    userId: "user-1",
+    dedupeKey: "worksheet-action",
+    now: new Date("2026-09-06T12:00:00Z"),
+    windowMs: 60_000,
+    maxPerWindow: 2,
+  }), "rate_limited");
+  assert.deepEqual(calls, ["source"]);
 });

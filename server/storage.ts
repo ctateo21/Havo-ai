@@ -181,6 +181,13 @@ export class MemStorage implements IStorage {
 // Use DatabaseStorage for persistent storage with PostgreSQL
 import { eq, and } from "drizzle-orm";
 import { db } from "./db";
+import { supabaseAdmin } from "./supabase";
+import {
+  managedDataRouting,
+  mirrorSourceResultOrWriteTarget,
+  routedRead,
+  routedWrite,
+} from "./managed-data-routing";
 
 export class DatabaseStorage implements IStorage {
   async getUser(id: number): Promise<User | undefined> {
@@ -303,5 +310,155 @@ export class DatabaseStorage implements IStorage {
   }
 }
 
-// Use DatabaseStorage instead of MemStorage
-export const storage = new DatabaseStorage();
+function fromTargetRow<T>(row: Record<string, any>): T {
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(row)) {
+    result[key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase())] =
+      /_(?:at)$/.test(key) && typeof value === "string" ? new Date(value) : value;
+  }
+  return result as T;
+}
+
+function toTargetRow(row: Record<string, any>): Record<string, any> {
+  return Object.fromEntries(Object.entries(row).map(([key, value]) => [
+    key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`),
+    value instanceof Date ? value.toISOString() : value,
+  ]));
+}
+
+class SupabaseStorage implements IStorage {
+  private client() {
+    if (!supabaseAdmin) throw new Error("Supabase admin client is unavailable");
+    return supabaseAdmin;
+  }
+  private async one<T>(table: string, query: any): Promise<T | undefined> {
+    const { data, error } = await query.limit(1);
+    if (error) throw error;
+    return data?.[0] ? fromTargetRow<T>(data[0]) : undefined;
+  }
+  private async insert<T>(table: string, value: Record<string, any>): Promise<T> {
+    const { data, error } = await this.client().from(table).insert(toTargetRow(value)).select().single();
+    if (error) throw error;
+    return fromTargetRow<T>(data);
+  }
+  async mirror(table: string, value: Record<string, any>, conflict = "id"): Promise<void> {
+    const { error } = await this.client().from(table).upsert(toTargetRow(value), { onConflict: conflict });
+    if (error) throw error;
+  }
+  getUser(id: number) {
+    return this.one<User>("managed_users", this.client().from("managed_users").select("*").eq("id", id));
+  }
+  getUserByUsername(username: string) {
+    return this.one<User>("managed_users", this.client().from("managed_users").select("*").eq("username", username));
+  }
+  getUserByEmail(email: string) {
+    return this.one<User>("managed_users", this.client().from("managed_users").select("*").eq("email", email));
+  }
+  createUser(value: InsertUser) { return this.insert<User>("managed_users", value); }
+  createSubmission(value: InsertSubmission) { return this.insert<Submission>("managed_submissions", value); }
+  getSubmission(id: number) {
+    return this.one<Submission>("managed_submissions", this.client().from("managed_submissions").select("*").eq("id", id));
+  }
+  async updateSubmissionStatus(id: number, status: string) {
+    return this.one<Submission>("managed_submissions", this.client().from("managed_submissions").update({ status }).eq("id", id).select());
+  }
+  async getSubmissionsByUserId(userId: number) {
+    const { data, error } = await this.client().from("managed_submissions").select("*").eq("user_id", userId);
+    if (error) throw error;
+    return (data ?? []).map(row => fromTargetRow<Submission>(row));
+  }
+  createIntegrationRequest(value: InsertIntegrationRequest) {
+    return this.insert<IntegrationRequest>("managed_integration_requests", value);
+  }
+  getIntegrationRequest(id: number) {
+    return this.one<IntegrationRequest>("managed_integration_requests", this.client().from("managed_integration_requests").select("*").eq("id", id));
+  }
+  updateIntegrationRequest(id: number, status: string, responseData: any) {
+    return this.one<IntegrationRequest>("managed_integration_requests", this.client().from("managed_integration_requests").update({ status, response_data: responseData }).eq("id", id).select());
+  }
+  async getIntegrationRequestsBySubmissionId(submissionId: number) {
+    const { data, error } = await this.client().from("managed_integration_requests").select("*").eq("submission_id", submissionId);
+    if (error) throw error;
+    return (data ?? []).map(row => fromTargetRow<IntegrationRequest>(row));
+  }
+  getQuestionnaireResponse(sessionId: string, serviceType: string, stepName: string) {
+    return this.one<QuestionnaireResponse>(
+      "managed_questionnaire_responses",
+      this.client().from("managed_questionnaire_responses").select("*")
+        .eq("session_id", sessionId).eq("service_type", serviceType).eq("step_name", stepName),
+    );
+  }
+  updateQuestionnaireResponse(sessionId: string, serviceType: string, stepName: string, responseData: any, isCompleted?: boolean) {
+    const values: Record<string, any> = {
+      response_data: responseData,
+      is_completed: isCompleted ?? false,
+      updated_at: new Date().toISOString(),
+    };
+    return this.one<QuestionnaireResponse>(
+      "managed_questionnaire_responses",
+      this.client().from("managed_questionnaire_responses").update(values)
+        .eq("session_id", sessionId).eq("service_type", serviceType).eq("step_name", stepName).select(),
+    );
+  }
+}
+
+class RoutedStorage implements IStorage {
+  constructor(private source = new DatabaseStorage(), private target = new SupabaseStorage()) {}
+  private read<T>(source: () => Promise<T>, target: () => Promise<T>) {
+    return routedRead(source, target, managedDataRouting);
+  }
+  private create<T extends Record<string, any>>(table: string, conflict: string, source: () => Promise<T>, target: () => Promise<T>) {
+    return routedWrite(source, async (sourceRow, context) => {
+      const result = await mirrorSourceResultOrWriteTarget(
+        sourceRow,
+        context,
+        row => this.target.mirror(table, row, conflict),
+        target,
+      );
+      if (!result) {
+        throw new Error(`Managed ${table} create returned no row`);
+      }
+      return result;
+    }, managedDataRouting);
+  }
+  getUser = (id: number) => this.read(() => this.source.getUser(id), () => this.target.getUser(id));
+  getUserByUsername = (v: string) => this.read(() => this.source.getUserByUsername(v), () => this.target.getUserByUsername(v));
+  getUserByEmail = (v: string) => this.read(() => this.source.getUserByEmail(v), () => this.target.getUserByEmail(v));
+  createUser = (v: InsertUser) => this.create("managed_users", "id", () => this.source.createUser(v), () => this.target.createUser(v));
+  createSubmission = (v: InsertSubmission) => this.create("managed_submissions", "id", () => this.source.createSubmission(v), () => this.target.createSubmission(v));
+  getSubmission = (id: number) => this.read(() => this.source.getSubmission(id), () => this.target.getSubmission(id));
+  updateSubmissionStatus = (id: number, v: string) => routedWrite(
+    () => this.source.updateSubmissionStatus(id, v),
+    (row, context) => mirrorSourceResultOrWriteTarget(
+      row,
+      context,
+      sourceRow => this.target.mirror("managed_submissions", sourceRow),
+      () => this.target.updateSubmissionStatus(id, v),
+    ),
+  );
+  getSubmissionsByUserId = (id: number) => this.read(() => this.source.getSubmissionsByUserId(id), () => this.target.getSubmissionsByUserId(id));
+  createIntegrationRequest = (v: InsertIntegrationRequest) => this.create("managed_integration_requests", "id", () => this.source.createIntegrationRequest(v), () => this.target.createIntegrationRequest(v));
+  getIntegrationRequest = (id: number) => this.read(() => this.source.getIntegrationRequest(id), () => this.target.getIntegrationRequest(id));
+  updateIntegrationRequest = (id: number, status: string, data: any) => routedWrite(
+    () => this.source.updateIntegrationRequest(id, status, data),
+    (row, context) => mirrorSourceResultOrWriteTarget(
+      row,
+      context,
+      sourceRow => this.target.mirror("managed_integration_requests", sourceRow),
+      () => this.target.updateIntegrationRequest(id, status, data),
+    ),
+  );
+  getIntegrationRequestsBySubmissionId = (id: number) => this.read(() => this.source.getIntegrationRequestsBySubmissionId(id), () => this.target.getIntegrationRequestsBySubmissionId(id));
+  getQuestionnaireResponse = (a: string, b: string, c: string) => this.read(() => this.source.getQuestionnaireResponse(a, b, c), () => this.target.getQuestionnaireResponse(a, b, c));
+  updateQuestionnaireResponse = (a: string, b: string, c: string, data: any, done?: boolean) => routedWrite(
+    () => this.source.updateQuestionnaireResponse(a, b, c, data, done),
+    (row, context) => mirrorSourceResultOrWriteTarget(
+      row,
+      context,
+      sourceRow => this.target.mirror("managed_questionnaire_responses", sourceRow),
+      () => this.target.updateQuestionnaireResponse(a, b, c, data, done),
+    ),
+  );
+}
+
+export const storage = new RoutedStorage();

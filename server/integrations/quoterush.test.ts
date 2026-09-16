@@ -592,6 +592,10 @@ test("private current policy expiration is not accepted into shared consumer ans
     new URL("../routes.ts", import.meta.url),
     "utf8",
   );
+  const cacheRoutesSource = readFileSync(
+    new URL("./insurance-cache-routes.ts", import.meta.url),
+    "utf8",
+  );
   const sanitizerStart = routesSource.indexOf(
     "function publicConsumerPropertyAnswers",
   );
@@ -609,7 +613,10 @@ test("private current policy expiration is not accepted into shared consumer ans
   assert.doesNotMatch(sanitizer, /currentPolicyExpirationDate/);
   assert.notEqual(privateEndpointStart, -1);
   assert.ok(privateEndpointStart < quoteStart);
-  assert.match(routesSource, /privateInsuranceProperties/);
+  assert.match(
+    cacheRoutesSource,
+    /saveManagedPrivateInsuranceProperty/,
+  );
 });
 
 test("policy effective values are stripped from the shared quote snapshot", () => {
@@ -646,19 +653,19 @@ test("private expiration never changes the shared paid-cache identity", () => {
     routesSource.indexOf('"/api/insurance/qr-quotes"'),
   );
 
-  assert.match(quoteStart, /addressNormalized, norm/);
-  assert.match(quoteStart, /policyType, cacheRequest\.policyType/);
+  assert.match(quoteStart, /addressNormalized:\s*norm/);
+  assert.match(quoteStart, /policyType:\s*cacheRequest\.policyType/);
   assert.doesNotMatch(quoteStart, /cacheScope|quoteCacheScope/);
 });
 
 test("changing a private expiration does not rotate quote identity", () => {
   const routesSource = readFileSync(
-    new URL("../routes.ts", import.meta.url),
+    new URL("./insurance-cache-routes.ts", import.meta.url),
     "utf8",
   );
   const privatePropertyPut = routesSource.slice(
-    routesSource.indexOf('app.put(\n    "/api/profile/insurance-property"'),
-    routesSource.indexOf("// QuoteRUSH server-side shared cache"),
+    routesSource.indexOf('app.put("/api/profile/insurance-property"'),
+    routesSource.indexOf('app.get("/api/insurance/qr-cache"'),
   );
 
   assert.match(privatePropertyPut, /currentPolicyExpirationDate:/);
@@ -738,7 +745,7 @@ test("quote-start returns a valid shared cache before private preparation and ga
   const routeSource = routesSource.slice(routeStart, routeEnd);
   const preparation = routeSource.indexOf("prepareQuoteRushStartRequest");
   const cacheClaim = routeSource.indexOf("claimQuoteRushAddress");
-  const cacheLookup = routeSource.indexOf(".where(cacheIdentity)");
+  const cacheLookup = routeSource.indexOf("readQuoteCache");
   const paidSubmission = routeSource.indexOf(
     "const result = await importAndSubmit",
   );
@@ -746,7 +753,7 @@ test("quote-start returns a valid shared cache before private preparation and ga
     "cache hit (success)",
   );
   const dobGate = routeSource.indexOf("DOB_REQUIRED");
-  const staleReclaim = routeSource.indexOf(".set(initialRunValues)");
+  const staleReclaim = routeSource.indexOf("reclaimQuoteCache");
 
   assert.notEqual(routeStart, -1);
   assert.notEqual(routeEnd, -1);
@@ -766,7 +773,7 @@ test("quote-start returns a valid shared cache before private preparation and ga
   assert.equal(routeSource.indexOf("CREDIT_PERMISSION_REQUIRED"), -1);
   assert.equal(routeSource.indexOf("const submissionConsentProfile"), -1);
   const preserveLead = routeSource.indexOf(
-    ".set({ leadId: result.leadId })",
+    "updateClaimedCache({\n            leadId: result.leadId",
   );
   const ambiguousSubmit = routeSource.indexOf(
     "if (!result.submitted)",
@@ -789,14 +796,42 @@ test("quote polling requires authenticated, address-and-policy-bound cache acces
     const end = routesSource.indexOf("\n  );", start);
     const source = routesSource.slice(start, end);
     assert.ok(start >= 0);
-    assert.ok(source.indexOf("optionalUser(req)") < source.indexOf("getQuotes(leadId)"));
+    if (route === "/api/insurance/qr-quotes") {
+      assert.ok(source.includes("optionalUser(req)"));
+      assert.equal(source.indexOf("getQuotes(leadId)"), -1);
+      assert.match(source, /Cache-only read/);
+    } else {
+      assert.ok(source.indexOf("optionalUser(req)") < source.indexOf("getQuotes(leadId)"));
+    }
     assert.match(source, /address: z\.string\(\)\.min\(5\)/);
     assert.match(source, /policyType: z\.enum\(\["HO3", "HO6", "DP3"\]\)/);
-    assert.ok(
-      source.indexOf("findQuoteCacheLead(leadId, address, policyType)") <
-        source.indexOf("getQuotes(leadId)"),
-    );
+    assert.ok(source.includes("findQuoteCacheLead("));
   }
+});
+
+test("delayed quote-start writes and refreshes use status/generation CAS", () => {
+  const routesSource = readFileSync(
+    new URL("../routes.ts", import.meta.url),
+    "utf8",
+  );
+  const start = routesSource.indexOf('"/api/insurance/qr-start"');
+  const refresh = routesSource.indexOf('"/api/insurance/qr-refresh"');
+  const quotes = routesSource.indexOf('"/api/insurance/qr-quotes"');
+  const startSource = routesSource.slice(start, quotes);
+  const refreshSource = routesSource.slice(refresh);
+
+  assert.match(startSource, /activeCacheGeneration/);
+  assert.match(startSource, /updateClaimedCache/);
+  assert.match(startSource, /expectedStatus:\s*"pending"/);
+  assert.match(
+    startSource,
+    /if\s*\(!updated\)\s*\{\s*activeCacheGeneration\s*=\s*null/s,
+  );
+  assert.match(
+    startSource,
+    /This quote request was superseded by a newer run/,
+  );
+  assert.match(refreshSource, /expectedStatus:\s*cacheLead\.status/);
 });
 
 test("quote cache snapshots are explicitly non-PII", () => {
@@ -1195,10 +1230,11 @@ test("public QuoteRUSH cache routes never serialize stored raw property data", (
     new URL("../routes.ts", import.meta.url),
     "utf8",
   );
-  const cacheStart = routesSource.indexOf('"/api/insurance/qr-cache"');
-  const cacheEnd = routesSource.indexOf("\n  );", cacheStart);
-  const publicCacheSource = routesSource.slice(cacheStart, cacheEnd);
-  assert.ok(cacheStart >= 0);
+  const publicCacheSource = readFileSync(
+    new URL("./insurance-cache-routes.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(publicCacheSource, /"\/api\/insurance\/qr-cache"/);
   assert.doesNotMatch(publicCacheSource, /rawQuoterushPropertyData/);
   assert.doesNotMatch(publicCacheSource, /raw_quoterush_property_data/);
   assert.match(routesSource, /rawQuoterushPropertyData: result\.rawPropertyData/);

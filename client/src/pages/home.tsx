@@ -16,7 +16,7 @@ export default function Home() {
     <>
       <Helmet>
         <title>Havo — See the Real Cost of Any Florida Home, Free & Instant</title>
-        <meta name="description" content="See the true cost of any Florida home before you sign anything. Enter an address and get mortgage, property tax, insurance, and flood costs in seconds — free, with no sign-up needed to check your first home." />
+        <meta name="description" content="Explore Florida home mortgage and insurance costs for free. Property taxes require an official county estimate or manual entry before complete payment totals are available." />
         {/* AEO: answer-ready FAQ so AI assistants and rich results can
             cite the free / instant / no-signup facts directly. */}
         <script type="application/ld+json">{JSON.stringify({
@@ -26,7 +26,7 @@ export default function Home() {
             {
               "@type": "Question",
               "name": "How can I see the real cost of a home before signing anything?",
-              "acceptedAnswer": { "@type": "Answer", "text": "Enter any Florida property address on Havo and you'll instantly see the full monthly cost of the home — mortgage payment, property taxes, homeowners insurance, and flood insurance — before you sign any contract or talk to a lender." },
+              "acceptedAnswer": { "@type": "Answer", "text": "Enter a Florida property address to explore mortgage and insurance costs. Property taxes require an official county estimate or manual entry. If official taxes are unavailable, enter the annual tax amount manually before viewing complete payment and qualification results." },
             },
             {
               "@type": "Question",
@@ -36,7 +36,7 @@ export default function Home() {
             {
               "@type": "Question",
               "name": "Do I need to create an account or share personal information?",
-              "acceptedAnswer": { "@type": "Answer", "text": "No account or personal information is needed to see your first home's full cost estimate — just type an address and results appear in seconds. To quote additional homes or save your numbers, you can create a free account." },
+              "acceptedAnswer": { "@type": "Answer", "text": "No account is needed to start your first home estimate. Complete payment totals require a tax amount from an official county estimate or manual entry. To explore additional homes or save your numbers, create a free account." },
             },
           ],
         })}</script>

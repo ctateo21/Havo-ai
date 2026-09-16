@@ -12,4 +12,11 @@ if (!process.env.DATABASE_URL) {
 }
 
 export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Keep advisory-fence waiters off the main query pool. Otherwise enough
+// concurrent writes could occupy every main connection while each waits for
+// its actual source mutation to obtain another connection.
+export const managedDataFencePool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 2,
+});
 export const db = drizzle({ client: pool, schema });
