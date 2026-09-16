@@ -7,11 +7,11 @@ description: Durable separation rules for purchase estimates versus refinance cu
 
 **Why:** Mixing estimate inputs into a current-owner bill can produce a plausible but false escrow figure and can also poison shared caches with values that scale differently.
 
-**Official-only purchase policy (confirmed 2026-09-16):** The user explicitly approved removing formula fallbacks. If the official county estimator is unavailable, show unavailable/manual entry, not a formula-based number. Parcel millage calculations alone do not establish an official estimator result.
+**Per-county rollout policy (corrected by user 2026-09-16):** Keep labeled formula estimates for every county until that county's human-confirmed known-answer live test passes. Only then enable its verified-estimator gate and suppress its fallback on live failure. Never apply official-only behavior globally before replacements work.
 
-**Why:** The user's supplied acceptance standard requires a human-captured known answer within $1 plus a passing live estimator run before declaring a county complete. Matching one PDF using local arithmetic is insufficient.
+**Why:** Globally removing fallbacks before implementing live runners blanked every purchase estimate. The user explicitly rejected that sequencing and requested surgical forward changes preserving other work. A human-captured answer within $1 plus a passing live estimator run is still required before promoting each county.
 
-**How to apply:** Preserve manual overrides and actual refinance bills. Reject historical formula-sourced purchase caches. Never invent county captures or treat the approximate Hillsborough example as verified; keep missing evidence visible in the acceptance gate.
+**How to apply:** Preserve manual overrides, actual refinance bills, and unrelated QuoteRUSH/managed-data work. Keep estimated versus official provenance distinct. Never invent county captures or treat the approximate Hillsborough example as verified; push each completed restoration/verification step to GitHub.
 
 **Completeness rule:** Unavailable tax must also make payment/qualification summaries incomplete, not merely replace the tax row label. Manual zero is valid; missing tax is not zero.
 
@@ -19,7 +19,7 @@ description: Durable separation rules for purchase estimates versus refinance cu
 
 **How to apply:** Carry completeness/provenance through saved scenarios, dashboards, exports and eligibility actions. Never advertise an exact complete payment or qualification when taxes are unknown.
 
-**How to apply:** Keep separate cache tables and provenance labels. Purchase caching must start from verified official estimator results; current-bill caching stores only verified annual totals with their tax year and source.
+**How to apply:** Keep separate cache tables and provenance labels. Official purchase caches must start from verified official estimator results; unverified counties may retain labeled fallback estimates. Current-bill caching stores only verified annual totals with their tax year and source.
 
 **Refinance automation rule:** Start the address-only current-bill lookup automatically for every refinance, without requiring the user to expand a card or click a lookup button. Persist the verified annual total and include its monthly equivalent in proposed refinance PITI. Never overwrite a manually entered tax amount with a late automatic response.
 
@@ -39,4 +39,4 @@ description: Durable separation rules for purchase estimates versus refinance cu
 
 **Why:** Collier has many millage areas. Applying a sample district everywhere can make the reported example correct while silently worsening other properties. Its estimator page was inaccessible during validation, so example-compatible rounding is not independently verified county JavaScript.
 
-**How to apply:** Do not display generic fallbacks under the official-only policy. Disclose limits when reporting county-estimator parity.
+**How to apply:** Use labeled baseline fallbacks until each county is live-verified. Disclose limits when reporting county-estimator parity; never replace the county-wide fallback with the sample parcel's district rates.

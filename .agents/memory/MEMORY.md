@@ -19,7 +19,7 @@
 - [Hillsborough property tax estimate](hillsborough-tax-estimate.md) — HCPA estimator range = assessed-value range (85%–100% of price); Havo matches the LOWER bound via 85% assessed ratio.
 - [Private applicant DOB](private-applicant-dob.md) — DOB stays server-only in Neon; browser gets only a boolean status, and QuoteRUSH resolves DOB at the server boundary.
 - [Google Places autocomplete sessions](google-places-autocomplete.md) — independently invalidate prediction/detail races and rotate billing tokens when a search is abandoned.
-- [Property-tax source policy](property-tax-two-part.md) — purchase requires official estimator output, never formula fallbacks; refinance bills remain address-only and actual-total-only.
+- [Property-tax source policy](property-tax-two-part.md) — retain labeled fallbacks until each county passes live verification; never disable globally. Refinance stays actual-bill-only.
 - [Refinance financing defaults](refinance-financing-defaults.md) — escrow-bearing loans default to financing both closing costs and the new escrow reserve; preserve saved choices.
 - [Refinance VA funding fee](refinance-va-funding-fee.md) — require disability Yes/No; exempt=$0, non-exempt=3.3% subsequent-use financed into the note.
 - [Refinance escrow-refund estimate](refinance-escrow-refund.md) — prefer statement balance; CD/manual fallback is 2 monthly escrow payments; never include it in guaranteed cash figures.
