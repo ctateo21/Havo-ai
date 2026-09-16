@@ -13,10 +13,13 @@ import {
 } from "./property-value-sync";
 import {
   clearUnvalidatedCashBuyPropertyTax,
+  applyCashBuyFormulaTax,
 } from "./cash-buy-tax";
 import type { CashBuyOfficialTaxRequest } from "./cash-buy-tax";
+import type { CashBuyTaxSource } from "./cash-buy-tax";
 export {
   clearUnvalidatedCashBuyPropertyTax,
+  applyCashBuyFormulaTax,
   hasValidatedCashBuyPropertyTax,
   hasValidatedPurchasePropertyTax,
 } from "./cash-buy-tax";
@@ -476,6 +479,7 @@ export type CashBuyHoaSource = "zillow" | "manual" | "unknown";
  *  writers (defaults / Zillow / property cache / cross-tab sync). Once
  *  stamped `"manual"` or `"official"`, those other writers must skip it. */
 export type CashBuyManualSource = "manual" | "official" | "default" | "zillow";
+export type CashBuyPropertyTaxSource = CashBuyTaxSource;
 export type CashBuyZillowStatus =
   | "loading" | "loaded_from_cache" | "loaded_from_zillow" | "error";
 
@@ -515,10 +519,10 @@ export interface CashBuyScenario {
    *  writer; persisted so future defaults can respect it. */
   occupancyTypeSource?: CashBuyManualSource;
   propertyTaxes?: number;        // annual
-  /** Provenance for `propertyTaxes`. Only manual or official values may be
-   *  shown as a borrower-visible annual tax amount. */
-  propertyTaxesSource?: CashBuyManualSource;
-  /** Request context that produced an official tax value. Official cash-buy
+  /** Provenance for `propertyTaxes`. Formula estimates are usable for
+   *  calculations but remain visibly distinct from official data. */
+  propertyTaxesSource?: CashBuyPropertyTaxSource;
+  /** Request context that produced an official or formula tax value. Cash-buy
    * taxes are only reusable while this exact address / price / occupancy
    * tuple still matches the scenario. Older rows have no tuple and must be
    * treated as stale rather than displayed as verified taxes. */
@@ -566,7 +570,7 @@ export interface CashBuyScenario {
   /** Generic per-field manual-lock map. Mirrors `purchase_scenarios.user_answer_sources`.
    *  Used alongside the typed *_source columns above so future writers can
    *  record provenance without a schema change. */
-  userAnswerSources?: Record<string, "manual" | "default" | "zillow" | "simulator">;
+  userAnswerSources?: Record<string, string>;
 }
 
 export type TrackedLoanPropertyType = "primary" | "secondary" | "investment";
@@ -1221,6 +1225,10 @@ function rowToCashBuy(row: any): CashBuyScenario {
 
   const toManualSource = (v: any): CashBuyManualSource | undefined =>
     v === "manual" || v === "official" || v === "default" || v === "zillow" ? v : undefined;
+  const toPropertyTaxSource = (v: any): CashBuyPropertyTaxSource | undefined =>
+    v === "manual" || v === "official" || v === "estimated" ||
+    v === "formula" || v === "default" || v === "unavailable" ||
+    v === "zillow" ? v : undefined;
   const pps = row.purchase_price_source;
   const purchasePriceSource: CashBuyPurchasePriceSource | undefined =
     pps === "default" || pps === "user" || pps === "zillow_cache" ||
@@ -1233,7 +1241,22 @@ function rowToCashBuy(row: any): CashBuyScenario {
       : undefined;
   const userAnswerSources =
     row.user_answer_sources && typeof row.user_answer_sources === "object"
-      ? row.user_answer_sources as Record<string, "manual" | "default" | "zillow" | "simulator">
+      ? row.user_answer_sources as Record<string, string>
+      : undefined;
+  const rawTaxRequest = row.property_taxes_request ??
+    (typeof userAnswerSources?.property_taxes_request === "string"
+      ? (() => {
+          try { return JSON.parse(userAnswerSources.property_taxes_request); } catch { return undefined; }
+        })()
+      : undefined);
+  const propertyTaxesRequest: CashBuyOfficialTaxRequest | undefined =
+    rawTaxRequest && typeof rawTaxRequest === "object" &&
+    typeof rawTaxRequest.address === "string" &&
+    typeof rawTaxRequest.purchasePrice === "number" &&
+    (rawTaxRequest.occupancyType === "primary" ||
+      rawTaxRequest.occupancyType === "secondary" ||
+      rawTaxRequest.occupancyType === "investment")
+      ? rawTaxRequest
       : undefined;
 
   // HOA is stored as (amount, frequency). Normalize to a monthly number
@@ -1258,7 +1281,8 @@ function rowToCashBuy(row: any): CashBuyScenario {
       ? row.property_type : undefined,
     propertyTypeSource: toManualSource(row.property_type_source),
     propertyTaxes: row.property_taxes != null ? Number(row.property_taxes) : undefined,
-    propertyTaxesSource: toManualSource(row.property_taxes_source),
+    propertyTaxesSource: toPropertyTaxSource(row.property_taxes_source),
+    propertyTaxesRequest,
     homeownersInsurance: row.homeowners_insurance != null ? Number(row.homeowners_insurance) : undefined,
     homeownersInsuranceSource: toManualSource(row.homeowners_insurance_source),
     annualFloodIns: row.annual_flood_ins != null ? Number(row.annual_flood_ins) : undefined,
@@ -1284,6 +1308,15 @@ function rowToCashBuy(row: any): CashBuyScenario {
 }
 
 function cashBuyToRow(s: CashBuyScenario, userId: string) {
+  const userAnswerSources = { ...(s.userAnswerSources ?? {}) };
+  if (s.propertyTaxesRequest) {
+    // Keep the request tuple in the existing JSONB provenance map so older
+    // deployments without a dedicated column can still enforce stale guards
+    // after an auth round-trip.
+    userAnswerSources.property_taxes_request = JSON.stringify(s.propertyTaxesRequest);
+  } else {
+    delete userAnswerSources.property_taxes_request;
+  }
   return {
     id: s.id,
     user_id: userId,
@@ -1304,7 +1337,7 @@ function cashBuyToRow(s: CashBuyScenario, userId: string) {
     annual_flood_ins: s.annualFloodIns ?? null,
     insurance_premium_annual: s.insurancePremiumAnnual ?? null,
     insurance_factors: s.insuranceFactors ?? null,
-    user_answer_sources: s.userAnswerSources ?? null,
+    user_answer_sources: Object.keys(userAnswerSources).length > 0 ? userAnswerSources : null,
     // Canonical column pair — we always persist the monthly value with
     // an explicit frequency tag so a future per-frequency reader can
     // round-trip without losing information.

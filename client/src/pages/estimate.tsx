@@ -338,9 +338,9 @@ interface Inputs {
   creditScore: number;
   interestRate: number;
   /** Annual purchase property tax. A value is borrower-visible only when its
-   * source is "official" or "manual"; unavailable is represented by $0
-   * internally so legacy calculations remain numeric, but the UI never
-   * renders that sentinel as a verified tax amount. */
+   * source is "official", "estimated", or "manual"; unavailable is
+   * represented by $0 internally so legacy calculations remain numeric, but
+   * the UI never renders that sentinel as a verified tax amount. */
   annualTaxes: number;
   hoaMonthly: number;
   cddAnnual: number;
@@ -547,7 +547,8 @@ function hasUsablePurchaseTax(
 ): boolean {
   const source = value.userAnswerSources?.annual_taxes;
   return (
-    (source === "manual" || source === "official") &&
+    (source === "manual" || source === "official" ||
+      source === "estimated" || source === "formula") &&
     typeof value.annualTaxes === "number" &&
     Number.isFinite(value.annualTaxes) &&
     value.annualTaxes >= 0
@@ -1862,9 +1863,13 @@ export default function Estimate() {
     sectionHeader("Monthly Mortgage Breakdown");
     row("Principal & Interest", fmt(calc.pi), `${calc.finalRate.toFixed(3)}% / 30 yr`);
     row(
-      "Property Taxes",
+      `Property Taxes${taxSource() === "estimated" ? " (estimate)" : ""}`,
       taxSource() === "unavailable" ? "Unavailable" : `${fmt(calc.monthlyTax)}/mo`,
-      taxSource() === "unavailable" ? "Enter annual bill manually" : `${fmt(inputs.annualTaxes)}/yr`,
+      taxSource() === "unavailable"
+        ? "Enter annual bill manually"
+        : taxSource() === "estimated"
+          ? `${fmt(inputs.annualTaxes)}/yr · formula estimate; verify county bill`
+          : `${fmt(inputs.annualTaxes)}/yr`,
     );
     row("Homeowners Insurance", `${fmt(calc.monthlyHOIns)}/mo`);
     row("Flood Insurance", `${fmt(calc.monthlyFlood)}/mo`);
@@ -2311,7 +2316,9 @@ export default function Estimate() {
     const price = saved.price ?? base.purchasePrice;
     const savedTaxSource =
       saved.userAnswerSources?.annual_taxes === "manual" ||
-      saved.userAnswerSources?.annual_taxes === "official"
+      saved.userAnswerSources?.annual_taxes === "official" ||
+      saved.userAnswerSources?.annual_taxes === "estimated" ||
+      saved.userAnswerSources?.annual_taxes === "formula"
         ? saved.userAnswerSources.annual_taxes
         : "unavailable";
     const validLoanTypes = ["conventional", "jumbo", "fha", "va", "usda", "dscr", "bank_statement"] as const;
@@ -2366,11 +2373,12 @@ export default function Estimate() {
           ? saved.occupancyType
           : base.occupancy,
       // Restore purchase taxes only when provenance explicitly says
-      // "manual" or "official". Legacy rows contain formula-derived
-      // numbers without provenance; those must hydrate as unavailable
-      // rather than being displayed as a verified tax bill.
+      // "manual", "official", or an estimated formula. Legacy rows contain
+      // formula-derived numbers without provenance; those must hydrate as
+      // unavailable rather than being displayed as a verified tax bill.
       annualTaxes:
-        (savedTaxSource === "manual" || savedTaxSource === "official") &&
+        (savedTaxSource === "manual" || savedTaxSource === "official" ||
+          savedTaxSource === "estimated" || savedTaxSource === "formula") &&
         typeof saved.annualTaxes === "number" && Number.isFinite(saved.annualTaxes)
           ? saved.annualTaxes
           : 0,
@@ -2551,11 +2559,12 @@ export default function Estimate() {
       nonAdValoremTax: number;
       /** Server is still scraping the parcel's CDD/assessment lines
        *  from the Tax Collector bill — keep polling. */
-      navPending: boolean;
+       navPending: boolean;
        /** A configuration failure is shown while the borrower is prompted
         * to enter the bill manually. */
       operationalError?: string;
       source?: string;
+       provenance?: "official" | "estimated";
     } | null>(null);
 
   // Live HCPA property tax lookup
@@ -2659,12 +2668,12 @@ export default function Estimate() {
         body: JSON.stringify(body),
       })
         .then(r => r.json())
-        .then(data => {
-          if (cancelled) return;
+         .then(data => {
+           if (cancelled) return;
            const parsed: OfficialPropertyTaxResolution =
              parseOfficialPropertyTaxResponse(data);
            if (parsed.status === "available") {
-            setHcpaTax({
+             setHcpaTax({
                annualTax: parsed.annualTax,
                municipality: parsed.municipality ?? "",
                millageRate: parsed.millageRate ?? 0,
@@ -2675,6 +2684,7 @@ export default function Estimate() {
                navPending: parsed.nonAdValoremPending,
                operationalError: parsed.operationalError,
                source: parsed.source,
+               provenance: parsed.provenance ?? "official",
             });
              if (parsed.nonAdValoremPending && attempt < 14) {
               retryTimer = setTimeout(
@@ -2740,7 +2750,8 @@ export default function Estimate() {
     setInputs((current) => {
       if (taxSource(current) === "manual") return current;
       if (current.annualTaxes === hcpaTax.annualTax &&
-          current.userAnswerSources?.annual_taxes === "official") {
+          current.userAnswerSources?.annual_taxes ===
+            (hcpaTax.provenance === "estimated" ? "estimated" : "official")) {
         return current;
       }
       return {
@@ -2748,7 +2759,7 @@ export default function Estimate() {
         annualTaxes: hcpaTax.annualTax,
         userAnswerSources: {
           ...(current.userAnswerSources ?? {}),
-          annual_taxes: "official",
+          annual_taxes: hcpaTax.provenance === "estimated" ? "estimated" : "official",
         },
       };
     });
@@ -2757,9 +2768,10 @@ export default function Estimate() {
 
   /**
    * Single source of truth for purchase property taxes. Only a matching
-   * official county result can provide a number. An unavailable result uses
-   * the internal zero sentinel required by the existing mortgage equations;
-   * all borrower-facing rows check provenance before rendering it.
+   * official county result or explicitly gated formula estimate can provide a
+   * number. An unavailable result uses the internal zero sentinel required by
+   * the existing mortgage equations; all borrower-facing rows check
+   * provenance before rendering it.
    */
   function computePropertyTax(
     address: string,
@@ -2767,7 +2779,7 @@ export default function Estimate() {
     occupancy: "primary" | "secondary" | "investment",
     _vaDisabilityRating100: boolean | null,
   ): number {
-    // Use an official figure only when it was resolved for these exact inputs.
+    // Use a resolved figure only when it was resolved for these exact inputs.
     if (
       hcpaTax &&
       sameHcpaAddr(hcpaTax.address, address) &&
@@ -2779,7 +2791,7 @@ export default function Estimate() {
     return 0;
   }
 
-  function hasOfficialPropertyTax(
+  function hasAvailablePropertyTax(
     taxAddress: string,
     purchasePrice: number,
     occupancy: Inputs["occupancy"],
@@ -2792,8 +2804,12 @@ export default function Estimate() {
     );
   }
 
-  function currentOfficialTaxMatches(inputsValue: Inputs = inputs): boolean {
-    if (inputsValue.userAnswerSources?.annual_taxes !== "official") return false;
+  function currentResolvedTaxMatches(inputsValue: Inputs = inputs): boolean {
+    const source = inputsValue.userAnswerSources?.annual_taxes;
+    if (source !== "official" && source !== "estimated" && source !== "formula") {
+      return false;
+    }
+    const resolvedProvenance = source === "official" ? "official" : "estimated";
     const activeTaxAddress =
       scenarios.find((scenario) => scenario.id === activeScenarioId)?.address || address;
     return !!(
@@ -2801,19 +2817,22 @@ export default function Estimate() {
       sameHcpaAddr(hcpaTax.address, activeTaxAddress) &&
       hcpaTax.purchasePrice === inputsValue.purchasePrice &&
       hcpaTax.isPrimary === (inputsValue.occupancy === "primary") &&
+      (hcpaTax.provenance ?? "official") === resolvedProvenance &&
       hasMatchingOfficialAnnualTax(hcpaTax.annualTax, inputsValue.annualTaxes)
     );
   }
 
-  function taxSource(inputsValue: Inputs = inputs): "manual" | "official" | "unavailable" {
+  function taxSource(
+    inputsValue: Inputs = inputs,
+  ): "manual" | "official" | "estimated" | "unavailable" {
     if (!hasUsablePurchaseTax(inputsValue)) return "unavailable";
-    if (inputsValue.userAnswerSources?.annual_taxes === "official" &&
-        !currentOfficialTaxMatches(inputsValue)) {
+    const source = inputsValue.userAnswerSources?.annual_taxes;
+    if ((source === "official" || source === "estimated" || source === "formula") &&
+        !currentResolvedTaxMatches(inputsValue)) {
       return "unavailable";
     }
-    return inputsValue.userAnswerSources?.annual_taxes === "manual"
-      ? "manual"
-      : "official";
+    if (source === "manual") return "manual";
+    return source === "estimated" || source === "formula" ? "estimated" : "official";
   }
 
   /** Apply an automatic tax refresh without overwriting a manual bill. */
@@ -2836,8 +2855,8 @@ export default function Estimate() {
       annualTaxes: nextTax,
       userAnswerSources: {
         ...(current.userAnswerSources ?? {}),
-        annual_taxes: hasOfficialPropertyTax(taxAddress, purchasePrice, occupancy)
-          ? "official"
+        annual_taxes: hasAvailablePropertyTax(taxAddress, purchasePrice, occupancy)
+          ? hcpaTax?.provenance === "estimated" ? "estimated" : "official"
           : "unavailable",
       },
     };
@@ -5772,6 +5791,9 @@ export default function Estimate() {
                       {taxSource() === "official" && (
                         <span className="text-[10px] font-semibold text-emerald-700">OFFICIAL COUNTY DATA</span>
                       )}
+                       {taxSource() === "estimated" && (
+                         <span className="text-[10px] font-semibold text-amber-700">ESTIMATED FORMULA</span>
+                       )}
                       {taxSource() === "unavailable" && (
                         <span className="text-[10px] font-semibold text-amber-700">UNAVAILABLE</span>
                       )}
@@ -5808,7 +5830,9 @@ export default function Estimate() {
                         ? "Manually entered. Price, address, and property-use changes will not overwrite this bill."
                         : taxSource() === "official"
                           ? "Matched to an official county parcel/tax result. Edit to use the bill you provide."
-                          : "Official county data is unavailable for this property. Enter the annual bill manually; no formula estimate is shown."}
+                           : taxSource() === "estimated"
+                             ? "Formula estimate for this county. It is usable for planning, but verify the official bill or enter it manually."
+                             : "Official county data is unavailable for this property. Enter the annual bill manually."}
                     </p>
                   </div>
 
@@ -6119,8 +6143,11 @@ export default function Estimate() {
                              onEdit={() => setEditingPage(3)}
                            />
                           <SummaryRow
-                            label="Annual Property Taxes"
-                            value={taxSource() === "unavailable" ? "Unavailable — enter manually" : `${fmt(inputs.annualTaxes)}/yr`}
+                            label={`Annual Property Taxes${taxSource() === "estimated" ? " (estimate)" : ""}`}
+                            value={taxSource() === "unavailable"
+                              ? "Unavailable — enter manually"
+                              : `${fmt(inputs.annualTaxes)}/yr`}
+                            sub={taxSource() === "estimated" ? "Formula estimate — verify county bill" : undefined}
                             onEdit={() => setEditingPage(3)}
                           />
                           <SummaryRow label="Homeowners Insurance" value={`${fmt(inputs.annualHOIns)}/yr`} onEdit={() => setEditingPage(3)} />
@@ -6394,9 +6421,15 @@ export default function Estimate() {
                       both `calc.pi` and the Interest Rate row
                       above. */}
                   <Row
-                    label="Property Taxes"
+                    label={`Property Taxes${taxSource() === "estimated" ? " (estimate)" : ""}`}
                     value={taxSource() === "unavailable" ? "Unavailable" : `${fmt(calc.monthlyTax)}/mo`}
-                    sub={taxSource() === "unavailable" ? "Enter annual bill manually" : `${fmt(inputs.annualTaxes)}/yr`}
+                    sub={
+                      taxSource() === "unavailable"
+                        ? "Enter annual bill manually"
+                        : taxSource() === "estimated"
+                          ? `${fmt(inputs.annualTaxes)}/yr · Formula estimate — verify county bill`
+                          : `${fmt(inputs.annualTaxes)}/yr`
+                    }
                     link={address && address !== "Unknown Address" ? getCountyTaxLink(address) ?? undefined : undefined}
                   />
                   {/* CDD / non-ad valorem disclosure: when the scraped
@@ -6429,8 +6462,8 @@ export default function Estimate() {
                       data-testid="note-property-tax-operational-error"
                     >
                       <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                       {hcpaTax.operationalError} No formula estimate is shown;
-                       enter the annual bill manually if needed.
+                       {hcpaTax.operationalError} Enter the annual bill manually
+                       if needed.
                     </p>
                   )}
                   {/* Homestead-exemption disclosure. Only shown when the

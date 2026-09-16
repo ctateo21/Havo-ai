@@ -1909,6 +1909,9 @@ function CashBuyTab() {
           const insAnnual = cashBuyInsuranceAnnual(s);
           const monthlyOngoing = cashBuyMonthlyOngoing(s);
           const taxesComplete = hasValidatedCashBuyPropertyTax(s);
+          const taxesEstimated =
+            taxesComplete &&
+            (s.propertyTaxesSource === "estimated" || s.propertyTaxesSource === "formula");
           const occLabel = s.occupancyType ? CASH_OCCUPANCY_LABEL[s.occupancyType] : null;
           return (
             <Card
@@ -1957,8 +1960,13 @@ function CashBuyTab() {
                     )}
                     {taxesComplete ? (
                       <div>
-                        <p className="text-xs text-muted-foreground">Annual Taxes</p>
+                        <p className="text-xs text-muted-foreground">
+                          Annual Taxes{taxesEstimated ? " (estimate)" : ""}
+                        </p>
                         <p className="font-semibold">{formatCurrency(s.propertyTaxes as number)}</p>
+                        {taxesEstimated && (
+                          <p className="text-[11px] text-amber-700">Verify county bill</p>
+                        )}
                       </div>
                     ) : s.purchasePrice != null && (
                       <div>

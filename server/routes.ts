@@ -20,6 +20,7 @@ import {
 } from "@shared/schema";
 import { searchProperties, getPropertyDetails, ZillowSearchParams, ZillowProperty } from "./integrations/zillow";
 import { isHillsboroughCountyAddress } from "@shared/hillsborough-county";
+import { getOtherSupportedCounty } from "../client/src/lib/property-tax-routing";
 import {
   getHillsboroughPurchaseTax,
   getCountyPurchaseTax,
@@ -103,6 +104,20 @@ import {
   scheduleQuoteJob,
   startQuoteJobSweeper,
 } from "./integrations/quoterush-background";
+
+/**
+ * HCPA owns the shared Hillsborough ZIPs, so ZIP membership alone is not
+ * enough to select its route.  The client route plan already has a strong
+ * city hint for cities such as Zephyrhills; ask that helper without the ZIP
+ * so a non-Hillsborough city can veto the ZIP-only HCPA candidate.
+ */
+export function shouldUseHillsboroughPurchaseTaxRoute(
+  address: string,
+): boolean {
+  if (!isHillsboroughCountyAddress(address)) return false;
+  const addressWithoutZip = address.replace(/\b\d{5}(?:-\d{4})?\b/g, " ");
+  return getOtherSupportedCounty(addressWithoutZip) == null;
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // API routes
@@ -676,7 +691,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
         const params = schema.parse(req.body);
 
-        if (!isHillsboroughCountyAddress(params.address)) {
+        if (!shouldUseHillsboroughPurchaseTaxRoute(params.address)) {
           return res.json({
             annualTax: null,
             monthlyTax: null,
@@ -686,14 +701,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
             nonAdValoremPending: false,
             homestead: params.isPrimaryResidence,
             source: "hillsborough-county-estimator-unavailable",
+            estimatorVerified: false,
             operationalError:
               "The address is not in Hillsborough County; no purchase-tax estimate was returned.",
           });
         }
 
-        // Ask the official county estimator boundary.  It fails closed when
-        // the county page/output is unavailable; no client formula fallback
-        // is used here.
+        // Keep the labeled baseline estimate until Hillsborough passes its
+        // live verification gate; only then use the strict official runner.
         const result = await getHillsboroughPurchaseTax({
           address: params.address,
           purchasePrice: params.purchasePrice,
@@ -712,6 +727,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             millageRate: result.millageRate ?? null,
             homestead: params.isPrimaryResidence,
             source: result.source,
+            estimatorVerified: result.estimatorVerified,
             operationalError: result.operationalError,
           });
         }
@@ -745,6 +761,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           nonAdValoremPending: false,
           homestead: true,
           source: "hillsborough-county-estimator-unavailable",
+          estimatorVerified: false,
           operationalError:
             "The official Hillsborough purchase estimator is unavailable.",
         });
@@ -752,9 +769,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   );
 
-  // Non-Hillsborough purchase estimates are served only by a verified
-  // official county-estimator driver.  Parcel/bill integrations belong to
-  // the separate current-owner refinance route and are not substitutes.
+  // Unverified counties retain labeled baseline estimates. Only counties
+  // that pass the live known-answer gate use the strict official runner.
   app.post("/api/property-tax/county", async (req, res) => {
     try {
       const schema = z.object({
@@ -787,6 +803,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         taxDistrict: result.taxDistrict ?? null,
         homestead: p.isPrimaryResidence,
         source: result.source,
+        estimatorVerified: result.estimatorVerified,
         operationalError: result.operationalError,
       });
     } catch (err: any) {

@@ -22,7 +22,8 @@ import {
   getCashBuyScenarios, saveCashBuyScenarios,
   type CashBuyScenario, type CashBuyOccupancyType, type SellerConcessionsMode,
   type CashBuyInsuranceFactors,
-  clearUnvalidatedCashBuyPropertyTax, hasValidatedCashBuyPropertyTax,
+  clearUnvalidatedCashBuyPropertyTax, applyCashBuyFormulaTax,
+  hasValidatedCashBuyPropertyTax,
 } from "@/lib/auth";
 import { notifyNewScenario } from "@/lib/notify-scenario";
 import { normalizePropertyKey } from "@/lib/property-key";
@@ -53,13 +54,13 @@ function makeId(): string {
 }
 
 /**
- * Legacy Cash Buy rows may carry an "official" marker without the exact
- * address/price/occupancy request tuple that produced it. Do not hydrate
- * those values as verified bills. The parcel-specific official lookup is
- * intentionally owned by the separate Cash Buy task.
+ * Legacy Cash Buy rows may carry an "official" or formula marker without the
+ * exact address/price/occupancy request tuple that produced it. Do not
+ * hydrate those values as verified bills. The parcel-specific official
+ * lookup is intentionally owned by the separate Cash Buy task.
  */
 function hydrateOfficialOnlyPropertyTax(scenario: CashBuyScenario): CashBuyScenario {
-  return clearUnvalidatedCashBuyPropertyTax(scenario);
+  return applyCashBuyFormulaTax(clearUnvalidatedCashBuyPropertyTax(scenario));
 }
 
 function sellerConcessionsApplied(s: CashBuyScenario): number {
@@ -282,7 +283,7 @@ export default function CashBuyPage() {
       : undefined;
     if (byAddr) return hydrateOfficialOnlyPropertyTax(byAddr);
     const now = new Date().toISOString();
-    return {
+    return applyCashBuyFormulaTax({
       id: makeId(),
       address: addressFromUrl || "Unknown Address",
       normalizedPropertyKey: addressFromUrl ? normalizePropertyKey(addressFromUrl).key || undefined : undefined,
@@ -301,7 +302,7 @@ export default function CashBuyPage() {
       sellerConcessionsMode: "percent",
       sellerConcessionsPercent: 0,
       sellerConcessionsAmount: 0,
-    };
+    });
   });
 
   // An official tax value is only valid for the exact lookup context that
@@ -325,7 +326,9 @@ export default function CashBuyPage() {
       occupancyType: scenario.occupancyType,
     };
     if (!changed) return;
-    setScenario(prev => clearUnvalidatedCashBuyPropertyTax(prev));
+    setScenario(prev =>
+      applyCashBuyFormulaTax(clearUnvalidatedCashBuyPropertyTax(prev)),
+    );
   }, [scenario.address, scenario.purchasePrice, scenario.occupancyType]);
 
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -483,7 +486,7 @@ export default function CashBuyPage() {
               yearBuilt: Math.round(p.yearBuilt),
             };
           }
-          return clearUnvalidatedCashBuyPropertyTax(next);
+          return applyCashBuyFormulaTax(clearUnvalidatedCashBuyPropertyTax(next));
         });
 
         if (zPrice != null) {
@@ -573,14 +576,14 @@ export default function CashBuyPage() {
         const pct = prev.closingCostsPercent ?? DEFAULT_CLOSING_PERCENT;
         next.closingCosts = Math.round(v * (pct / 100));
       }
-      return clearUnvalidatedCashBuyPropertyTax(next);
+      return applyCashBuyFormulaTax(clearUnvalidatedCashBuyPropertyTax(next));
     });
   }
 
   function setOccupancy(occ: CashBuyOccupancyType) {
     setScenario(prev => {
       const next: CashBuyScenario = { ...prev, occupancyType: occ, occupancyTypeSource: "manual" };
-      return clearUnvalidatedCashBuyPropertyTax(next);
+      return applyCashBuyFormulaTax(clearUnvalidatedCashBuyPropertyTax(next));
     });
   }
 
@@ -594,7 +597,12 @@ export default function CashBuyPage() {
   }
 
   function setPropertyTaxes(v: number) {
-    setScenario(prev => ({ ...prev, propertyTaxes: v, propertyTaxesSource: "manual" }));
+    setScenario(prev => ({
+      ...prev,
+      propertyTaxes: v,
+      propertyTaxesSource: "manual",
+      propertyTaxesRequest: undefined,
+    }));
   }
 
   function setHomeownersInsurance(v: number) {
@@ -779,6 +787,10 @@ export default function CashBuyPage() {
     ?? simIns
     ?? baselineInsurance;
   const hasPropertyTax = hasValidatedCashBuyPropertyTax(scenario);
+  const propertyTaxEstimate =
+    hasPropertyTax &&
+    (scenario.propertyTaxesSource === "estimated" ||
+      scenario.propertyTaxesSource === "formula");
   const ongoingMonthly = hasPropertyTax
     ? Math.round(
       (scenario.propertyTaxes ?? 0) / 12 +
@@ -884,7 +896,7 @@ export default function CashBuyPage() {
                       heading: "Ongoing Costs",
                       rows: [
                         {
-                          label: "Annual property taxes",
+                          label: `Annual property taxes${propertyTaxEstimate ? " (estimate)" : ""}`,
                           value: hasPropertyTax
                             ? formatCurrency(scenario.propertyTaxes ?? 0)
                             : "Unavailable — enter manually",
@@ -1137,12 +1149,14 @@ export default function CashBuyPage() {
             <CardHeader className="pb-2"><CardTitle className="text-sm">Ongoing Costs</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               <NumRow
-                label="Annual Property Taxes"
+                label={`Annual Property Taxes${propertyTaxEstimate ? " (estimate)" : ""}`}
                 hint={`${(scenario as any).propertyTaxesSource === "manual" && hasPropertyTax
                   ? "Manually entered. Editing price or property use won't overwrite this."
                   : (scenario as any).propertyTaxesSource === "official" && hasPropertyTax
                     ? "Official county estimator result. Editing price or property use won't overwrite this."
-                   : "Official county data unavailable — enter the annual bill manually. No formula estimate is shown."}${hasPropertyTax
+                   : propertyTaxEstimate
+                     ? "Formula estimate for this county. Verify the official bill or enter it manually."
+                     : "Official county data unavailable — enter the annual bill manually."}${hasPropertyTax
                      ? ` · ≈ ${formatCurrency(Math.round((scenario.propertyTaxes ?? 0) / 12))}/mo`
                      : ""}`}
                 value={scenario.propertyTaxes ?? 0}
@@ -1150,6 +1164,11 @@ export default function CashBuyPage() {
                 min={0} max={50_000} step={50} prefix="$" suffix="/yr"
                 unavailable={!hasPropertyTax}
                 slider={false}
+                badge={propertyTaxEstimate ? (
+                  <Badge variant="outline" className="text-[10px] font-normal h-5 text-amber-700 border-amber-300">
+                    Estimate
+                  </Badge>
+                ) : undefined}
               />
               <NumRow
                 label="Annual Homeowners Insurance"
