@@ -53,6 +53,10 @@ import {
 } from "@shared/quoterush-property-defaults";
 import { resolvePurchasePriceProvenance } from "@shared/purchase-price-provenance";
 import { InsuranceEstimateForm } from "@/components/insurance/insurance-estimate-form";
+import {
+  FLOOD_HOA_ASSUMPTION_NOTE,
+  suppressSeparateFloodInsurance,
+} from "@shared/flood-insurance-policy";
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -243,6 +247,31 @@ function resolvePolicyTypeForAddress(addr: string): {
   return { policyType: def ?? "", source: def ? "default_rule" : null };
 }
 
+function resolvePhysicalPropertyTypeForAddress(addr: string): string {
+  if (!addr || !addr.trim()) return "";
+  const ins = getInsuranceScenarios().find(
+    s => isSamePropertyAddress(s.address, addr)
+  );
+  const purchase = getPurchaseScenarios().find(
+    p => isSamePropertyAddress(p.address, addr)
+  );
+  const cash = getCashBuyScenarios().find(
+    c => isSamePropertyAddress(c.address, addr)
+  );
+  const loan = getTrackedLoans().find(
+    l => isSamePropertyAddress(l.propertyAddress, addr)
+  );
+  return resolveInsurancePropertyTypeForAddress({
+    insurancePropertyType: ins?.propertyType,
+    insurancePropertyTypeSource: ins?.propertyTypeSource,
+    sourcePropertyTypes: [
+      purchase?.propertyType,
+      cash?.propertyType,
+      loan?.physicalPropertyType,
+    ],
+  }).propertyType;
+}
+
 function defaultRebuildFor(address: string, priceParam: string | null): number {
   const fromScenarios = getKnownPropertyValueForAddress(address);
   const fromParam = priceParam ? parseInt(priceParam, 10) : 0;
@@ -388,6 +417,20 @@ export default function InsuranceDashboard() {
   const params = new URLSearchParams(search);
   const addressParam = params.get("address") || "";
   const priceParam = params.get("price");
+  const physicalPropertyType = resolvePhysicalPropertyTypeForAddress(addressParam);
+  const normalizedPhysicalPropertyType = physicalPropertyType
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  const isLand =
+    normalizedPhysicalPropertyType === "land" ||
+    normalizedPhysicalPropertyType === "lot" ||
+    normalizedPhysicalPropertyType.includes("vacantland") ||
+    normalizedPhysicalPropertyType.includes("vacantlot") ||
+    normalizedPhysicalPropertyType.includes("residentialland") ||
+    normalizedPhysicalPropertyType.includes("residentiallot");
+  const assumesHoaFloodCoverage =
+    suppressSeparateFloodInsurance(physicalPropertyType) && !isLand;
   // Default Coverage A / Rebuild Cost from (in order): a MANUAL
   // InsuranceScenario.coverageA override (preserves a user-typed value
   // across logout/login), then the policy-type-aware default derived
@@ -3046,7 +3089,23 @@ export default function InsuranceDashboard() {
           <div className="flex gap-3 bg-amber-50 border border-amber-200 rounded-xl p-4">
             <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
             <p className="text-sm text-amber-900 leading-relaxed">
-              <strong>Flood insurance is not included in this estimate.</strong> Properties in AE or VE flood zones require a separate NFIP or private flood policy — often $800–$3,500+/year depending on zone and elevation. Ask your agent about an elevation certificate to reduce flood premiums.
+              {assumesHoaFloodCoverage ? (
+                <>
+                  <strong>No separate flood premium is estimated.</strong>{" "}
+                  {FLOOD_HOA_ASSUMPTION_NOTE} FEMA flood-zone and risk information
+                  still applies; confirm any elevation-certificate fees with your agent.
+                </>
+              ) : isLand ? (
+                <>
+                  <strong>No building flood premium is estimated for land.</strong>{" "}
+                  FEMA flood-zone and risk information still applies. Confirm any
+                  required coverage and elevation-certificate fees with your agent.
+                </>
+              ) : (
+                <>
+                  <strong>Flood insurance is not included in this estimate.</strong> Properties in AE or VE flood zones require a separate NFIP or private flood policy — often $800–$3,500+/year depending on zone and elevation. Ask your agent about an elevation certificate to reduce flood premiums.
+                </>
+              )}
             </p>
           </div>
 

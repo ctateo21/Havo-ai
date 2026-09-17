@@ -1,9 +1,0 @@
-Collier County Property Appraiser
-Tax Estimator
-Parcel ID 55252840005
-Site Address 112 PALMETTO DUNES CIR
-Please enter your Purchase Price ($) 525,000
-Do you plan to apply for Homestead Exemption? No
-Approximate Ad Valorem Taxes ($) 5,514
-Approximate Non-Ad Valorem Assessments ($) 0
-Total Tax ($) 5,514

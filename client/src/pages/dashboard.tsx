@@ -28,7 +28,6 @@ import {
   type CashBuyScenario,
   type InsuranceScenario, type PurchaseScenario,
   type SellerScenario, type SellerScenarioStatus,
-  hasValidatedCashBuyPropertyTax, hasValidatedPurchasePropertyTax,
 } from "@/lib/auth";
 import {
   normalizePropertyKey,
@@ -73,6 +72,7 @@ import {
   type BulkAddress,
 } from "@/lib/insurance-from-property";
 import { AlertBell } from "@/components/dashboard/alert-bell";
+import { effectiveAnnualFloodInsurance } from "@shared/flood-insurance-policy";
 
 interface LiveRatesResponse { rates: LiveRate[]; source: string; disclaimer: string; asOf: string; }
 
@@ -649,8 +649,7 @@ function PurchaseTab() {
       {/* Property rows */}
       <div className="space-y-3">
         {scenarios.map(s => {
-          const taxesComplete = hasValidatedPurchasePropertyTax(s);
-          const dtiPct = taxesComplete && s.dti != null ? Math.round(s.dti * 100) : null;
+          const dtiPct = s.dti != null ? Math.round(s.dti * 100) : null;
           return (
             <Card
               key={s.id}
@@ -668,17 +667,12 @@ function PurchaseTab() {
                         <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
                           <Calendar className="h-3 w-3" /> Saved {formatDate(s.savedAt)}
                         </p>
-                        {!taxesComplete && (
-                          <p className="text-xs text-amber-700 mt-1">
-                            Annual property taxes required for complete payment and qualification
-                          </p>
-                        )}
                       </div>
                     </div>
                   </div>
 
                   {/* Qualifies badge */}
-                  {s.qualifies != null && taxesComplete && (
+                  {s.qualifies != null && (
                     <div className="flex lg:block">
                       <Badge
                         variant="outline"
@@ -702,13 +696,13 @@ function PurchaseTab() {
                           <p className="font-semibold">{formatCurrency(s.price)}</p>
                         </div>
                       )}
-                      {s.monthlyPayment != null && taxesComplete && (
+                      {s.monthlyPayment != null && (
                         <div>
                           <p className="text-xs text-muted-foreground">Est. Payment</p>
                           <p className="font-semibold">{formatCurrency(s.monthlyPayment)}/mo</p>
                         </div>
                       )}
-                      {s.cashToClose != null && taxesComplete && (
+                      {s.cashToClose != null && (
                         <div>
                           <p className="text-xs text-muted-foreground">Cash to Close</p>
                           <p className="font-semibold">{formatCurrency(s.cashToClose)}</p>
@@ -1766,18 +1760,19 @@ function cashBuyInsuranceAnnual(s: CashBuyScenario): number | null {
 }
 
 // Ongoing monthly carry — matches the "Monthly carrying cost"
-// summary on the cash-buy detail page when taxes are validated. A missing
-// tax value returns null rather than silently adding $0 to a "total".
-function cashBuyMonthlyOngoing(s: CashBuyScenario): number | null {
-  if (!hasValidatedCashBuyPropertyTax(s)) return null;
-  const taxesMo = (s.propertyTaxes as number) / 12;
+// summary on the cash-buy detail page (taxes + insurance + HOA).
+function cashBuyMonthlyOngoing(s: CashBuyScenario): number {
+  const taxesMo = (s.propertyTaxes ?? 0) / 12;
   const insAnnual = cashBuyInsuranceAnnual(s) ?? 0;
   const insMo = insAnnual / 12;
   const hoaMo = s.hoaMonthly ?? 0;
   // Flood insurance only adds when the property is in a flood zone
   // (annualFloodIns > 0). Keeps the overview card in sync with the
   // cash-buy detail view's "Monthly carrying cost".
-  const floodMo = (s.annualFloodIns ?? 0) / 12;
+  const floodMo = effectiveAnnualFloodInsurance(
+    s.propertyType,
+    s.annualFloodIns,
+  ) / 12;
   return Math.round(taxesMo + insMo + hoaMo + floodMo);
 }
 
@@ -1908,7 +1903,6 @@ function CashBuyTab() {
           const ctc = cashBuyCashToCloseSnapshot(s);
           const insAnnual = cashBuyInsuranceAnnual(s);
           const monthlyOngoing = cashBuyMonthlyOngoing(s);
-          const taxesComplete = hasValidatedCashBuyPropertyTax(s);
           const occLabel = s.occupancyType ? CASH_OCCUPANCY_LABEL[s.occupancyType] : null;
           return (
             <Card
@@ -1931,11 +1925,10 @@ function CashBuyTab() {
                     </div>
                   </div>
 
-                   {/* Six-field overview. 2 cols on mobile, 3 on sm, 6 across
+                  {/* Six-field overview. 2 cols on mobile, 3 on sm, 6 across
                       on lg so all fields fit on a single row on desktop.
                       Insurance + Ongoing Monthly Costs are derived to match
-                       the cash-buy detail page (same helpers); ongoing cost
-                       is explicitly unavailable until taxes are entered. */}
+                      the cash-buy detail page exactly (same helpers). */}
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-2 text-sm flex-1">
                     {s.purchasePrice != null && (
                       <div>
@@ -1955,16 +1948,10 @@ function CashBuyTab() {
                         <p className="font-semibold">{formatCurrency(s.closingCosts)}</p>
                       </div>
                     )}
-                    {taxesComplete ? (
+                    {s.propertyTaxes != null && (
                       <div>
                         <p className="text-xs text-muted-foreground">Annual Taxes</p>
-                        <p className="font-semibold">{formatCurrency(s.propertyTaxes as number)}</p>
-                      </div>
-                    ) : s.purchasePrice != null && (
-                      <div>
-                        <p className="text-xs text-muted-foreground">Annual Taxes</p>
-                        <p className="font-semibold text-amber-700">Unavailable</p>
-                        <p className="text-[11px] text-muted-foreground">Enter manually</p>
+                        <p className="font-semibold">{formatCurrency(s.propertyTaxes)}</p>
                       </div>
                     )}
                     {insAnnual != null && (
@@ -1980,19 +1967,10 @@ function CashBuyTab() {
                     )}
                     {s.purchasePrice != null && (
                       <div data-testid={`cash-overview-monthly-${s.id}`}>
-                         <p className="text-xs text-muted-foreground">
-                           Ongoing Monthly{monthlyOngoing == null ? " (incomplete)" : ""}
-                         </p>
-                         {monthlyOngoing == null ? (
-                           <p className="font-semibold text-amber-700">Unavailable</p>
-                         ) : (
-                           <p className="font-semibold">
-                             {formatCurrency(monthlyOngoing)}<span className="text-xs font-normal text-muted-foreground">/mo</span>
-                           </p>
-                         )}
-                         {monthlyOngoing == null && (
-                           <p className="text-[11px] text-muted-foreground">Enter annual taxes</p>
-                         )}
+                        <p className="text-xs text-muted-foreground">Ongoing Monthly</p>
+                        <p className="font-semibold">
+                          {formatCurrency(monthlyOngoing)}<span className="text-xs font-normal text-muted-foreground">/mo</span>
+                        </p>
                         {s.hoaMonthly != null && s.hoaMonthly > 0 && (
                           <p className="text-[11px] text-muted-foreground">
                             incl. HOA {formatCurrency(s.hoaMonthly)}

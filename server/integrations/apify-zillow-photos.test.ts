@@ -151,5 +151,5 @@ test("Zillow current actor addresses retain strict unit matching", () => {
     row,
   );
   assert.equal(wrongUnit.accept, false);
-  assert.equal(wrongUnit.reason, "street name mismatch");
+  assert.equal(wrongUnit.reason, "unit mismatch");
 });

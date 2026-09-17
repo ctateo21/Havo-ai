@@ -7,20 +7,15 @@ import {
 import { normalizePropertyKey } from "./property-key";
 import { trackEvent } from "./posthog";
 import {
+  effectiveAnnualFloodInsurance,
+  sanitizeSavedPurchaseFloodSnapshot,
+  suppressSeparateFloodInsurance,
+} from "../../../shared/flood-insurance-policy";
+import {
   syncPropertyValueAcrossTabs,
   isPropertyValueSyncInFlight,
   type PropertyValueSourceTab,
 } from "./property-value-sync";
-import {
-  clearUnvalidatedCashBuyPropertyTax,
-} from "./cash-buy-tax";
-import type { CashBuyOfficialTaxRequest } from "./cash-buy-tax";
-export {
-  clearUnvalidatedCashBuyPropertyTax,
-  hasValidatedCashBuyPropertyTax,
-  hasValidatedPurchasePropertyTax,
-} from "./cash-buy-tax";
-export type { CashBuyOfficialTaxRequest } from "./cash-buy-tax";
 
 /** Stamp source = "manual" on rows whose value field changed between
  *  two save calls — but only when the change did NOT come from the
@@ -474,8 +469,8 @@ export type CashBuyClosingCostsSource = "default_percent" | "manual";
 export type CashBuyHoaSource = "zillow" | "manual" | "unknown";
 /** Manual-lock provenance for fields whose values have other in-app
  *  writers (defaults / Zillow / property cache / cross-tab sync). Once
- *  stamped `"manual"` or `"official"`, those other writers must skip it. */
-export type CashBuyManualSource = "manual" | "official" | "default" | "zillow";
+ *  stamped `"manual"`, those other writers must skip the field. */
+export type CashBuyManualSource = "manual" | "default" | "zillow";
 export type CashBuyZillowStatus =
   | "loading" | "loaded_from_cache" | "loaded_from_zillow" | "error";
 
@@ -515,14 +510,9 @@ export interface CashBuyScenario {
    *  writer; persisted so future defaults can respect it. */
   occupancyTypeSource?: CashBuyManualSource;
   propertyTaxes?: number;        // annual
-  /** Provenance for `propertyTaxes`. Only manual or official values may be
-   *  shown as a borrower-visible annual tax amount. */
+  /** Manual-lock for `propertyTaxes` — blocks the price/occupancy-driven
+   *  `computeAnnualTaxes` recompute in `setPurchasePrice`/`setOccupancy`. */
   propertyTaxesSource?: CashBuyManualSource;
-  /** Request context that produced an official tax value. Official cash-buy
-   * taxes are only reusable while this exact address / price / occupancy
-   * tuple still matches the scenario. Older rows have no tuple and must be
-   * treated as stale rather than displayed as verified taxes. */
-  propertyTaxesRequest?: CashBuyOfficialTaxRequest;
   homeownersInsurance?: number;  // annual (synced from simulator midpoint)
   /** Manual-lock for `homeownersInsurance` — blocks both the 0.75%-of-price
    *  default and the insurance-simulator overwrite. */
@@ -733,12 +723,17 @@ function rowToProfile(row: any): AuthUser {
 }
 
 function rowToPurchase(row: any): PurchaseScenario {
+  const floodSnapshot = sanitizeSavedPurchaseFloodSnapshot(
+    row.property_type,
+    numOrUndef(row.annual_flood_ins),
+    numOrUndef(row.monthly_payment),
+  );
   return {
     id: row.id,
     address: row.address,
     savedAt: row.saved_at,
     price: row.price ?? undefined,
-    monthlyPayment: row.monthly_payment ?? undefined,
+    monthlyPayment: floodSnapshot.monthlyPayment ?? undefined,
     downPayment: row.down_payment ?? undefined,
     interestRate: row.interest_rate ?? undefined,
     cashToClose: row.cash_to_close ?? undefined,
@@ -846,7 +841,7 @@ function rowToPurchase(row: any): PurchaseScenario {
         : undefined,
     annualTaxes: numOrUndef(row.annual_taxes),
     annualHOIns: numOrUndef(row.annual_ho_ins),
-    annualFloodIns: numOrUndef(row.annual_flood_ins),
+    annualFloodIns: floodSnapshot.annualFloodIns ?? undefined,
     hoaMonthly: numOrUndef(row.hoa_monthly),
     cddAnnual: numOrUndef(row.cdd_annual),
     impactWindows:
@@ -884,6 +879,11 @@ function purchaseToRow(s: PurchaseScenario, userId: string) {
   // (`now()` / `'draft'`) so we don't have to send them — the DB fills
   // them in on insert.
   const normKey = normalizePropertyKey(s.address).key || null;
+  const floodSnapshot = sanitizeSavedPurchaseFloodSnapshot(
+    s.propertyType,
+    s.annualFloodIns,
+    s.monthlyPayment,
+  );
   return {
     id: s.id,
     user_id: userId,
@@ -893,7 +893,7 @@ function purchaseToRow(s: PurchaseScenario, userId: string) {
     normalized_property_key: normKey,
     updated_at: new Date().toISOString(),
     price: s.price ?? null,
-    monthly_payment: s.monthlyPayment ?? null,
+    monthly_payment: floodSnapshot.monthlyPayment ?? null,
     down_payment: s.downPayment ?? null,
     interest_rate: s.interestRate ?? null,
     cash_to_close: s.cashToClose ?? null,
@@ -950,8 +950,14 @@ function purchaseToRow(s: PurchaseScenario, userId: string) {
       ? { annual_taxes: s.annualTaxes } : {}),
     ...(typeof s.annualHOIns === "number" && Number.isFinite(s.annualHOIns)
       ? { annual_ho_ins: s.annualHOIns } : {}),
-    ...(typeof s.annualFloodIns === "number" && Number.isFinite(s.annualFloodIns)
-      ? { annual_flood_ins: s.annualFloodIns } : {}),
+    ...(typeof floodSnapshot.annualFloodIns === "number" &&
+      Number.isFinite(floodSnapshot.annualFloodIns)
+      || suppressSeparateFloodInsurance(s.propertyType)
+      ? { annual_flood_ins: effectiveAnnualFloodInsurance(
+          s.propertyType,
+          floodSnapshot.annualFloodIns,
+        ) }
+      : {}),
     ...(typeof s.hoaMonthly === "number" && Number.isFinite(s.hoaMonthly)
       ? { hoa_monthly: s.hoaMonthly } : {}),
     ...(typeof s.cddAnnual === "number" && Number.isFinite(s.cddAnnual)
@@ -1220,7 +1226,7 @@ function rowToCashBuy(row: any): CashBuyScenario {
     hs === "zillow" || hs === "manual" || hs === "unknown" ? hs : undefined;
 
   const toManualSource = (v: any): CashBuyManualSource | undefined =>
-    v === "manual" || v === "official" || v === "default" || v === "zillow" ? v : undefined;
+    v === "manual" || v === "default" || v === "zillow" ? v : undefined;
   const pps = row.purchase_price_source;
   const purchasePriceSource: CashBuyPurchasePriceSource | undefined =
     pps === "default" || pps === "user" || pps === "zillow_cache" ||
@@ -1261,7 +1267,9 @@ function rowToCashBuy(row: any): CashBuyScenario {
     propertyTaxesSource: toManualSource(row.property_taxes_source),
     homeownersInsurance: row.homeowners_insurance != null ? Number(row.homeowners_insurance) : undefined,
     homeownersInsuranceSource: toManualSource(row.homeowners_insurance_source),
-    annualFloodIns: row.annual_flood_ins != null ? Number(row.annual_flood_ins) : undefined,
+    annualFloodIns: suppressSeparateFloodInsurance(row.property_type)
+      ? 0
+      : row.annual_flood_ins != null ? Number(row.annual_flood_ins) : undefined,
     hoaMonthly,
     hoaSource,
     closingCosts: row.buyer_closing_costs != null ? Number(row.buyer_closing_costs) : undefined,
@@ -1301,7 +1309,9 @@ function cashBuyToRow(s: CashBuyScenario, userId: string) {
     property_taxes_source: s.propertyTaxesSource ?? null,
     homeowners_insurance: s.homeownersInsurance ?? null,
     homeowners_insurance_source: s.homeownersInsuranceSource ?? null,
-    annual_flood_ins: s.annualFloodIns ?? null,
+    annual_flood_ins: suppressSeparateFloodInsurance(s.propertyType)
+      ? 0
+      : s.annualFloodIns ?? null,
     insurance_premium_annual: s.insurancePremiumAnnual ?? null,
     insurance_factors: s.insuranceFactors ?? null,
     user_answer_sources: s.userAnswerSources ?? null,
@@ -1581,12 +1591,7 @@ async function loadScenarios(userId: string) {
     notifyError({ table: "cash_buy_scenarios", message: cRes.error.message });
     _cashBuyScenarios = [];
   } else {
-    // Legacy official cash-buy tax values have no request tuple in the
-    // canonical row. Clear them at hydration instead of exposing them as
-    // verified taxes; manual values (including $0) remain untouched.
-    _cashBuyScenarios = (cRes.data ?? [])
-      .map(rowToCashBuy)
-      .map(clearUnvalidatedCashBuyPropertyTax);
+    _cashBuyScenarios = (cRes.data ?? []).map(rowToCashBuy);
   }
   // Tolerate missing seller_scenarios table on environments where the latest
   // schema.sql has not yet been re-run. Other tabs continue to work.

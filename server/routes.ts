@@ -677,23 +677,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const params = schema.parse(req.body);
 
         if (!isHillsboroughCountyAddress(params.address)) {
-          return res.json({
-            annualTax: null,
-            monthlyTax: null,
-            adValoremTax: null,
-            nonAdValoremTax: 0,
-            nonAdValoremLines: [],
-            nonAdValoremPending: false,
-            homestead: params.isPrimaryResidence,
-            source: "hillsborough-county-estimator-unavailable",
-            operationalError:
-              "The address is not in Hillsborough County; no purchase-tax estimate was returned.",
-          });
+          console.log(
+            "[hcpa-tax] ZIP is outside Hillsborough, using client fallback",
+          );
+          return res.json({ useFallback: true });
         }
 
-        // Ask the official county estimator boundary.  It fails closed when
-        // the county page/output is unavailable; no client formula fallback
-        // is used here.
+        // Try via the general purchase-tax service (general cache first,
+        // then the live HCPA API).
         const result = await getHillsboroughPurchaseTax({
           address: params.address,
           purchasePrice: params.purchasePrice,
@@ -708,26 +699,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
             nonAdValoremTax: result.nonAdValoremTax,
             nonAdValoremLines: result.nonAdValoremLines ?? [],
             nonAdValoremPending: result.nonAdValoremPending ?? false,
-            taxDistrict: result.taxDistrict ?? null,
-            millageRate: result.millageRate ?? null,
+            taxDistrict: result.taxDistrict ?? "",
+            millageRate: result.millageRate ?? 0,
             homestead: params.isPrimaryResidence,
             source: result.source,
             operationalError: result.operationalError,
           });
         }
 
-        return res.json({
-          annualTax: null,
-          monthlyTax: null,
-          adValoremTax: null,
-          nonAdValoremTax: 0,
-          nonAdValoremLines: [],
-          nonAdValoremPending: false,
-          homestead: params.isPrimaryResidence,
-          source: "hillsborough-county-estimator-unavailable",
-          operationalError:
-            "The official Hillsborough purchase estimator is unavailable.",
-        });
+        // Parcel not found — tell client to use its formula fallback
+        console.log(
+          "[hcpa-tax] parcel not found, " +
+          "using client fallback for:",
+          params.address
+        );
+        res.json({ useFallback: true });
 
       } catch (err: any) {
         console.error("[hcpa-tax] error:", err);
@@ -736,25 +722,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
             error: "Invalid parameters"
           });
         }
-        return res.json({
-          annualTax: null,
-          monthlyTax: null,
-          adValoremTax: null,
-          nonAdValoremTax: 0,
-          nonAdValoremLines: [],
-          nonAdValoremPending: false,
-          homestead: true,
-          source: "hillsborough-county-estimator-unavailable",
-          operationalError:
-            "The official Hillsborough purchase estimator is unavailable.",
-        });
+        res.json({ useFallback: true });
       }
     }
   );
 
-  // Non-Hillsborough purchase estimates are served only by a verified
-  // official county-estimator driver.  Parcel/bill integrations belong to
-  // the separate current-owner refinance route and are not substitutes.
+  // All non-Hillsborough counties use one shared resolver → TaxSys bill →
+  // exact millage cache path. Polk resolves parcel identity but remains an
+  // explicitly labeled formula fallback until its Phenix collector is parsed.
   app.post("/api/property-tax/county", async (req, res) => {
     try {
       const schema = z.object({
@@ -783,8 +758,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         nonAdValoremPending: result.nonAdValoremPending ?? false,
         county,
         parcelId: result.parcelId,
-        millageRate: result.millageRate ?? null,
-        taxDistrict: result.taxDistrict ?? null,
+        millageRate: result.millageRate ?? 0,
+        taxDistrict: result.taxDistrict ?? county,
         homestead: p.isPrimaryResidence,
         source: result.source,
         operationalError: result.operationalError,
@@ -794,24 +769,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ error: "Invalid parameters" });
       }
-      return res.json({
-        annualTax: null,
-        monthlyTax: null,
-        adValoremTax: null,
-        nonAdValoremTax: 0,
-        nonAdValoremLines: [],
-        nonAdValoremPending: false,
-        county: typeof req.body?.county === "string"
-          ? req.body.county.toLowerCase().trim()
-          : null,
-        parcelId: null,
-        millageRate: null,
-        taxDistrict: null,
-        homestead: Boolean(req.body?.isPrimaryResidence ?? true),
-        source: "county-estimator-unavailable",
-        operationalError:
-          "The official county purchase estimator is unavailable.",
-      });
+      res.json({ useFallback: true });
     }
   });
 

@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { loadGoogleMapsApi } from '@/lib/script-loader';
+import {
+  addressWithUnit,
+  componentsWithUnit,
+  parsePlacesUnit,
+} from '@/lib/google-places-unit';
 
 interface GooglePlacesHookProps {
   apiKey?: string;
@@ -106,7 +111,8 @@ export function useGooglePlaces({
         inputElement.setAttribute('aria-controls', listId);
 
         let sessionToken: any | null = null;
-        let predictions: any[] = [];
+        type UnitAwarePrediction = Readonly<{ prediction: any; unit?: string }>;
+        let predictions: UnitAwarePrediction[] = [];
         let selectedIndex = -1;
         let debounceTimer: ReturnType<typeof setTimeout> | undefined;
         let blurTimer: ReturnType<typeof setTimeout> | undefined;
@@ -150,7 +156,7 @@ export function useGooglePlaces({
           }
         };
 
-        const selectPrediction = async (prediction: any) => {
+        const selectPrediction = async ({ prediction, unit }: UnitAwarePrediction) => {
           requestId += 1;
           const currentSelectionGeneration = ++selectionGeneration;
           hideList();
@@ -158,7 +164,7 @@ export function useGooglePlaces({
           // reference now so any new typing starts a separate session while
           // this selection's place details are still in flight.
           sessionToken = null;
-          const fallbackAddress = prediction?.text?.text || '';
+          const fallbackAddress = addressWithUnit(prediction?.text?.text || '', unit);
           let place: any;
 
           try {
@@ -171,7 +177,7 @@ export function useGooglePlaces({
           }
 
           if (!active || currentSelectionGeneration !== selectionGeneration) return;
-          const formattedAddress = place?.formattedAddress || fallbackAddress;
+          const formattedAddress = addressWithUnit(place?.formattedAddress || fallbackAddress, unit);
           if (!formattedAddress) return;
 
           inputElement.value = formattedAddress;
@@ -179,28 +185,36 @@ export function useGooglePlaces({
           const result: GooglePlaceResult = {
             formatted_address: formattedAddress,
             place_id: place?.id || prediction?.placeId,
-            address_components: place?.addressComponents?.map((component: any) => ({
+            address_components: componentsWithUnit(place?.addressComponents?.map((component: any) => ({
               long_name: component.longText || '',
               short_name: component.shortText || component.longText || '',
               types: component.types || [],
-            })),
+            })), unit),
             geometry: location ? { location } : undefined,
             rawPlace: place,
           };
           onPlaceSelectedRef.current?.(result);
         };
 
-        const renderPredictions = (nextPredictions: any[]) => {
+        const renderPredictions = (nextPredictions: UnitAwarePrediction[]) => {
           predictions = nextPredictions.slice(0, 6);
           selectedIndex = -1;
           list.replaceChildren();
 
-          predictions.forEach((prediction, index) => {
+          predictions.forEach((entry, index) => {
+            const { prediction, unit } = entry;
             const option = document.createElement('div');
             option.id = `${listId}-option-${index}`;
             option.setAttribute('role', 'option');
             option.setAttribute('aria-selected', 'false');
-            option.textContent = prediction?.text?.text || '';
+            option.textContent = addressWithUnit(prediction?.text?.text || '', unit);
+            if (unit) {
+              option.setAttribute(
+                'aria-label',
+                `${option.textContent}. Unit ${unit} was entered by you.`,
+              );
+              option.title = 'Unit entered by you; building address suggested by Google';
+            }
             Object.assign(option.style, {
               padding: '0.7rem 0.85rem',
               cursor: 'pointer',
@@ -214,7 +228,7 @@ export function useGooglePlaces({
               highlight();
             });
             option.addEventListener('mousedown', event => event.preventDefault());
-            option.addEventListener('click', () => void selectPrediction(prediction));
+            option.addEventListener('click', () => void selectPrediction(entry));
             list.appendChild(option);
           });
 
@@ -225,6 +239,7 @@ export function useGooglePlaces({
 
         const requestPredictions = async () => {
           const input = inputElement.value.trim();
+          const parsedInput = parsePlacesUnit(input);
           const currentRequestId = ++requestId;
           if (input.length < 3) {
             abandonSession();
@@ -233,7 +248,7 @@ export function useGooglePlaces({
 
           try {
             const response = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
-              input,
+              input: parsedInput.buildingInput,
               includedRegionCodes: ['us'],
               sessionToken: getSessionToken(),
             });
@@ -241,7 +256,10 @@ export function useGooglePlaces({
             renderPredictions(
               (response.suggestions || [])
                 .map((suggestion: any) => suggestion.placePrediction)
-                .filter(Boolean),
+                .filter(Boolean)
+                .map((prediction: any) =>
+                  Object.freeze({ prediction, unit: parsedInput.unit }),
+                ),
             );
           } catch (error) {
             if (currentRequestId === requestId) hideList();
