@@ -22,24 +22,21 @@ import {
   getCashBuyScenarios, saveCashBuyScenarios,
   type CashBuyScenario, type CashBuyOccupancyType, type SellerConcessionsMode,
   type CashBuyInsuranceFactors,
-  clearUnvalidatedCashBuyPropertyTax, hasValidatedCashBuyPropertyTax,
 } from "@/lib/auth";
 import { notifyNewScenario } from "@/lib/notify-scenario";
 import { normalizePropertyKey } from "@/lib/property-key";
 import { trackEvent } from "@/lib/posthog";
-import {
-  cashBuyTaxBadge,
-  cashBuyTaxHint,
-  canApplyCashBuyTaxResult,
-  lookupCashBuyPropertyTax,
-  sameCashBuyTaxRequest,
-  type CashBuyTaxLookupState,
-} from "@/lib/cash-buy-property-tax";
+import { estimateAnnualTax } from "@/lib/county-tax-estimator";
 import { calculateDefaultHomeownersInsurance } from "@/lib/insurance-default";
 import { apiRequest } from "@/lib/queryClient";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { PHYSICAL_PROPERTY_TYPE_OPTIONS, zillowToPhysicalPropertyType } from "@/lib/property-type-options";
+import {
+  effectiveAnnualFloodInsurance,
+  FLOOD_HOA_ASSUMPTION_NOTE,
+  suppressSeparateFloodInsurance,
+} from "@shared/flood-insurance-policy";
 import PropertyInsuranceSimulator, {
   DEFAULT_INSURANCE_FACTORS, getInsRegionFromAddress, calcInsurancePremium,
   type InsuranceFactors,
@@ -58,16 +55,6 @@ function makeId(): string {
     return crypto.randomUUID();
   }
   return `cashbuy_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-}
-
-/**
- * Legacy Cash Buy rows may carry an "official" marker without the exact
- * address/price/occupancy request tuple that produced it. Do not hydrate
- * those values as verified bills. The parcel-specific official lookup is
- * intentionally owned by the separate Cash Buy task.
- */
-function hydrateOfficialOnlyPropertyTax(scenario: CashBuyScenario): CashBuyScenario {
-  return clearUnvalidatedCashBuyPropertyTax(scenario);
 }
 
 function sellerConcessionsApplied(s: CashBuyScenario): number {
@@ -89,6 +76,14 @@ function cashToCloseOf(s: CashBuyScenario): number {
   const price = s.purchasePrice ?? 0;
   const closing = s.closingCosts ?? 0;
   return Math.max(0, Math.round(price + closing - sellerConcessionsApplied(s)));
+}
+
+/** Purchase-tab tax logic — same county-aware estimator, with primary vs
+ *  non-primary homestead flag. Cash Buy has no VA flow, so the VA-disability
+ *  branch in `computePropertyTax` is not applicable. */
+function computeAnnualTaxes(address: string, price: number, occ: CashBuyOccupancyType): number {
+  if (!address || price <= 0) return 0;
+  return estimateAnnualTax(address, price, occ === "primary");
 }
 
 const DEFAULT_CLOSING_PERCENT = 2.0;
@@ -132,7 +127,6 @@ function legacyInsuranceYearIndex(yearBuilt: number): number {
 interface NumRowProps {
   label: string;
   hint?: string;
-  testId?: string;
   value: number;
   onChange: (v: number) => void;
   min: number;
@@ -142,28 +136,24 @@ interface NumRowProps {
   suffix?: string;
   decimals?: number;
   badge?: React.ReactNode;
-  /** For unavailable official-only values, leave the editable field blank
-   *  instead of rendering the internal zero sentinel as a verified amount. */
-  unavailable?: boolean;
   /** When false, hides the slider and shows just an editable number
    *  field (user types the value). Defaults to true. */
   slider?: boolean;
 }
 
 function NumRow({
-  label, hint, testId, value, onChange, min, max, step = 1,
+  label, hint, value, onChange, min, max, step = 1,
   prefix, suffix, decimals = 0, badge, slider = true,
-  unavailable = false,
 }: NumRowProps) {
   const [text, setText] = useState<string>(() =>
-    unavailable ? "" : decimals > 0 ? value.toFixed(decimals) : Math.round(value).toLocaleString("en-US"),
+    decimals > 0 ? value.toFixed(decimals) : Math.round(value).toLocaleString("en-US"),
   );
   const focused = useRef(false);
 
   useEffect(() => {
     if (focused.current) return;
-    setText(unavailable ? "" : decimals > 0 ? value.toFixed(decimals) : Math.round(value).toLocaleString("en-US"));
-  }, [value, decimals, unavailable]);
+    setText(decimals > 0 ? value.toFixed(decimals) : Math.round(value).toLocaleString("en-US"));
+  }, [value, decimals]);
 
   function commit(raw: string) {
     const n = parseFloat(raw.replace(/,/g, ""));
@@ -177,7 +167,7 @@ function NumRow({
   // and the editable value pill on the right (25%). Mobile stacks
   // so the slider never gets cramped.
   return (
-    <div className="space-y-1.5" data-testid={testId}>
+    <div className="space-y-1.5">
       <div className="flex items-center gap-2 flex-wrap">
         <Label className="text-xs font-medium">{label}</Label>
         {badge}
@@ -202,7 +192,7 @@ function NumRow({
             onChange={e => { setText(e.target.value); commit(e.target.value); }}
             onBlur={() => {
               focused.current = false;
-              setText(unavailable ? "" : decimals > 0 ? value.toFixed(decimals) : Math.round(value).toLocaleString("en-US"));
+              setText(decimals > 0 ? value.toFixed(decimals) : Math.round(value).toLocaleString("en-US"));
             }}
             onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
           />
@@ -285,11 +275,11 @@ export default function CashBuyPage() {
   const [scenario, setScenario] = useState<CashBuyScenario>(() => {
     const all = getCashBuyScenarios();
     const byId = idFromUrl ? all.find(s => s.id === idFromUrl) : undefined;
-    if (byId) return hydrateOfficialOnlyPropertyTax(byId);
+    if (byId) return byId;
     const byAddr = addressFromUrl
       ? all.find(s => s.address.toLowerCase().trim() === addressFromUrl.toLowerCase().trim())
       : undefined;
-    if (byAddr) return hydrateOfficialOnlyPropertyTax(byAddr);
+    if (byAddr) return byAddr;
     const now = new Date().toISOString();
     return {
       id: makeId(),
@@ -300,7 +290,7 @@ export default function CashBuyPage() {
       purchasePrice: 0,
       purchasePriceSource: "default",
       occupancyType: "primary",
-      propertyTaxes: undefined,
+      propertyTaxes: 0,
       homeownersInsurance: 0,
       hoaMonthly: 0,
       hoaSource: "unknown",
@@ -313,125 +303,9 @@ export default function CashBuyPage() {
     };
   });
 
-  // An official tax value is only valid for the exact lookup context that
-  // produced it. Manual values (including $0) are intentionally untouched.
-  // Context changes can come from navigation/Zillow flows rather than the
-  // field setters below, so guard all three tuple fields here as well.
-  const taxContextRef = useRef({
-    address: scenario.address,
-    purchasePrice: scenario.purchasePrice,
-    occupancyType: scenario.occupancyType,
-  });
-  useEffect(() => {
-    const previous = taxContextRef.current;
-    const changed =
-      previous.address !== scenario.address ||
-      previous.purchasePrice !== scenario.purchasePrice ||
-      previous.occupancyType !== scenario.occupancyType;
-    taxContextRef.current = {
-      address: scenario.address,
-      purchasePrice: scenario.purchasePrice,
-      occupancyType: scenario.occupancyType,
-    };
-    if (!changed) return;
-    setScenario(prev => clearUnvalidatedCashBuyPropertyTax(prev));
-  }, [scenario.address, scenario.purchasePrice, scenario.occupancyType]);
-
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const isMountedRef = useRef(true);
   useEffect(() => () => { isMountedRef.current = false; }, []);
-
-  // Tax lookup state is separate from the editable scenario value. The
-  // scenario stores only an official result tied to its exact request tuple;
-  // a manual value always wins over an in-flight response.
-  const [taxLookup, setTaxLookup] = useState<CashBuyTaxLookupState>({
-    status: "idle",
-  });
-  const taxLookupGenerationRef = useRef(0);
-
-  useEffect(() => {
-    const request = {
-      address: scenario.address,
-      purchasePrice: scenario.purchasePrice ?? 0,
-      occupancy: scenario.occupancyType ?? "primary",
-    } as const;
-    const generation = ++taxLookupGenerationRef.current;
-
-    if (scenario.propertyTaxesSource === "manual") {
-      setTaxLookup({ status: "manual", request });
-      return;
-    }
-
-    // A persisted official result is already authoritative for this exact
-    // tuple; do not replace it with a second request during Zillow/photo
-    // hydration.
-    if (
-      hasValidatedCashBuyPropertyTax(scenario) &&
-      scenario.propertyTaxesRequest
-    ) {
-      setTaxLookup({
-        status: "verified",
-        request,
-        annualTax: scenario.propertyTaxes,
-        source: "county-estimator",
-      });
-      return;
-    }
-
-    if (
-      !request.address ||
-      request.address === "Unknown Address" ||
-      request.purchasePrice <= 0
-    ) {
-      setTaxLookup({ status: "fallback", request });
-      return;
-    }
-
-    let cancelled = false;
-    setTaxLookup({ status: "loading", request });
-    lookupCashBuyPropertyTax(request).then(result => {
-      if (cancelled || generation !== taxLookupGenerationRef.current) return;
-      setTaxLookup(result);
-      const resolvedRequest = result.request;
-      if (
-        result.status !== "verified" ||
-        result.annualTax == null ||
-        !resolvedRequest
-      ) return;
-
-      setScenario(prev => {
-        const current = {
-          address: prev.address,
-          purchasePrice: prev.purchasePrice ?? 0,
-          occupancy: prev.occupancyType ?? "primary",
-        } as const;
-        if (!canApplyCashBuyTaxResult(current, resolvedRequest, prev.propertyTaxesSource)) {
-          return prev;
-        }
-        return {
-          ...prev,
-          propertyTaxes: result.annualTax,
-          propertyTaxesSource: "official",
-          propertyTaxesRequest: {
-            address: resolvedRequest.address,
-            purchasePrice: resolvedRequest.purchasePrice,
-            occupancyType: resolvedRequest.occupancy,
-          },
-        };
-      });
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    scenario.address,
-    scenario.purchasePrice,
-    scenario.occupancyType,
-    scenario.propertyTaxes,
-    scenario.propertyTaxesSource,
-    scenario.propertyTaxesRequest,
-  ]);
 
   // ─── Debounced auto-save (mirrors seller-estimate / Phase 1 guards) ───
   const firstRenderRef = useRef(true);
@@ -553,6 +427,9 @@ export default function CashBuyPage() {
               const pct = prev.closingCostsPercent ?? DEFAULT_CLOSING_PERCENT;
               next.closingCosts = Math.round(zPrice * (pct / 100));
             }
+            // Recompute taxes for the new price + current occupancy.
+            const occ = prev.occupancyType ?? "primary";
+            next.propertyTaxes = computeAnnualTaxes(prev.address, zPrice, occ);
           }
           // HOA: overwrite only if user hasn't manually set it.
           if (zHoa != null && (prev.hoaSource ?? "unknown") !== "manual") {
@@ -584,7 +461,7 @@ export default function CashBuyPage() {
               yearBuilt: Math.round(p.yearBuilt),
             };
           }
-          return clearUnvalidatedCashBuyPropertyTax(next);
+          return next;
         });
 
         if (zPrice != null) {
@@ -634,18 +511,23 @@ export default function CashBuyPage() {
   // Sync flood insurance with zone data whenever the address changes.
   // Mirrors estimate.tsx: clear to $0 outside a flood zone, seed the
   // $2,000/yr default inside one (only when nothing is set, so a saved /
-  // future-manual value survives).
+  // future-manual value survives). Excluded physical property types never
+  // receive a separate premium, even if FEMA reports flood risk.
   const floodLoadedRef = useRef<string | null>(null);
   useEffect(() => {
     if (!floodData || !scenario.address) return;
-    if (floodLoadedRef.current === scenario.address) return;
-    floodLoadedRef.current = scenario.address;
+    const floodPolicyKey = `${scenario.address}|${scenario.propertyType ?? ""}`;
+    if (floodLoadedRef.current === floodPolicyKey) return;
+    floodLoadedRef.current = floodPolicyKey;
     console.debug("[cash-buy-flood] address", scenario.address);
     console.debug("[cash-buy-flood] normalized property key", scenario.normalizedPropertyKey);
     console.debug("[cash-buy-flood] existing purchase-loan flood helper found", "/api/flood-zone (shared)");
     console.debug("[cash-buy-flood] flood zone result", floodData.zone, floodData.requiresFloodInsurance);
     console.debug("[cash-buy-flood] flood zone source", "FEMA NFHL");
     setScenario((prev) => {
+      if (suppressSeparateFloodInsurance(prev.propertyType)) {
+        return (prev.annualFloodIns ?? 0) === 0 ? prev : { ...prev, annualFloodIns: 0 };
+      }
       if (!floodData.requiresFloodInsurance) {
         console.debug("[cash-buy-flood] not a flood zone — flood insurance $0");
         return (prev.annualFloodIns ?? 0) === 0 ? prev : { ...prev, annualFloodIns: 0 };
@@ -656,7 +538,7 @@ export default function CashBuyPage() {
       console.debug("[cash-buy-flood] added to ongoing costs", true);
       return prev.annualFloodIns === next ? prev : { ...prev, annualFloodIns: next };
     });
-  }, [floodData, scenario.address, scenario.normalizedPropertyKey]);
+  }, [floodData, scenario.address, scenario.normalizedPropertyKey, scenario.propertyType]);
 
   // ─── Field updaters ───
 
@@ -665,8 +547,8 @@ export default function CashBuyPage() {
   }
 
   // Price change from the user (slider/input). Side-effects: mark source
-  // as "user", recompute default closing costs (if not manually overridden),
-  // and invalidate any stale official tax result.
+  // as "user", recompute default closing costs (if not manually overridden)
+  // and recompute taxes for current occupancy.
   function setPurchasePrice(v: number) {
     setScenario(prev => {
       const next: CashBuyScenario = { ...prev, purchasePrice: v, purchasePriceSource: "user" };
@@ -674,14 +556,26 @@ export default function CashBuyPage() {
         const pct = prev.closingCostsPercent ?? DEFAULT_CLOSING_PERCENT;
         next.closingCosts = Math.round(v * (pct / 100));
       }
-      return clearUnvalidatedCashBuyPropertyTax(next);
+      // Only recompute tax default if the user hasn't manually entered one.
+      if (prev.propertyTaxesSource !== "manual") {
+        next.propertyTaxes = computeAnnualTaxes(prev.address, v, prev.occupancyType ?? "primary");
+      } else {
+        console.debug("[cash-buy-default] skipped tax recompute because manual value exists");
+      }
+      return next;
     });
   }
 
   function setOccupancy(occ: CashBuyOccupancyType) {
     setScenario(prev => {
       const next: CashBuyScenario = { ...prev, occupancyType: occ, occupancyTypeSource: "manual" };
-      return clearUnvalidatedCashBuyPropertyTax(next);
+      // Only recompute tax default if the user hasn't manually entered one.
+      if (prev.propertyTaxesSource !== "manual") {
+        next.propertyTaxes = computeAnnualTaxes(prev.address, prev.purchasePrice ?? 0, occ);
+      } else {
+        console.debug("[cash-buy-default] skipped tax recompute because manual value exists");
+      }
+      return next;
     });
   }
 
@@ -691,7 +585,12 @@ export default function CashBuyPage() {
   // HO6. The Zillow merge above only seeds when prev.propertyType is
   // empty, so a manual pick here permanently sticks.
   function setPropertyType(pt: string) {
-    setScenario(prev => ({ ...prev, propertyType: pt, propertyTypeSource: "manual" }));
+    setScenario(prev => ({
+      ...prev,
+      propertyType: pt,
+      propertyTypeSource: "manual",
+      annualFloodIns: effectiveAnnualFloodInsurance(pt, prev.annualFloodIns),
+    }));
   }
 
   function setPropertyTaxes(v: number) {
@@ -744,13 +643,39 @@ export default function CashBuyPage() {
     setScenario(prev => ({ ...prev, hoaMonthly: v, hoaSource: "manual" }));
   }
 
-  // ─── Bootstrap effect: defaults for closing costs ───
-  // Property taxes intentionally have no automatic default. A missing
-  // official result stays unavailable until the borrower enters a bill.
+  // Saved scenarios and Zillow hydration can introduce the property type
+  // without going through setPropertyType. Normalize their persisted flood
+  // premium after the type is known. Re-checking inside the state updater
+  // prevents a stale effect from clearing a premium after a rapid type change.
+  useEffect(() => {
+    if (!scenario.propertyType) return;
+    setScenario(prev => {
+      if (!suppressSeparateFloodInsurance(prev.propertyType)) return prev;
+      const annualFloodIns = effectiveAnnualFloodInsurance(
+        prev.propertyType,
+        prev.annualFloodIns,
+      );
+      return (prev.annualFloodIns ?? 0) === annualFloodIns
+        ? prev
+        : { ...prev, annualFloodIns };
+    });
+  }, [scenario.propertyType]);
+
+  // ─── Bootstrap effect: defaults for closing costs and property taxes ───
+  // Why: when a scenario loads from Supabase, it can have a non-zero
+  // `purchasePrice` but `closingCosts = 0` and `propertyTaxes = 0`
+  // (older rows, or rows where the price came in via cross-tab sync
+  // without running the price-change handler). The handlers in
+  // setPurchasePrice / setOccupancy / Zillow merge only fire on those
+  // specific events — so without this effect a loaded scenario stays
+  // stuck at $0 closing / $0 taxes until the user nudges the slider.
   //
   // Rules:
   // 1. closingCostsSource = "manual" → never overwrite (user-entered $).
-  // 2. Property taxes are never written here.
+  // 2. propertyTaxesSource = "manual" → never overwrite.
+  // 3. Otherwise recompute from price (and address/occupancy for taxes)
+  //    and only setScenario if the computed value actually differs, to
+  //    avoid an autosave loop.
   useEffect(() => {
     const price = scenario.purchasePrice ?? 0;
     if (price <= 0) return;
@@ -772,6 +697,24 @@ export default function CashBuyPage() {
       console.debug("[cash-buy-closing-costs] dollar amount", scenario.closingCosts ?? 0);
     }
 
+    if (scenario.propertyTaxesSource !== "manual" &&
+        scenario.address && scenario.address !== "Unknown Address") {
+      const expected = computeAnnualTaxes(
+        scenario.address, price, scenario.occupancyType ?? "primary",
+      );
+      if (expected > 0 && (scenario.propertyTaxes ?? 0) !== expected) {
+        patch.propertyTaxes = expected;
+        console.debug("[cash-buy-taxes] manual override true/false", false);
+        console.debug("[cash-buy-taxes] source", "default");
+        console.debug("[cash-buy-taxes] annual taxes", expected);
+        console.debug("[cash-buy-taxes] monthly taxes", Math.round(expected / 12));
+      }
+    } else if (scenario.propertyTaxesSource === "manual") {
+      console.debug("[cash-buy-taxes] manual override true/false", true);
+      console.debug("[cash-buy-taxes] source", "manual");
+      console.debug("[cash-buy-taxes] annual taxes", scenario.propertyTaxes ?? 0);
+    }
+
     if (Object.keys(patch).length > 0) {
       setScenario(prev => ({ ...prev, ...patch }));
     }
@@ -781,6 +724,7 @@ export default function CashBuyPage() {
   }, [
     scenario.purchasePrice, scenario.address, scenario.occupancyType,
     scenario.closingCostsSource, scenario.closingCostsPercent,
+    scenario.propertyTaxesSource,
   ]);
 
   // Tracks whether the user has actively engaged the insurance simulator.
@@ -844,6 +788,13 @@ export default function CashBuyPage() {
   const concessionMode: SellerConcessionsMode = scenario.sellerConcessionsMode ?? "percent";
   const concessionMax = concessionMode === "amount" ? Math.max(1, closing || 1) : 9;
   const isPlaceholder = !scenario.address || scenario.address === "Unknown Address";
+  const suppressFloodInsurance = suppressSeparateFloodInsurance(scenario.propertyType);
+  const effectiveFloodInsurance = effectiveAnnualFloodInsurance(
+    scenario.propertyType,
+    scenario.annualFloodIns,
+  );
+  const isLandProperty = typeof scenario.propertyType === "string" &&
+    /(?:^|\b)(?:vacant\s+|residential\s+)?(?:land|lot)(?:\b|$)/i.test(scenario.propertyType);
 
   const photoStatus: "idle" | "loading" | "loaded" | "error" =
     zillowStatus === "loading" ? "loading"
@@ -879,27 +830,6 @@ export default function CashBuyPage() {
   const insMidpoint = manualIns
     ?? simIns
     ?? baselineInsurance;
-  const hasPropertyTax = hasValidatedCashBuyPropertyTax(scenario);
-  const displayedTaxRequest = {
-    address: scenario.address,
-    purchasePrice: price,
-    occupancy: scenario.occupancyType ?? "primary",
-  } as const;
-  const taxLookupStatus =
-    scenario.propertyTaxesSource === "manual"
-      ? "manual"
-      : taxLookup.status === "verified" &&
-          sameCashBuyTaxRequest(taxLookup.request, displayedTaxRequest)
-        ? "verified"
-        : taxLookup.status;
-  const ongoingMonthly = hasPropertyTax
-    ? Math.round(
-      (scenario.propertyTaxes ?? 0) / 12 +
-      (insMidpoint / 12) +
-      (scenario.hoaMonthly ?? 0) +
-      ((scenario.annualFloodIns ?? 0) / 12),
-    )
-    : null;
 
   // Persist the corrected untouched baseline so dashboards and future visits
   // do not retain an older flat 0.75% snapshot. Manual and simulator values win.
@@ -981,6 +911,12 @@ export default function CashBuyPage() {
                 ) {
                   return null;
                 }
+                const ongoingMonthly = Math.round(
+                  (scenario.propertyTaxes ?? 0) / 12 +
+                    insMidpoint / 12 +
+                    (scenario.hoaMonthly ?? 0) +
+                    effectiveFloodInsurance / 12,
+                );
                 return {
                   address: scenario.address,
                   sections: [
@@ -996,23 +932,13 @@ export default function CashBuyPage() {
                     {
                       heading: "Ongoing Costs",
                       rows: [
-                        {
-                          label: "Annual property taxes",
-                          value: hasPropertyTax
-                            ? formatCurrency(scenario.propertyTaxes ?? 0)
-                            : "Unavailable — enter manually",
-                        },
+                        { label: "Annual property taxes", value: formatCurrency(scenario.propertyTaxes ?? 0) },
                         { label: "Homeowners insurance (annual)", value: formatCurrency(insMidpoint) },
-                        ...((scenario.annualFloodIns ?? 0) > 0
-                          ? [{ label: "Flood insurance (annual)", value: formatCurrency(scenario.annualFloodIns ?? 0) }]
+                        ...(effectiveFloodInsurance > 0
+                          ? [{ label: "Flood insurance (annual)", value: formatCurrency(effectiveFloodInsurance) }]
                           : []),
                         { label: "Monthly HOA", value: formatCurrency(scenario.hoaMonthly ?? 0) },
-                        {
-                          label: "Ongoing monthly costs",
-                          value: ongoingMonthly == null
-                            ? "Unavailable — enter annual property taxes manually"
-                            : formatCurrency(ongoingMonthly),
-                        },
+                        { label: "Ongoing monthly costs", value: formatCurrency(ongoingMonthly) },
                       ],
                     },
                   ],
@@ -1104,7 +1030,6 @@ export default function CashBuyPage() {
             <CardContent className="space-y-4">
               <NumRow
                 label="Purchase Price"
-                testId="cash-buy-purchase-price"
                 value={price}
                 onChange={setPurchasePrice}
                 min={0} max={sliderMax} step={1000} prefix="$"
@@ -1116,7 +1041,7 @@ export default function CashBuyPage() {
                   value={scenario.occupancyType ?? "primary"}
                   onValueChange={(v) => setOccupancy(v as CashBuyOccupancyType)}
                 >
-                  <SelectTrigger className="h-9 text-sm" data-testid="select-cash-occupancy"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="primary">Primary Residence</SelectItem>
                     <SelectItem value="secondary">Secondary Home</SelectItem>
@@ -1180,7 +1105,6 @@ export default function CashBuyPage() {
                 {closingMode === "percent" ? (
                   <NumRow
                     label="Percent of Price"
-                    testId="cash-buy-closing-percent"
                     hint={`≈ ${formatCurrency(closing)} on the current purchase price.`}
                     value={scenario.closingCostsPercent ?? DEFAULT_CLOSING_PERCENT}
                     onChange={setClosingCostsPercent}
@@ -1189,7 +1113,6 @@ export default function CashBuyPage() {
                 ) : (
                   <NumRow
                     label="Dollar Amount"
-                    testId="cash-buy-closing-dollar"
                     hint={`≈ ${(price > 0 ? (closing / price * 100) : 0).toFixed(2)}% of purchase price.`}
                     value={closing}
                     onChange={setClosingCosts}
@@ -1254,24 +1177,13 @@ export default function CashBuyPage() {
             <CardContent className="space-y-4">
               <NumRow
                 label="Annual Property Taxes"
-                testId="cash-buy-property-taxes"
-                hint={cashBuyTaxHint(
-                  taxLookupStatus,
-                  Math.round((scenario.propertyTaxes ?? 0) / 12),
-                )}
+                hint={`${scenario.propertyTaxesSource === "manual"
+                  ? "Manually entered. Editing price or property use won't overwrite this."
+                  : "Auto-estimated from county-aware rates. Updates when price or property use changes."} · ≈ ${formatCurrency(Math.round((scenario.propertyTaxes ?? 0) / 12))}/mo`}
                 value={scenario.propertyTaxes ?? 0}
                 onChange={setPropertyTaxes}
                 min={0} max={50_000} step={50} prefix="$" suffix="/yr"
-                unavailable={!hasPropertyTax}
                 slider={false}
-                badge={(() => {
-                  const label = cashBuyTaxBadge(taxLookupStatus);
-                  return label ? (
-                    <Badge variant="outline" className="text-[10px] font-normal h-5">
-                      {label}
-                    </Badge>
-                  ) : null;
-                })()}
               />
               <NumRow
                 label="Annual Homeowners Insurance"
@@ -1305,13 +1217,31 @@ export default function CashBuyPage() {
                 }
               />
 
-              {(floodData?.requiresFloodInsurance || (scenario.annualFloodIns ?? 0) > 0) && (
+              {suppressFloodInsurance ? (
+                <div
+                  className="rounded-md border border-blue-200 bg-blue-50/60 p-3 text-xs text-muted-foreground"
+                  data-testid="cash-flood-assumption-note"
+                >
+                  <p className="font-medium text-foreground">No separate flood insurance charge</p>
+                  <p className="mt-1">
+                    {isLandProperty
+                      ? "Land has no building premium to estimate. This is not an HOA or master-policy assumption; verify whether separate coverage is needed for improvements or other flood exposure."
+                      : FLOOD_HOA_ASSUMPTION_NOTE}
+                  </p>
+                  {floodData?.zone && (
+                    <p className="mt-1">
+                      FEMA flood-zone risk is unchanged: Zone {floodData.zone}
+                      {floodData.requiresFloodInsurance ? " is flagged as requiring flood insurance." : "."}
+                    </p>
+                  )}
+                </div>
+              ) : (floodData?.requiresFloodInsurance || effectiveFloodInsurance > 0) && (
                 <NumRow
                   label="Annual Flood Insurance"
                   hint={`${floodData?.zone
                     ? `Estimated — property is in a FEMA flood zone (Zone ${floodData.zone}).`
-                    : "Estimated flood insurance premium."} · ≈ ${formatCurrency(Math.round((scenario.annualFloodIns ?? 0) / 12))}/mo`}
-                  value={scenario.annualFloodIns ?? 0}
+                    : "Estimated flood insurance premium."} · ≈ ${formatCurrency(Math.round(effectiveFloodInsurance / 12))}/mo`}
+                  value={effectiveFloodInsurance}
                   onChange={(v) => update("annualFloodIns", v)}
                   min={0} max={50_000} step={50} prefix="$" suffix="/yr"
                   slider={false}
@@ -1319,21 +1249,20 @@ export default function CashBuyPage() {
               )}
 
               <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
-                <p className="font-medium text-foreground mb-1">
-                  Monthly carrying cost{hasPropertyTax ? " (estimate)" : " (incomplete)"}
+                <p className="font-medium text-foreground mb-1">Monthly carrying cost (estimate)</p>
+                <p className="tabular-nums">
+                  {formatCurrency(
+                    Math.round(
+                      ((scenario.propertyTaxes ?? 0) / 12) +
+                      (insMidpoint / 12) +
+                      (scenario.hoaMonthly ?? 0) +
+                      (effectiveFloodInsurance / 12),
+                    ),
+                  )}/mo
                 </p>
-                {ongoingMonthly == null ? (
-                  <p className="font-medium text-amber-700">
-                    Unavailable — enter annual property taxes manually
-                  </p>
-                ) : (
-                  <p className="tabular-nums">{formatCurrency(ongoingMonthly)}/mo</p>
-                )}
                 <p className="mt-1 text-[11px]">
-                  {hasPropertyTax
-                    ? <>Taxes + insurance + HOA
-                      {(scenario.annualFloodIns ?? 0) > 0 ? " + flood insurance" : ""} only. No mortgage payment because there is no loan.</>
-                    : "Taxes are unavailable, so no complete carrying-cost total is shown."}
+                  Taxes + insurance + HOA
+                  {effectiveFloodInsurance > 0 ? " + flood insurance" : ""} only. No mortgage payment because there is no loan.
                 </p>
               </div>
             </CardContent>
@@ -1343,6 +1272,7 @@ export default function CashBuyPage() {
           <PropertyInsuranceSimulator
             address={scenario.address}
             purchasePrice={price}
+            physicalPropertyType={scenario.propertyType}
             factors={scenario.insuranceFactors as InsuranceFactors | undefined}
             onFactorsChange={handleInsuranceFactors}
             onPremiumChange={handleInsurancePremium}
