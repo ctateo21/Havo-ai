@@ -1,3 +1,5 @@
+import Agents from "./pages/agents";
+import AgentsResults from "./pages/agents-results";
 import { Switch, Route, useLocation } from "wouter";
 import { useEffect } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -104,6 +106,8 @@ function App() {
                       <Route path="/florida-property-tax-calculator" component={FlPropertyTax} />
                       <Route path="/mortgage-payment-calculator-florida" component={FlMortgageGuide} />
                       <Route path="/sitemap" component={SitemapRedirect} />
+                      <Route path="/agents" component={Agents} />
+                      <Route path="/admin/agents" component={AgentsResults} />
                       <Route component={NotFound} />
                     </Switch>
                   </main>

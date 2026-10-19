@@ -1,3 +1,4 @@
+import { registerInterestRoutes } from "./b2b-interest-routes";
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
@@ -105,6 +106,7 @@ import {
 } from "./integrations/quoterush-background";
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  registerInterestRoutes(app);
   // API routes
   
   // Get service categories
