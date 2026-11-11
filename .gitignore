@@ -1,4 +1,5 @@
 node_modules
+/generated-artifacts/
 dist
 playwright-report
 test-results

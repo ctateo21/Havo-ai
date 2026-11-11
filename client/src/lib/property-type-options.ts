@@ -8,6 +8,7 @@ export const PHYSICAL_PROPERTY_TYPE_OPTIONS = [
   "Townhouse",
   "Condominium",
   "Villa",
+  "Land",
   "Manufactured Home",
   "Multi-Family",
   "Duplex",
@@ -34,6 +35,7 @@ export function zillowToPhysicalPropertyType(raw: unknown): string | null {
   if (s.includes("TOWN")) return "Townhouse";
   if (s.includes("CONDO") || s === "APARTMENT") return "Condominium";
   if (s.includes("VILLA")) return "Villa";
+  if (s.includes("LAND") || s.includes("LOT")) return "Land";
   if (s.includes("MANUFACTURED") || s.includes("MOBILE")) return "Manufactured Home";
   if (s.includes("SINGLE") || s.includes("SFR") || s.includes("HOUSE")) {
     return "Single Family Residence";

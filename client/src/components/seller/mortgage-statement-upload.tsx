@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { analyzeDocument } from "@/lib/ai-request";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Upload, Loader2, AlertTriangle, X, FileText } from "lucide-react";
@@ -44,7 +45,7 @@ export function MortgageStatementUpload({ onExtracted }: MortgageStatementUpload
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch("/api/analyze-statement", { method: "POST", body: fd });
+      const res = await analyzeDocument("/api/analyze-statement", fd);
       const result = await res.json();
       const balance = Number(result?.analysis?.loanBalance);
       if (result?.success && result.analysis && Number.isFinite(balance) && balance > 0) {

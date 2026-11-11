@@ -21,6 +21,10 @@ import { getCountyName } from "@/lib/county-tax-estimator";
 import {
   getBaselineHomeownersInsuranceRate,
 } from "@/lib/insurance-default";
+import {
+  FLOOD_HOA_ASSUMPTION_NOTE,
+  suppressSeparateFloodInsurance,
+} from "@shared/flood-insurance-policy";
 
 export type InsRegionKey =
   | "keys" | "sefl" | "swfl" | "tampa" | "nefljax" | "central" | "ncfl";
@@ -128,6 +132,8 @@ interface Props {
   address: string;
   /** Purchase price = rebuild basis for the premium calc. */
   purchasePrice: number;
+  /** Physical property type (not occupancy), used for flood-premium assumptions. */
+  physicalPropertyType?: string;
   /** Persisted factors. Pass `undefined` to use defaults seeded from the address. */
   factors?: InsuranceFactors;
   /** Called when the user changes any factor. */
@@ -140,7 +146,7 @@ const fmt = (n: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
 
 export default function PropertyInsuranceSimulator({
-  address, purchasePrice, factors, onFactorsChange, onPremiumChange,
+  address, purchasePrice, physicalPropertyType, factors, onFactorsChange, onPremiumChange,
 }: Props) {
   // Seed missing factors from the address-derived region + global defaults.
   const effective: InsuranceFactors = useMemo(() => {
@@ -176,6 +182,19 @@ export default function PropertyInsuranceSimulator({
   }, [address, factors, onFactorsChange]);
 
   const premium = useMemo(() => calcInsurancePremium(purchasePrice, effective), [purchasePrice, effective]);
+  const normalizedPhysicalPropertyType = (physicalPropertyType ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  const isLand =
+    normalizedPhysicalPropertyType === "land" ||
+    normalizedPhysicalPropertyType === "lot" ||
+    normalizedPhysicalPropertyType.includes("vacantland") ||
+    normalizedPhysicalPropertyType.includes("vacantlot") ||
+    normalizedPhysicalPropertyType.includes("residentialland") ||
+    normalizedPhysicalPropertyType.includes("residentiallot");
+  const assumesHoaFloodCoverage =
+    suppressSeparateFloodInsurance(physicalPropertyType) && !isLand;
 
   // Surface premium upward whenever it changes (parent uses for cash-to-close
   // ongoing-cost preview, persistence snapshot, etc.).
@@ -316,7 +335,23 @@ export default function PropertyInsuranceSimulator({
         <div className="flex gap-2.5 bg-amber-50 border border-amber-200 rounded-lg p-3 mt-4">
           <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
           <p className="text-xs text-amber-900 leading-relaxed">
-            <strong>Flood insurance not included.</strong> Properties in AE/VE flood zones require a separate NFIP or private policy — typically $800–$3,500+/year. Check FEMA's flood map for this address.
+            {assumesHoaFloodCoverage ? (
+              <>
+                <strong>No separate flood premium is estimated.</strong>{" "}
+                {FLOOD_HOA_ASSUMPTION_NOTE} FEMA flood-zone and risk information
+                still applies; confirm any elevation-certification fees with your agent.
+              </>
+            ) : isLand ? (
+              <>
+                <strong>No building flood premium is estimated for land.</strong>{" "}
+                FEMA flood-zone and risk information still applies. Confirm any
+                required coverage and elevation-certification fees with your agent.
+              </>
+            ) : (
+              <>
+                <strong>Flood insurance not included.</strong> Properties in AE/VE flood zones require a separate NFIP or private policy — typically $800–$3,500+/year. Check FEMA's flood map for this address.
+              </>
+            )}
           </p>
         </div>
         <div className="flex gap-2.5 bg-blue-50 border border-blue-200 rounded-lg p-3 mt-2">

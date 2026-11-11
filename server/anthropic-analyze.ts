@@ -1,6 +1,9 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { completeWithOpenRouter, type OpenRouterContent } from "./openrouter";
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+function parseDocumentJson<T>(raw: string): T {
+  try { return JSON.parse(raw) as T; }
+  catch { throw new Error("AI returned invalid document data. Please try again."); }
+}
 
 export interface MortgageAnalysis {
   loanBalance: number;
@@ -67,17 +70,15 @@ You must respond with a valid JSON object containing the following fields:
 
 Respond with a JSON object only, no additional text.`;
 
-  const response = await anthropic.messages.create({
-    model: "claude-opus-4-5",
-    max_tokens: 2048,
+  const response = await completeWithOpenRouter({
+    purpose: "document",
+    maxTokens: 2048,
     system: systemPrompt,
-    messages: [{ role: "user", content: `Analyze this mortgage statement:\n\n${documentText}` }],
+    content: `Analyze this mortgage statement:\n\n${documentText}`,
   });
 
-  const content = response.content[0];
-  if (content.type !== "text") throw new Error("No response from AI");
-  const raw = content.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const parsed = JSON.parse(raw) as MortgageAnalysis;
+  const raw = response.text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const parsed = parseDocumentJson<MortgageAnalysis>(raw);
   // Normalize defensively — the model occasionally returns numbers or
   // empty strings even when the spec says string|null.
   parsed.loanNumber = normalizeLoanNumber((parsed as any).loanNumber);
@@ -116,7 +117,7 @@ export interface ClosingDisclosureAnalysis {
 }
 
 /**
- * @param input Either the raw PDF buffer (preferred — sent to Anthropic
+ * @param input Either the raw PDF buffer (preferred — sent through OpenRouter
  *   as a native document so checkbox marks like the page-1 Loan Type
  *   boxes are visible; plain text extraction drops them) or already-
  *   extracted document text.
@@ -143,32 +144,30 @@ You must respond with a valid JSON object containing the following fields:
 
 Respond with a JSON object only, no additional text.`;
 
-  const userContent =
+  const userContent: OpenRouterContent =
     "pdfBuffer" in input
       ? [
           {
-            type: "document" as const,
-            source: {
-              type: "base64" as const,
-              media_type: "application/pdf" as const,
-              data: input.pdfBuffer.toString("base64"),
+            type: "file",
+            file: {
+              filename: "closing-disclosure.pdf",
+              file_data: `data:application/pdf;base64,${input.pdfBuffer.toString("base64")}`,
             },
           },
           { type: "text" as const, text: "Analyze this Closing Disclosure. Pay special attention to which Loan Type checkbox on page 1 is visually checked/marked." },
         ]
       : `Analyze this Closing Disclosure:\n\n${input.documentText}`;
 
-  const response = await anthropic.messages.create({
-    model: "claude-opus-4-5",
-    max_tokens: 2048,
+  const response = await completeWithOpenRouter({
+    purpose: "document",
+    maxTokens: 2048,
+    pdf: "pdfBuffer" in input,
     system: systemPrompt,
-    messages: [{ role: "user", content: userContent }],
+    content: userContent,
   });
 
-  const content = response.content[0];
-  if (content.type !== "text") throw new Error("No response from AI");
-  const raw = content.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const parsed = JSON.parse(raw) as ClosingDisclosureAnalysis;
+  const raw = response.text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const parsed = parseDocumentJson<ClosingDisclosureAnalysis>(raw);
   parsed.loanNumber = normalizeLoanNumber((parsed as any).loanNumber);
   // Normalize loan type — anything other than an exact match becomes null
   // (the client defaults to conventional).

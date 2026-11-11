@@ -24,6 +24,9 @@ import { enrichListingFromPropertyCache } from "./listing-enrichment";
 
 // ── In-memory dedupe lock ────────────────────────────────────────────────
 const inflight = new Map<string, Promise<MarketAnalysisRecord>>();
+// Suppress polling-driven retries after failed/weak generations. This is not
+// the authoritative usage limit (the database enforces that across instances).
+const cooldowns = new Map<string, { until: number; record: MarketAnalysisRecord }>();
 
 function lockKey(listingId: string, weekOfStr: string) {
   return `${listingId}::${weekOfStr}`;
@@ -45,13 +48,21 @@ export function ensureMarketAnalysis(
 ): Promise<MarketAnalysisRecord> {
   const cur = currentWeekWindow();
   const key = lockKey(input.listingId, cur.weekOfStr);
+  const cooldown = cooldowns.get(key);
+  if (cooldown && cooldown.until > Date.now()) return Promise.resolve(cooldown.record);
   const existing = inflight.get(key);
   if (existing) {
     return existing;
   }
   const promise = (async () => {
     try {
-      return await getOrGenerateMarketAnalysis(input, opts);
+      const record = await getOrGenerateMarketAnalysis(input, opts);
+      if (record.error_message || !isRichEnoughLite(record.structured)) {
+        for (const [k, v] of cooldowns) if (v.until <= Date.now()) cooldowns.delete(k);
+        if (cooldowns.size >= 5000) cooldowns.delete(cooldowns.keys().next().value!);
+        cooldowns.set(key, { until: Date.now() + 15 * 60_000, record });
+      }
+      return record;
     } finally {
       inflight.delete(key);
     }
@@ -114,6 +125,11 @@ export async function getMarketAnalysisForDisplay(
       generating: false,
       source: "current_cache",
     };
+  }
+
+  const cooldown = cooldowns.get(lockKey(input.listingId, cur.weekOfStr));
+  if (cooldown && cooldown.until > Date.now()) {
+    return { analysis: cooldown.record, generating: false, source: "current_cache" };
   }
 
   // Need to generate. Queue background work (single-flight), return fast.
