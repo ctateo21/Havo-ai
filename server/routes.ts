@@ -20,12 +20,24 @@ import {
 } from "@shared/schema";
 import { searchProperties, getPropertyDetails, ZillowSearchParams, ZillowProperty } from "./integrations/zillow";
 import { isHillsboroughCountyAddress } from "@shared/hillsborough-county";
+
+/**
+ * ZIP-only Hillsborough matches that another supported county also claims
+ * (for example Zephyrhills 33540, which is also Pasco) must not be sent to
+ * the Hillsborough estimator. An unambiguous Hillsborough ZIP still is.
+ */
+export function shouldUseHillsboroughPurchaseTaxRoute(address: string): boolean {
+  if (!isHillsboroughCountyAddress(address)) return false;
+  return identifyCountyCandidatesFromAddress(address)
+    .every(county => county === "hillsborough");
+}
 import {
   getHillsboroughPurchaseTax,
   getCountyPurchaseTax,
 } from "./integrations/property-tax-service";
 import {
   SUPPORTED_COUNTY_SLUGS,
+  identifyCountyCandidatesFromAddress,
   type CountySlug,
 } from "./integrations/parcel-resolver";
 import {
@@ -676,7 +688,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
         const params = schema.parse(req.body);
 
-        if (!isHillsboroughCountyAddress(params.address)) {
+        if (!shouldUseHillsboroughPurchaseTaxRoute(params.address)) {
+          const sharedZip = isHillsboroughCountyAddress(params.address);
           return res.json({
             annualTax: null,
             monthlyTax: null,
@@ -686,8 +699,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             nonAdValoremPending: false,
             homestead: params.isPrimaryResidence,
             source: "hillsborough-county-estimator-unavailable",
-            operationalError:
-              "The address is not in Hillsborough County; no purchase-tax estimate was returned.",
+            operationalError: sharedZip
+              ? "This ZIP is shared with another county, so the Hillsborough estimator is not used from the ZIP alone. Enter the yearly tax manually or use the other county's result."
+              : "The address is not in Hillsborough County; no purchase-tax estimate was returned.",
           });
         }
 

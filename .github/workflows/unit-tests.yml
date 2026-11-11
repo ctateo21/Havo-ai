@@ -35,10 +35,20 @@ jobs:
           node_modules/.bin/tsx --version
 
       # `npm test` also runs Playwright against a dev server that needs
-      # DATABASE_URL and Chromium. This job is the deterministic half.
+      # DATABASE_URL and Chromium. This job runs the unit files that do not
+      # open a live Postgres connection. The managed-data, IFW, and insurance
+      # cache files assert against a real database and are run where
+      # DATABASE_URL points at one.
       - name: Run unit tests
         env:
-          # Several server modules construct a pg Pool at import time.
-          # They do not connect until a query runs. This is not a database.
+          # Lets modules that construct a Pool import. Tests that actually
+          # connect are excluded below.
           DATABASE_URL: postgres://unit-test:unit-test@127.0.0.1:5432/unit_test
-        run: npm run test:unit
+        run: |
+          set -o pipefail
+          files=$(find client/src/lib server server/integrations -name '*.test.ts' \
+            ! -name 'managed-data-*.test.ts' \
+            ! -name 'ifw-activity-claims.test.ts' \
+            ! -name 'insurance-cache-routes.test.ts' \
+            | sort)
+          node_modules/.bin/tsx --test $files
