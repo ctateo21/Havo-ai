@@ -59,6 +59,7 @@ test("current bill uses actual ad-valorem plus NAV dollars only", async () => {
     adValoremTax: 4_100.25,
     nonAdValoremTax: 725.5,
     source: "tax-collector-bill-scrape",
+    sourceLabel: "sarasota Tax Collector annual bill, tax year 2025 (ad valorem $4100.25 + non-ad valorem $725.50, including CDD). Tyler counties require APIFY_TOKEN in production.",
     county: "sarasota",
     parcelId: "123456789",
   });
@@ -99,6 +100,7 @@ test("Polk uses the verified Phenix bill result", async () => {
     adValoremTax: 2900,
     nonAdValoremTax: 100,
     source: "tax-collector-bill-scrape",
+    sourceLabel: "polk Tax Collector annual bill, tax year 2025 (ad valorem $2900.00 + non-ad valorem $100.00, including CDD).",
     county: "polk",
     parcelId: "123456789",
   });

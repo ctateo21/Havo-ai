@@ -51,10 +51,144 @@ test("purchase routes fail closed when no official county estimator is verified"
     address: "3440 Laurel Dale Dr, Tampa, FL 33618",
     purchasePrice: 350_000,
     isPrimaryResidence: true,
+  }, {
+    lookupPin: async () => null,
+    readCache: async () => null,
   });
   assert.equal(hillsborough.adValoremTax, null);
   assert.equal(hillsborough.annualTax, null);
   assert.match(hillsborough.source, /county-estimator-unavailable$/);
+  assert.match(hillsborough.operationalError ?? "", /manually/i);
+});
+
+test("Hillsborough purchase total is page low-end plus the collector bill", async () => {
+  const result = await getHillsboroughPurchaseTax({
+    address: "100 N Tampa St, Tampa, FL 33602",
+    purchasePrice: 1_000_000,
+    isPrimaryResidence: false,
+  }, {
+    readCache: async () => null,
+    writeCache: async () => {},
+    lookupPin: async () => ({ pin: "1829244ZI000091000010A", folio: "1936620000" }),
+    fetchRates: async () => ({
+      schoolTaxRate: 6.334,
+      nonschoolTaxRate: 13.4013,
+      totalTaxRate: 19.7353,
+      nonAdValoremTaxes: 999,
+      taxDistrict: "TA",
+      justValue: 1,
+      assessedValue: 1,
+    }),
+    resolveBill: async () => ({
+      state: "ready",
+      annualTax: 17000,
+      monthlyTax: 1416.67,
+      taxYear: 2025,
+      adValoremTax: 1,
+      nonAdValoremTax: 224.5,
+      source: "tax-collector-bill-scrape",
+      county: "hillsborough",
+      parcelId: "A1936620000",
+    }),
+  });
+  assert.equal(result.adValoremTax, 16775.01);
+  assert.equal(result.nonAdValoremTax, 224.5);
+  assert.equal(result.annualTax, 16999.51);
+  assert.equal(result.nonAdValoremPending, false);
+  assert.equal(result.source, "hillsborough-county-estimator");
+  assert.match(result.sourceLabel ?? "", /low end/);
+  assert.match(result.sourceLabel ?? "", /2025 bill/);
+  assert.equal(result.audit?.schoolMills, 6.334);
+});
+
+test("Hillsborough does not turn a missing tax bill into zero CDD", async () => {
+  const result = await getHillsboroughPurchaseTax({
+    address: "100 N Tampa St, Tampa, FL 33602",
+    purchasePrice: 1_000_000,
+    isPrimaryResidence: true,
+  }, {
+    readCache: async () => null,
+    writeCache: async () => {},
+    lookupPin: async () => ({ pin: "1829244ZI000091000010A", folio: "1936620000" }),
+    fetchRates: async () => ({
+      schoolTaxRate: 6.334,
+      nonschoolTaxRate: 13.4013,
+      totalTaxRate: 19.7353,
+      nonAdValoremTaxes: 0,
+      taxDistrict: "TA",
+      justValue: 1,
+      assessedValue: 1,
+    }),
+    resolveBill: async () => ({
+      state: "unavailable",
+      manualEntryRequired: true,
+      county: "hillsborough",
+      reason: "live-bill-service-not-configured",
+      operationalError: "Live property-tax bills require APIFY_TOKEN in this environment.",
+    }),
+  });
+  assert.equal(result.adValoremTax, 15946.59);
+  assert.equal(result.annualTax, null);
+  assert.equal(result.nonAdValoremPending, true);
+  assert.match(result.source, /unavailable$/);
+  assert.match(result.operationalError ?? "", /15946\.59/);
+  assert.match(result.operationalError ?? "", /APIFY_TOKEN/);
+});
+
+test("a cached Hillsborough millage is recomputed and the CDD stays flat", async () => {
+  let lookups = 0;
+  const now = new Date("2026-08-21T12:00:00.000Z");
+  const result = await getHillsboroughPurchaseTax({
+    address: "100 N Tampa St, Tampa, FL 33602",
+    purchasePrice: 800_000,
+    isPrimaryResidence: false,
+    now,
+  }, {
+    now,
+    lookupPin: async () => { lookups += 1; return null; },
+    readCache: async () => ({
+      county: "hillsborough",
+      addressNormalized: "100 N TAMPA ST, TAMPA, FL 33602",
+      addressDisplay: "100 N Tampa St, Tampa, FL 33602",
+      parcelId: "1829244ZI000091000010A",
+      folio: "1936620000",
+      taxDistrict: "TA",
+      homesteadAdValoremPct: 0.015,
+      nonHomesteadAdValoremPct: 0.016,
+      samplePrice: 1_000_000,
+      totalMillage: 19.7353,
+      schoolMillage: 6.334,
+      nonSchoolMillage: 13.4013,
+      assessmentRatio: 0.85,
+      homesteadSchoolExemption: 25_000,
+      homesteadNonSchoolExemption: 50_000,
+      parcelSource: "hcpa-tax-estimator",
+      rateYear: 2026,
+      nonAdValoremAmtCents: 22_450,
+      nonAdValoremLines: [],
+      source: "hillsborough-county-estimator",
+      expiresAt: new Date("2026-11-01T00:00:00.000Z"),
+      queriedAt: "2026-08-01T00:00:00.000Z",
+    }),
+  });
+  assert.equal(lookups, 0);
+  assert.equal(result.fromGeneralCache, true);
+  assert.equal(result.nonAdValoremTax, 224.5);
+  assert.equal(result.adValoremTax, 13420);
+  assert.equal(result.annualTax, 13644.5);
+  assert.match(result.sourceLabel ?? "", /2026-08-01/);
+});
+
+test("other counties name why the official estimator is not shown", async () => {
+  const polk = await getCountyPurchaseTax({
+    county: "polk",
+    address: "45098 Hwy 54, Lakeland, FL 33809",
+    purchasePrice: 400_000,
+    isPrimaryResidence: true,
+  });
+  assert.equal(polk.annualTax, null);
+  assert.match(polk.operationalError ?? "", /Manual entry/);
+  assert.match(polk.audit?.exemptionNote ?? "", /No formula/);
 });
 
 test("Pinellas live estimate ignores a higher current just value", () => {

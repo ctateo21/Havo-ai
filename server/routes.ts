@@ -712,6 +712,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             millageRate: result.millageRate ?? null,
             homestead: params.isPrimaryResidence,
             source: result.source,
+            sourceLabel: result.sourceLabel,
+            capturedAt: result.capturedAt,
+            taxYear: result.taxYear ?? null,
+            audit: result.audit,
             operationalError: result.operationalError,
           });
         }
@@ -787,6 +791,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         taxDistrict: result.taxDistrict ?? null,
         homestead: p.isPrimaryResidence,
         source: result.source,
+        sourceLabel: result.sourceLabel,
+        capturedAt: result.capturedAt,
+        taxYear: result.taxYear ?? null,
+        audit: result.audit,
         operationalError: result.operationalError,
       });
     } catch (err: any) {

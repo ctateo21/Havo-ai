@@ -28,9 +28,14 @@ same browser-backed crawler used in production.
   exemption math for any purchase price. Refinance lookups use only actual bill
   totals and never purchase-price math.
 
-The production Replit environment must expose `APIFY_TOKEN`. Missing
-configuration returns a visible operational error; it is not treated as an
-ordinary parcel miss or a trustworthy zero-assessment result.
+The production environment must expose `APIFY_TOKEN`. Hillsborough, Pinellas,
+Manatee, Pasco, Hernando, Sarasota, Lee, and Collier tax-collector bills are
+behind Cloudflare, and the Tyler scraper cannot run without that token.
+Missing configuration returns `live-bill-service-not-configured`. It is not
+treated as an ordinary parcel miss or a trustworthy zero-assessment result.
+Polk uses the Phenix site and does not need the token. A purchase yearly
+total is shown only after both the official estimator and this bill succeed;
+a missing bill leaves the yearly total blank instead of pretending CDD is $0.
 
 Run it on a low-frequency schedule, such as weekly. A successful run currently
 checks:

@@ -1,0 +1,44 @@
+name: Unit tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: npm run test:unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: |
+          set -o pipefail
+          npm install -g npm@10.9.2
+          npm ci --no-audit --no-fund
+          test -x node_modules/.bin/tsx
+          node_modules/.bin/tsx --version
+
+      # `npm test` also runs Playwright against a dev server that needs
+      # DATABASE_URL and Chromium. This job is the deterministic half.
+      - name: Run unit tests
+        env:
+          # Several server modules construct a pg Pool at import time.
+          # They do not connect until a query runs. This is not a database.
+          DATABASE_URL: postgres://unit-test:unit-test@127.0.0.1:5432/unit_test
+        run: npm run test:unit
