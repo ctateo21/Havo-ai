@@ -1,6 +1,28 @@
-import { pgTable, text, serial, integer, boolean, json, jsonb, date, timestamp, varchar, unique, index, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, json, jsonb, date, timestamp, varchar, unique, index, primaryKey, bigint, numeric, uuid } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+
+// Server-only aggregate accounting; migration also revokes PUBLIC access.
+export const aiUsageDaily = pgTable("ai_usage_daily", {
+  userId: text("user_id").notNull(),
+  day: date("day").notNull(),
+  purpose: text("purpose").notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  successes: integer("successes").notNull().default(0),
+  promptTokens: bigint("prompt_tokens", { mode: "number" }).notNull().default(0),
+  completionTokens: bigint("completion_tokens", { mode: "number" }).notNull().default(0),
+  reportedCostUsd: numeric("reported_cost_usd").notNull().default("0"),
+  unknownCostAttempts: integer("unknown_cost_attempts").notNull().default(0),
+}, table => [
+  primaryKey({ columns: [table.userId, table.day, table.purpose] }),
+  index("ai_usage_daily_day_idx").on(table.day),
+]);
+
+export const aiUsageLeases = pgTable("ai_usage_leases", {
+  id: uuid("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
 
 // Main user table
 export const users = pgTable("users", {

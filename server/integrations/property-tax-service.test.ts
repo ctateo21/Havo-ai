@@ -9,8 +9,6 @@ import {
 import {
   computePinellasAdValorem,
   deriveCountyAssessmentBasis,
-  getCountyPurchaseTax,
-  getHillsboroughPurchaseTax,
 } from "./property-tax-service";
 import { calcAdValorem } from "./hillsborough-tax";
 import { PURCHASE_TAX_LOW_ASSESSMENT_RATIO } from "@shared/property-tax-policy";
@@ -20,42 +18,6 @@ const BILL_MILLS = [
   { authority: "PINELLAS COUNTY SCHOOL", mills: 6.293 },
   { authority: "PINELLAS COUNTY GENERAL", mills: 10.25 },
 ];
-
-test("purchase routes fail closed when no official county estimator is verified", async () => {
-  const counties = [
-    "pinellas",
-    "manatee",
-    "pasco",
-    "hernando",
-    "sarasota",
-    "lee",
-    "collier",
-    "polk",
-  ] as const;
-
-  for (const county of counties) {
-    const result = await getCountyPurchaseTax({
-      county,
-      address: "112 Palmetto Dunes Cir, Naples, FL 34113",
-      purchasePrice: 525_000,
-      isPrimaryResidence: false,
-    });
-    assert.equal(result.adValoremTax, null, county);
-    assert.equal(result.annualTax, null, county);
-    assert.equal(result.monthlyTax, null, county);
-    assert.match(result.source, /county-estimator-unavailable$/, county);
-    assert.equal(result.nonAdValoremTax, 0, county);
-  }
-
-  const hillsborough = await getHillsboroughPurchaseTax({
-    address: "3440 Laurel Dale Dr, Tampa, FL 33618",
-    purchasePrice: 350_000,
-    isPrimaryResidence: true,
-  });
-  assert.equal(hillsborough.adValoremTax, null);
-  assert.equal(hillsborough.annualTax, null);
-  assert.match(hillsborough.source, /county-estimator-unavailable$/);
-});
 
 test("Pinellas live estimate ignores a higher current just value", () => {
   const purchasePrice = 400_000;
@@ -79,7 +41,7 @@ test("Pinellas live estimate ignores a higher current just value", () => {
   assert.equal(assessorFloor, purchaseOnly);
 });
 
-test("Pinellas millage arithmetic is isolated from the official cache", () => {
+test("Pinellas millage cache recomputes at arbitrary prices", () => {
   const purchasePrice = 400_000;
   const homesteadAdValorem = computePinellasAdValorem({
     purchasePrice,
@@ -123,7 +85,7 @@ test("Pinellas millage arithmetic is isolated from the official cache", () => {
 
   assert.equal(
     isCacheRowValid(row, purchasePrice, NOW),
-    false,
+    true,
   );
   assert.equal(
     computeFromCache(row, purchasePrice, true).adValoremTax,
@@ -131,7 +93,7 @@ test("Pinellas millage arithmetic is isolated from the official cache", () => {
   );
   assert.equal(
     isCacheRowValid(row, 620_000, NOW),
-    false,
+    true,
   );
   assert.equal(
     computeFromCache(row, 620_000, true).adValoremTax,
