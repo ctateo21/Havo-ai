@@ -6,6 +6,7 @@ import { browserEstimator } from "./county-estimator-browser";
 import { fetchOfficialBill, type OfficialBill } from "./official-county-bills";
 import { readOfficialCache, writeOfficialCache, currentBillYear } from "./official-tax-cache";
 import { calculateCollierPurchaseAdValorem } from "../../shared/collier-property-tax";
+import { MANATEE_RATES_SOURCE, manateeAdValoremCents } from "../../shared/manatee-property-tax";
 
 const title = (county: string) => county[0].toUpperCase()+county.slice(1);
 export async function officialParcelTax(input: EstimatorInput, refinance = false) {
@@ -23,7 +24,11 @@ export async function officialParcelTax(input: EstimatorInput, refinance = false
     (async()=>{
       if (refinance) return;
       try {
-        if(input.county==="manatee") throw new Error("Manatee PAO estimator has no purchase-price input (current-roll only)");
+        if(input.county==="manatee") {
+          const e=cached?.estimator;
+          estimator=e ? {...e,adValoremCents:manateeAdValoremCents(input.purchasePrice,input.homestead,e.schoolMills!,e.nonSchoolMills!)} : await directEstimator(input);
+          return;
+        }
         if(!isCountyEstimatorVerified(input.county)) throw new Error(`${title(input.county)} official estimator has not passed verification`);
         if(["collier","hernando"].includes(input.county)) {
           if(process.env[input.county==="collier"?"COLLIER_BROWSER_ESTIMATOR":"HERNANDO_BROWSER_ESTIMATOR"]!=="on")
@@ -37,13 +42,13 @@ export async function officialParcelTax(input: EstimatorInput, refinance = false
     })(),
   ]);
   const billSource: TaxSource | undefined = bill ? {name:`${title(input.county)} County Tax Collector ${bill.taxYear} Annual Bill`,url:bill.url,fetchedAt:bill.fetchedAt,taxYear:bill.taxYear,parcelId:input.parcelId} : undefined;
-  const estimatorSource: TaxSource | undefined = estimator ? {name:`${title(input.county)} County Property Appraiser Tax Estimator`,url:estimator.url,fetchedAt:estimator.fetchedAt,taxYear:input.taxYear,parcelId:input.parcelId,purchasePrice:input.purchasePrice,homestead:input.homestead} : undefined;
+  const estimatorSource: TaxSource | undefined = estimator ? {name:estimator.sourceLabel ?? `${title(input.county)} County Property Appraiser Tax Estimator`,url:estimator.url,fetchedAt:estimator.fetchedAt,taxYear:input.taxYear,parcelId:input.parcelId,purchasePrice:input.purchasePrice,homestead:input.homestead} : undefined;
   const adValorem: TaxPart = refinance ? {cents:bill?.adValoremCents??null,reason:billError||undefined,source:billSource} : {cents:estimator?.adValoremCents??null,reason:estimatorError||undefined,source:estimatorSource};
   const nav: TaxPart = {cents:bill?.navCents??null,reason:billError||undefined,source:billSource,lines:bill?.lines};
   if(bill && estimator?.estimatorNavCents!=null && bill.navCents!==estimator.estimatorNavCents)
     warnings.push(`The estimator shows $${(estimator.estimatorNavCents/100).toFixed(2)} non-ad valorem; the current bill shows $${(bill.navCents/100).toFixed(2)}. The bill amount is used.`);
   if(bill || estimator) {
-    try { await writeOfficialCache({county:input.county,parcelId:input.parcelId,taxYear:input.taxYear,bill,estimator}); }
+    try { await writeOfficialCache({county:input.county,parcelId:input.parcelId,taxYear:input.taxYear,bill,estimator:estimator ?? (input.county==="manatee"?cached?.estimator:undefined)}); }
     catch { warnings.push("Official data was fetched, but could not be saved in the cache."); }
   }
   const breakdown=composeOfficialTax(adValorem,nav,warnings);
@@ -51,8 +56,8 @@ export async function officialParcelTax(input: EstimatorInput, refinance = false
   return breakdown;
 }
 export async function officialPurchaseTax(params: {county:CountySlug;address:string;purchasePrice:number;isPrimaryResidence:boolean}) {
-  if (!isCountyEstimatorVerified(params.county)) {
-    const reason=params.county==="manatee" ? "Manatee PAO estimator has no purchase-price input (current-roll only)" : `${title(params.county)} official estimator has not passed verification`;
+  if (params.county !== "manatee" && !isCountyEstimatorVerified(params.county)) {
+    const reason=`${title(params.county)} official estimator has not passed verification`;
     const breakdown=composeOfficialTax({cents:null,reason},{cents:null,reason:"Collector bill not loaded for this unverified purchase estimate"});
     return {adValoremTax:null,nonAdValoremTax:null,annualTax:null,monthlyTax:null,source:`${params.county}-county-estimator-unavailable`,fromGeneralCache:false,breakdown,operationalError:reason,nonAdValoremPending:false,nonAdValoremLines:[]};
   }
@@ -76,7 +81,7 @@ export async function officialPurchaseTax(params: {county:CountySlug;address:str
     nonAdValoremTax:breakdown.nonAdValorem.cents===null?null:breakdown.nonAdValorem.cents/100,
     annualTax:breakdown.total.cents===null?null:breakdown.total.cents/100,
     monthlyTax:breakdown.total.cents===null?null:Math.round(breakdown.total.cents/12)/100,
-    source:`${params.county}-county-estimator${breakdown.total.cents===null?"-unavailable":""}`,
+    source:`${params.county==="manatee"?MANATEE_RATES_SOURCE:`${params.county}-county-estimator`}${breakdown.total.cents===null?"-unavailable":""}`,
     fromGeneralCache:false,parcelId:parcelId||undefined,breakdown,
     nonAdValoremLines:breakdown.nonAdValorem.lines?.map(l=>({authority:l.name,amount:l.amount})),
     nonAdValoremPending:false,operationalError:breakdown.total.reason,

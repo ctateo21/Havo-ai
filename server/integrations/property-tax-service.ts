@@ -557,7 +557,7 @@ export const COUNTY_ESTIMATOR_BLOCKERS: Record<Exclude<CountySlug, "hillsborough
   pinellas:
     "Pinellas publishes a purchase estimator at pcpao.gov, but it is a multi-step Drupal form and its result already includes the parcel's latest non-ad valorem. It stays on manual entry until a known-answer run matches that page without double-counting CDD.",
   manatee:
-    "Manatee does not publish a standalone purchase-price estimator. The parcel page has an estimate widget that was not verified against a known answer. Manual entry is required.",
+    "Manatee purchase taxes are calculated from official parcel rates, not an official purchase-price estimator.",
   pasco:
     "Pasco's estimate is a link inside a property record, not a verified purchase-price calculator. Manual entry is required.",
   hernando:

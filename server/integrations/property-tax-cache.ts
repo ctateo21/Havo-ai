@@ -82,6 +82,9 @@ export interface PropertyTaxCacheRow {
  *
  * Exported for unit testing.
  */
+export function isManateeOfficialRatesSource(source: unknown): boolean {
+  return source === "manatee-official-rates";
+}
 export function isOfficialEstimatorCacheSource(source: unknown): boolean {
   return typeof source === "string" && /^(?:county-estimator|(?:hillsborough|pinellas|pasco|polk|sarasota|lee|hernando|collier)-county-estimator)$/.test(source.trim().toLowerCase());
 }
@@ -107,6 +110,14 @@ export function isCacheRowValid(
   purchasePrice: number,
   now: Date = new Date(),
 ): boolean {
+  if (isManateeOfficialRatesSource(row.source)) {
+    return !!(row.parcelId || row.folio) && hasCompleteMillageInputs(row) &&
+      row.assessmentRatio===1 && row.homesteadSchoolExemption===25000 &&
+      row.homesteadNonSchoolExemption===50000 && row.rateYear===2026 &&
+      row.schoolMillage!>0 && row.nonSchoolMillage!>0 &&
+      Number.isSafeInteger(row.nonAdValoremAmtCents) && row.nonAdValoremAmtCents>=0 &&
+      row.expiresAt>now && Number.isFinite(purchasePrice) && purchasePrice>0;
+  }
   if (!isOfficialEstimatorCacheSource(row.source)) return false;
   // A collector bill is not a purchase-estimator result.
   if (row.source === "pinellas-bill-live") return false;
@@ -245,6 +256,14 @@ export function computeFromCache(
   purchasePrice: number,
   homestead: boolean
 ): { adValoremTax: number; nonAdValoremTax: number; annualTax: number } {
+  if (isManateeOfficialRatesSource(row.source)) {
+    if (!hasCompleteMillageInputs(row) || row.assessmentRatio!==1 ||
+        row.homesteadSchoolExemption!==25000 || row.homesteadNonSchoolExemption!==50000 || row.rateYear!==2026)
+      throw new Error("Manatee official rate components unavailable");
+    const av=Math.round((Math.max(0,purchasePrice-(homestead?25000:0))*row.schoolMillage! +
+      Math.max(0,purchasePrice-(homestead?50000:0))*row.nonSchoolMillage!)/10);
+    return {adValoremTax:av/100,nonAdValoremTax:row.nonAdValoremAmtCents/100,annualTax:(av+row.nonAdValoremAmtCents)/100};
+  }
   let adValoremTax: number;
   if (hasCompleteMillageInputs(row)) {
     const isCollierOfficial =

@@ -53,7 +53,7 @@ export function OfficialTaxDisclosure({ breakdown, loading, reason }: {
       {loading && <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
         <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />Checking official county sources…
       </p>}
-      <Part label="Ad valorem — county estimator" part={breakdown?.adValorem} />
+      <Part label={breakdown?.adValorem.source?.name.startsWith("Calculated from Manatee") ? "Ad valorem — calculated from official rates" : "Ad valorem — county estimator"} part={breakdown?.adValorem} />
       <Part label="Non-ad valorem — tax collector" part={breakdown?.nonAdValorem} />
       <Part label="Total annual property tax" provenance={false} part={breakdown?.total ?? { cents: null, reason: reason || "Official tax components missing" }} />
       {breakdown?.warnings.map((warning, index) => (

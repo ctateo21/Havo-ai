@@ -36,7 +36,7 @@ test("purchase routes fail closed when no official county estimator is verified"
 
   for (const county of counties) {
     // Verified providers belong in the opt-in live matrix, not this gate test.
-    if(isCountyEstimatorVerified(county)) continue;
+    if(county==="manatee" || isCountyEstimatorVerified(county)) continue;
     const result = await getCountyPurchaseTax({
       county,
       address: "112 Palmetto Dunes Cir, Naples, FL 34113",
@@ -182,7 +182,7 @@ test("a cached Hillsborough millage is recomputed and the CDD stays flat", async
   assert.match(result.sourceLabel ?? "", /2026-08-01/);
 });
 
-test("Manatee explains why purchase estimates remain unavailable", async () => {
+test("Manatee purchase without a verified parcel stays unavailable", async () => {
   const polk = await getCountyPurchaseTax({
     county: "manatee",
     address: "Bradenton, FL",
@@ -190,7 +190,7 @@ test("Manatee explains why purchase estimates remain unavailable", async () => {
     isPrimaryResidence: true,
   });
   assert.equal(polk.annualTax, null);
-  assert.match(polk.operationalError ?? "", /no purchase-price input/);
+  assert.match(polk.operationalError ?? "", /identity could not be verified/);
   assert.equal(polk.breakdown?.total.cents, null);
 });
 

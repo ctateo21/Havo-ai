@@ -3,6 +3,7 @@ import type { CountySlug } from "./parcel-resolver";
 import type { OfficialBill } from "./official-county-bills";
 import type { EstimatorOutput } from "./county-estimator-direct";
 import { pinellasEstimatorStrap } from "./county-estimator-direct";
+import { MANATEE_RATES_SOURCE, MANATEE_RATES_LABEL } from "../../shared/manatee-property-tax";
 /** Nov 1 is still EDT unless it is Sunday (the first Sunday ends DST at 2am).
  * Midnight Nov 1 is therefore always UTC-04:00 under US rules. */
 export function officialTaxExpiry(now = new Date()): Date {
@@ -35,6 +36,15 @@ export async function readOfficialCache(county: CountySlug, parcelId: string, ta
   if (r.estimator_source==="collier-official-page-verified-recompute" && r.mills_school!=null && r.mills_non_school!=null && r.estimator_url && r.estimator_queried_at) {
     value.estimator={adValoremCents:0,estimatorNavCents:null,schoolMills:Number(r.mills_school),nonSchoolMills:Number(r.mills_non_school),assessmentRatio:Number(r.assessment_ratio),exemptionSchedule:r.exemption_schedule,url:r.estimator_url,fetchedAt:r.estimator_queried_at,snapshot:typeof metadata.estimator==="string"?metadata.estimator:""};
   }
+  if (county==="manatee" && taxYear===2026 && r.estimator_source===MANATEE_RATES_SOURCE &&
+      Number(r.mills_school)>0 && Number(r.mills_non_school)>0 && Number(r.assessment_ratio)===1 &&
+      r.exemption_schedule?.homestead_school===25000 && r.exemption_schedule?.homestead_non_school===50000 &&
+      metadata.rateYear===2026 && r.estimator_url && r.estimator_queried_at) {
+    value.estimator={adValoremCents:0,estimatorNavCents:metadata.estimatorNavCents??null,
+      schoolMills:Number(r.mills_school),nonSchoolMills:Number(r.mills_non_school),assessmentRatio:1,
+      exemptionSchedule:r.exemption_schedule,rateYear:2026,sourceLabel:MANATEE_RATES_LABEL,
+      url:r.estimator_url,fetchedAt:r.estimator_queried_at,snapshot:metadata.estimator??""};
+  }
   return value;
 }
 export async function writeOfficialCache(value: OfficialCache): Promise<void> {
@@ -47,6 +57,11 @@ export async function writeOfficialCache(value: OfficialCache): Promise<void> {
     ...(e ? {mills_school:e.schoolMills??null,mills_non_school:e.nonSchoolMills??null,mills_total:e.schoolMills!=null&&e.nonSchoolMills!=null?e.schoolMills+e.nonSchoolMills:null,exemption_schedule:e.exemptionSchedule??null,assessment_ratio:e.assessmentRatio??null,estimator_url:e.url,estimator_queried_at:e.fetchedAt,estimator_source:value.county==="collier"?"collier-official-page-verified-recompute":`${value.county}-official-estimator`} : {}),
     raw_snapshot:JSON.stringify({identifiers:value.county==="pinellas"?{parcel:value.parcelId,estimatorStrap:pinellasEstimatorStrap(value.parcelId).replace("--0",""),billAccount:b?new URL(b.url).searchParams.get("p"):null}:undefined,situsAddress:b?.situsAddress,bill:b?.snapshot.slice(0,9000),estimator:e?.snapshot.slice(0,9000)}),
   };
+  if (value.county==="manatee" && e) {
+    row.source=MANATEE_RATES_SOURCE;
+    row.estimator_source=MANATEE_RATES_SOURCE;
+    row.raw_snapshot=JSON.stringify({bill:b?.snapshot.slice(0,9000),estimator:e.snapshot.slice(0,9000),rateYear:e.rateYear,sourceLabel:e.sourceLabel,estimatorNavCents:e.estimatorNavCents});
+  }
   const {error}=await supabaseAdmin.from("property_tax_cache").upsert(row,{onConflict:"county,parcel_id,tax_year"});
   if(error) throw new Error("Official tax cache write failed");
 }

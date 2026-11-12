@@ -3,10 +3,13 @@ import { CountySession, webForm, pageText, amountAfter, moneyCents } from "./cou
 import { hcpaOfficialLowEndAdValorem, HCPA_ESTIMATOR_PAGE } from "./hillsborough-estimator";
 import { fetchHcpaRatesForPin } from "./hillsborough-tax";
 import type { CountySlug } from "./parcel-resolver";
+import { MANATEE_RATES_URL, parseManateeRates } from "./manatee-official-rates";
 export interface EstimatorInput {
   county: CountySlug; parcelId: string; address: string; purchasePrice: number; homestead: boolean; taxYear: number; folioId?: string; taxDistrict?: string;
 }
 export interface EstimatorOutput {
+  sourceLabel?: string;
+  rateYear?: number;
   parcelId?: string;
   situsAddress?: string;
   adValoremCents: number;
@@ -84,6 +87,10 @@ export async function directEstimator(input: EstimatorInput): Promise<EstimatorO
   const {county,parcelId,purchasePrice:price,homestead:hx,taxYear:year,address} = input;
   const s = new CountySession(county==="sarasota",county==="sarasota"?1000:0);
   let url: string, html: string;
+  if (county === "manatee") {
+    if (!/^\d{10}$/.test(parcelId)) throw new Error("Manatee official ten-digit parcel ID unavailable");
+    return parseManateeRates(JSON.parse(await s.request(`${MANATEE_RATES_URL}?parid=${parcelId}`)),parcelId,price,hx,year);
+  }
   if (county === "hillsborough") {
     const folio = parcelId.replace(/^A/i,"").replace(/\D/g,"");
     const records = JSON.parse(await s.request("https://gis.hcpafl.org/CommonServices/property/search/BasicSearch?folio="+folio));

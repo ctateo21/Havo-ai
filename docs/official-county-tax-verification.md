@@ -19,7 +19,8 @@ The purchase total always adds estimator AV (low end) to **bill** NAV.
 | Collier | Same parcel, $400k HX / no HX | $3,236 / $3,580 | $269.77 | $3,505.77 / $3,849.77 |
 | Hernando | Browser, $400k CWES HX / no HX | $5,110.14 / $5,661.16 | $159.17 | $5,269.31 / $5,820.33 |
 | Sarasota | Same-session agreement POST then TaxEstOut GET, $400k HX / no HX | $4,601 / $5,180 | $963.66 | $5,564.66 / $6,143.66 |
-| Manatee | No purchase-price estimator | **Unavailable by design** | $1,743.56 verified | **Unavailable** |
+| Manatee | Official 2026 parcel rates, $313,498 HX / no HX | $4,034.33 / $4,613.22 | $282.36 | $4,316.69 / $4,895.58 |
+| Manatee | Cached component recompute, $400k HX / no HX | $5,307.23 / $5,886.12 | $282.36 | $5,589.59 / $6,168.48 |
 
 Polk's captured ranges were $5,696–$6,416 and $6,483–$7,203. Only the low end
 is used, after subtracting any assessment amount from its letter.
@@ -28,7 +29,28 @@ Hernando's published total is retained. Christian explicitly approved warning
 about the county-line/breakdown discrepancy instead of recomputing its total.
 
 All nine collector samples matched the supplied gross bill figures. Manatee's
-verified refinance gross bill is $4,480.54, not its discounted payment amount.
+Rookery refinance gross bill is $4,480.54, not its discounted payment amount.
+
+## Manatee calculated purchase exception
+
+Manatee is deliberately NOT in `ESTIMATOR_VERIFIED_COUNTIES`. Its distinct
+source is `manatee-official-rates`, with the UI and persisted provenance label:
+
+> Calculated from Manatee County official 2026 rates and exemptions (no official purchase-price estimator)
+
+The on-demand HTTP rates response for parcel 2051711709 supplies 6.275 school
+mills and 8.4403 non-school mills. Calculation uses 100% of purchase price,
+flat $25,000 school/$50,000 non-school homestead exemptions, and rounds the
+aggregate AV to cents. No shared 85% ratio, indexed exemption or linear
+price percentage is used. Current collector NAV stays fixed at $282.36.
+The gross Pine Trace refinance bill is $4,895.59 (one cent above the widget's
+no-HX purchase total), never the discounted $4,699.77.
+
+Cache stores parcel-specific mills, ratio, exemption schedule, official year
+and source metadata, bill totals/lines/URLs and fetch times until November 1.
+The manual live matrix checks GET and HX POST at current just value, then
+blocks all county HTTP calls while testing changed prices against persisted
+cache and refinance. Manatee lookups are omitted from unattended nightly runs.
 
 ## Identity, provenance and cache
 

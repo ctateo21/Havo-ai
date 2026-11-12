@@ -4,6 +4,9 @@ import {directEstimator} from "../server/integrations/county-estimator-direct";
 import {browserEstimator} from "../server/integrations/county-estimator-browser";
 import {fetchOfficialBill} from "../server/integrations/official-county-bills";
 import type {CountySlug} from "../server/integrations/parcel-resolver";
+import {MANATEE_RATES_URL} from "../server/integrations/manatee-official-rates";
+import {officialParcelTax} from "../server/integrations/official-tax-pipeline";
+import {MANATEE_RATES_LABEL} from "../shared/manatee-property-tax";
 
 // User-supplied official 2026 answers, not synthesized provider fixtures.
 // Unsupported cases deliberately fail; a scheduled job never changes the gate.
@@ -47,8 +50,35 @@ const bills:[CountySlug,number,number,number][]=[
   ["collier",472908,26977,499885],
 ];
 for(const [county,av,nav,gross]of bills)test(`${county}: 2026 gross bill`,{
-  timeout:180000,skip:!["pinellas","polk","manatee"].includes(county)&&!process.env.FIRECRAWL_API_KEY?"FIRECRAWL_API_KEY required":false,
+  timeout:180000,skip:county==="manatee"&&process.env.COUNTY_TAX_NIGHTLY==="1"?"Manatee on-demand only":!["pinellas","polk","manatee"].includes(county)&&!process.env.FIRECRAWL_API_KEY?"FIRECRAWL_API_KEY required":false,
 },async()=>{
   const b=await fetchOfficialBill(county,parcels[county],2026,undefined,county==="pinellas"?"7400 36TH AVE N, ST PETERSBURG, FL 33710":undefined);
   assert.deepEqual([b.adValoremCents,b.navCents,b.combinedCents],[av,nav,gross]);
+});
+test("Manatee live widget, gross bill and persisted zero-call price recomputation",{
+  timeout:180000,skip:process.env.COUNTY_TAX_NIGHTLY==="1"?"Manatee on-demand only":false,
+},async()=>{
+  const raw=await (await fetch(`${MANATEE_RATES_URL}?parid=2051711709`)).json();
+  assert.equal(raw.taxes[0].v_est_taxes,4613.22);
+  const hx=await (await fetch(MANATEE_RATES_URL,{method:"POST",body:new URLSearchParams({Exemptions:JSON.stringify({...raw.taxes[0],v_exemptions:"HX1,",v_discount:0,v_chart_mode:{state:"tax",funds:true,breakdown:{show:false,fundKey:""}}})})})).json();
+  assert.equal(Math.round(hx.taxes[0].v_est_taxes*100),403433);
+  const input={county:"manatee" as const,parcelId:"2051711709",address:"7755 PINE TRACE DR",purchasePrice:313498,homestead:false,taxYear:2026};
+  const first=await officialParcelTax(input);
+  assert.equal(first.adValorem.cents,461322);assert.equal(first.total.cents,489558);
+  assert.equal(first.adValorem.source?.name,MANATEE_RATES_LABEL);
+  const real=globalThis.fetch;let countyCalls=0;
+  globalThis.fetch=async(url,init)=>{
+    if(/manateepao|taxcollector\.com|firecrawl/.test(String(url))){countyCalls++;throw Error("Unexpected county call on cached price");}
+    return real(url,init);
+  };
+  try{
+    for(const [homestead,total] of [[false,616848],[true,558959]] as const){
+      const result=await officialParcelTax({...input,purchasePrice:400000,homestead});
+      assert.equal(result.total.cents,total);
+    }
+    assert.equal((await officialParcelTax({...input,homestead:true})).total.cents,431669);
+    assert.equal((await officialParcelTax(input,true)).total.cents,489559);
+    assert.equal(countyCalls,0);
+  }finally{globalThis.fetch=real;}
+  console.log("Manatee live GET 4613.22; HX POST 4034.33; cache totals 6168.48/5589.59; gross 4895.59; new county calls 0");
 });
