@@ -10,7 +10,7 @@ import {
 
 export type QuoteCacheRow = typeof insuranceQuoteCache.$inferSelect;
 export type QuoteCacheInsert = typeof insuranceQuoteCache.$inferInsert;
-type Identity = Partial<Pick<QuoteCacheRow, "id" | "leadId" | "addressNormalized" | "policyType">>;
+type Identity = Partial<Pick<QuoteCacheRow, "id" | "leadId" | "addressNormalized" | "policyType" | "cacheScope">>;
 export type QuoteCacheGeneration = Pick<QuoteCacheRow, "triggeredAt" | "leadId"> & {
   /** The durable poll lease owner. Omit this for non-polling writes. */
   quotePollClaimedAt?: QuoteCacheRow["quotePollClaimedAt"];
@@ -40,6 +40,7 @@ function sourceWhere(identity: Identity) {
   if (identity.leadId != null) terms.push(eq(insuranceQuoteCache.leadId, identity.leadId));
   if (identity.addressNormalized != null) terms.push(eq(insuranceQuoteCache.addressNormalized, identity.addressNormalized));
   if (identity.policyType != null) terms.push(eq(insuranceQuoteCache.policyType, identity.policyType));
+  if (identity.cacheScope != null) terms.push(eq(insuranceQuoteCache.cacheScope, identity.cacheScope));
   if (!terms.length) throw new Error("Quote cache read requires an identity");
   return and(...terms)!;
 }
@@ -434,7 +435,7 @@ async function mirrorTargetRow(row: QuoteCacheRow) {
   if (!supabaseAdmin) throw new Error("Supabase admin client is unavailable");
   const { error } = await supabaseAdmin.from("insurance_quote_cache").upsert(
     targetRow(row),
-    { onConflict: "address_normalized,policy_type" },
+    { onConflict: "address_normalized,policy_type,cache_scope" },
   );
   if (error) throw error;
 }
@@ -451,6 +452,7 @@ export async function claimNewQuoteCache(values: QuoteCacheInsert) {
           .where(and(
             eq(insuranceQuoteCache.addressNormalized, values.addressNormalized),
             eq(insuranceQuoteCache.policyType, policyType),
+            eq(insuranceQuoteCache.cacheScope, values.cacheScope??"shared"),
           ))
           .limit(1))[0];
         if (row) await mirrorTargetRow(row);

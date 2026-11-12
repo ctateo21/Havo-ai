@@ -5,6 +5,31 @@ description: How Havo's live insurance quoting talks to QuoteRUSH — manual tri
 
 # QuoteRUSH integration
 
+## Current insurance decisions (2026-11-12; supersede older shared-cache notes below)
+
+**Rule:** Never pull or ask permission to pull credit; send CreditPermission No.
+Use an assumed score (default Excellent), clearly disclosed.
+Coverage A comes only from confirmed area and administrator-configured county
+rebuild rates, or an explicit manual value—never market value. Rates start NULL.
+Roof year is explicitly entered/selected, integer 2000–2027, never inferred age.
+
+**Why:** The user rejected fabricated underwriting inputs and authorized only
+verified source data or explicitly entered answers.
+
+**Rule:** Shared facts last one year; paid quotes require exact non-personal
+answers and an owner identity. Cross-user reuse is allowed only for matching
+answers on claim-free runs. Claim-bearing runs stay owner-specific.
+
+**Why:** Address-only reuse could attach another applicant's underwriting.
+The newer decision overrides the old unconditional address/policy reuse below.
+
+**Rule:** Requested result emails are transactional regardless of marketing
+unsubscribe; later marketing still requires consent. Ambiguous imports must
+never be retried as new leads. Migrations need explicit approval before applying.
+
+**Why:** Avoid lost requested results, duplicate carrier submissions and
+unapproved shared-database changes.
+
 Live carrier home-insurance quoting on the insurance page. Flow:
 enrich property data → import lead (importer.quoterush.com) → extract
 LeadId → SubmitQuoteRequest (triggers QuoteBot) → client polls

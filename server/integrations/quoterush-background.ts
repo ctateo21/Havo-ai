@@ -14,10 +14,11 @@ import {
   type QuoteRushQuote,
   type QuoteRushResult,
 } from "./quoterush";
-import { sendQuoteRushResultsEmail } from "./property-alert-emails";
+import { sendQuoteRushResultsEmail,sendInternalAlert } from "./property-alert-emails";
+import {sendLiveInsuranceLeadAlert} from "./live-insurance-lead-alert";
 
-export const QUOTE_POLL_INTERVAL_MS = 30_000;
-export const MAX_QUOTE_POLL_ATTEMPTS = 24;
+export const QUOTE_POLL_INTERVAL_MS = 20_000;
+export const MAX_QUOTE_POLL_ATTEMPTS = 36;
 export const MAX_QUOTE_POLL_AGE_MS =
   QUOTE_POLL_INTERVAL_MS * MAX_QUOTE_POLL_ATTEMPTS;
 
@@ -28,6 +29,7 @@ export type QuoteJobOutcome =
   | "missing";
 
 export interface QuotePollingDependencies {
+  alertManualReview?: (row:QuoteCacheRow)=>Promise<unknown>;
   getQuotes: (leadId: number) => Promise<QuoteRushResult>;
   readQuoteCache: (
     identity: { id: number },
@@ -54,10 +56,17 @@ export interface QuotePollingDependencies {
     quotes: QuoteRushQuote[];
     windMitigationReportConfirmed: boolean;
     idempotencyKey: string;
+    assumptions?: string[];
   }) => Promise<{ status: "sent" | "failed" | "skipped"; error: string | null }>;
 }
 
 const defaultDependencies: QuotePollingDependencies = {
+  alertManualReview:async row=>{
+    const {notifyInsuranceCrm}=await import("./quoterush-import-jobs");
+    await notifyInsuranceCrm(row,{},"No usable carrier quotes; agent follow-up requested");
+    await sendLiveInsuranceLeadAlert({address:row.addressDisplay,name:row.emailRecipient??"",email:row.emailRecipient??"",phone:"",
+      requestId:`manual-${row.id}-${row.triggeredAt.getTime()}`});
+  },
   getQuotes,
   readQuoteCache,
   updateQuoteCache,
@@ -111,7 +120,7 @@ async function compareAndSetCache(
   return updatedRow;
 }
 
-function topThreePositiveQuotes(quotes: QuoteRushQuote[]): QuoteRushQuote[] {
+export function topThreePositiveQuotes(quotes: QuoteRushQuote[]): QuoteRushQuote[] {
   return quotes
     .filter(quote => Number(quote.annualPremium) > 0)
     .sort((a, b) => a.annualPremium - b.annualPremium)
@@ -168,6 +177,7 @@ async function deliverResultsEmail(
     propertyAddress: claimed.addressDisplay,
     quotes: topThreePositiveQuotes((claimed.quotes ?? []) as QuoteRushQuote[]),
     windMitigationReportConfirmed: windMitigationReportConfirmed === true,
+    assumptions:claimed.assumptions??[],
     idempotencyKey:
       `insurance-quote-cache:${claimed.id}:` +
       `${claimed.triggeredAt.getTime()}:results`,
@@ -177,6 +187,7 @@ async function deliverResultsEmail(
     emailSentAt: result.status === "sent" ? new Date() : null,
     emailError: result.error,
   }, dependencies, "success");
+  if(result.status==="sent" && !(claimed.quotes??[]).length)await dependencies.alertManualReview?.(claimed);
 }
 
 /** Perform one server-owned GetQuotes poll. The cache row remains pending
@@ -233,7 +244,7 @@ export async function pollQuoteJob(
           quotePollLeaseUntil: null,
         }
       : {
-          status: "failed",
+          status: "success",
           completedAt: now,
           quotePollAttempts: row.quotePollAttempts ?? MAX_QUOTE_POLL_ATTEMPTS,
           quotePollClaimedAt: null,
@@ -243,13 +254,9 @@ export async function pollQuoteJob(
             : "QuoteRUSH lead was not published before the polling window expired",
         }, dependencies);
     if (!updated) return "missing";
-    if (partialQuotes.length > 0) {
-      await deliverResultsEmail(updated, dependencies);
-      pollStates.delete(pollStateKey(row));
-      return "completed";
-    }
+    await deliverResultsEmail(updated, dependencies);
     pollStates.delete(pollStateKey(row));
-    return "failed";
+    return "completed";
   }
   // A concurrent caller may have claimed the row while its lead is still
   // being imported. Never treat that short null-lead window as a retryable
@@ -341,7 +348,7 @@ export async function pollQuoteJob(
       return "completed";
     }
     const updated = await compareAndSetCache(row, {
-      status: "failed",
+      status: "success",
       leadId,
       quotes,
       quoteCounter: counter,
@@ -356,8 +363,9 @@ export async function pollQuoteJob(
         : "No positive carrier quote stabilized before the polling window expired",
     }, dependencies);
     if (!updated) return "missing";
+    await deliverResultsEmail(updated,dependencies);
     pollStates.delete(stateKey);
-    return "failed";
+    return "completed";
   }
 
   const updated = await compareAndSetCache(row, {

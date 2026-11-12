@@ -52,3 +52,21 @@ jobs:
             ! -name 'insurance-cache-routes.test.ts' \
             | sort)
           npx --no-install tsx --test --test-concurrency=1 $files
+      - name: TypeScript and production build
+        run: npm run check && npm run build
+        env:
+          DATABASE_URL: postgres://unit-test:unit-test@127.0.0.1:5432/unit_test
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+      - name: Mocked browser regression tests
+        env:
+          DATABASE_URL: postgres://unit-test:unit-test@127.0.0.1:5432/unit_test
+        run: |
+          npm run test:e2e
+          # The standard suite stops its owned server. Start a fixture-only
+          # server for the focused insurance suite; no carrier credentials.
+          SUPABASE_SERVICE_ROLE_KEY= VITE_SUPABASE_URL=https://browser-test.supabase.co VITE_SUPABASE_ANON_KEY=browser-test-anon-key-with-more-than-twenty-characters npm run dev > /tmp/insurance-browser-server.log 2>&1 &
+          server=$!
+          trap 'kill $server 2>/dev/null || true' EXIT
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:5000/ >/dev/null && break; sleep 1; done
+          npx playwright test -c client/src/components/insurance/insurance.browser.config.ts

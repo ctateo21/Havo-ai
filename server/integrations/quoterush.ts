@@ -66,6 +66,7 @@ export interface QuoteRushClaimRecord {
 }
 
 export interface QuoteRushQuote {
+  returnedCoverageA?:number|null;
   siteName: string;
   annualPremium: number;
   monthlyPremium: number;
@@ -106,8 +107,8 @@ function parseLeadId(text: string): number | null {
                ?? json.lead_id ?? json.Id;
     if (id) return parseInt(String(id), 10);
   } catch {}
-  const m = text.match(/\d+/);
-  return m ? parseInt(m[0], 10) : null;
+  const m = text.match(/Lead\s*#(\d+)/i);
+  return m ? parseInt(m[1], 10) : null;
 }
 
 function formatDateOfBirth(dateOfBirth: string): string {
@@ -143,7 +144,9 @@ export function buildImporterPayload(
       NameFirst: p.firstName || "Havo",
       NameLast: p.lastName || "Lead",
       DOB: formatDateOfBirth(p.dateOfBirth),
+      DateOfBirth: formatDateOfBirth(p.dateOfBirth),
       Phone: p.phone || "",
+      PhoneNumber: p.phone || "",
       PhoneCell: p.phone || "",
       PhoneOther: "",
       EmailAddress: p.email || "",
@@ -159,8 +162,8 @@ export function buildImporterPayload(
       Zip: p.zip,
       County: p.county || "",
       International: false,
-      AssumedCreditScore: "Excellent",
-      CreditPermission: "Yes",
+      AssumedCreditScore: process.env.QUOTERUSH_ASSUMED_CREDIT_SCORE || "Excellent",
+      CreditPermission: "No",
       Assigned: assignedEmail,
       LeadSource: "Havo Platform",
       LeadStatus: "New Lead",
@@ -182,6 +185,7 @@ export function buildImporterPayload(
       PurchasePrice: String(Math.round(p.purchasePrice)),
       UsageType: p.usageType || "Primary",
       MonthsOccupied: p.monthsOccupied,
+      MonthsOwnerOccupied: p.monthsOccupied,
       ...(p.rentalTerm ? { RentalTerm: p.rentalTerm } : {}),
       YearBuilt: String(p.yearBuilt),
        PolicyEffectiveDate: p.policyEffectiveDate,
@@ -355,7 +359,8 @@ export async function getPropertyData(
 }
 
 export async function importAndSubmit(
-  params: QuoteRushParams
+  params: QuoteRushParams,
+  hooks:{callbackUrl?:string;onLeadCreated?:(id:number)=>Promise<void>;onCarriers?:(count:number|null,warning?:string)=>Promise<void>}={}
 ): Promise<{
   leadId: number;
   submitted: boolean;
@@ -417,7 +422,7 @@ export async function importAndSubmit(
   let importText: string;
   try {
     importRes = await fetch(
-      `https://importer.quoterush.com/Json/Import/${WEBID}`,
+      `https://importer.quoterush.com/Json/Import/${WEBID}?responseType=JSON`,
       {
         method: "POST",
         headers: {
@@ -443,55 +448,13 @@ export async function importAndSubmit(
     return {
       leadId: 0,
       submitted: false,
-      error: `Import failed ${importRes.status}: ` +
-             importText,
+      error: `Import failed (${importRes.status})`,
         ...(rawPropertyData ? { rawPropertyData } : {}),
     };
   }
 
   // Step C: Extract LeadId
   let leadId = parseLeadId(importText);
-
-  // Fallback: GetNewLeads if parse failed
-  if (!leadId || leadId <= 0) {
-    console.log(
-      "[quoterush] fallback to GetNewLeads"
-    );
-    try {
-      const newLeadsRes = await fetch(
-        "https://api.quoterush.com/GetNewLeads",
-        {
-          method: "GET",
-          headers: {
-            "WebId": WEBID,
-            "WebIdPassword": WEBPASSWORD,
-          },
-        }
-      );
-      const newLeadsText =
-        await newLeadsRes.text();
-      const arr = JSON.parse(newLeadsText);
-      const leads = Array.isArray(arr)
-        ? arr
-        : (arr.Leads ?? arr.leads ?? []);
-      console.log("[quoterush] GetNewLeads count:", leads.length);
-      if (leads.length > 0) {
-        const first = leads[0];
-        leadId = parseInt(
-          String(
-            first.id ?? first.Id ??
-            first.leadId ?? first.LeadId ?? 0
-          ),
-          10
-        );
-      }
-    } catch (e) {
-      console.error(
-        "[quoterush] GetNewLeads fallback error:",
-        e
-      );
-    }
-  }
 
   if (!leadId || leadId <= 0) {
     return {
@@ -502,8 +465,22 @@ export async function importAndSubmit(
     };
   }
   console.log("[quoterush] LeadId:", leadId);
+  await hooks.onLeadCreated?.(leadId);
 
   // Step D: Submit quote request (triggers QuoteBot)
+  let carriers:unknown[]|undefined;
+  try{
+    const r=await fetch("https://api.quoterush.com/GetQuotableSitesForLead",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({EndpointKey:ENDPOINT_KEY,Agency:AGENCY,LeadId:leadId,LOB:"Home"}),
+      signal:AbortSignal.timeout(10000),
+    });
+    if(!r.ok)throw Error("Carrier discovery failed");
+    const result=await r.json();
+    if(!Array.isArray(result.Sites)||!result.Sites.length)throw Error("No carrier list");
+    carriers=result.Sites;
+  }catch{console.warn("[quoterush] Carrier discovery unavailable; submitting without Carriers");}
+  await hooks.onCarriers?.(carriers?.length??null,carriers?undefined:"Carrier discovery unavailable; submitted without a carrier list.");
   let submitRes: Response;
   let submitText: string;
   try {
@@ -520,6 +497,8 @@ export async function importAndSubmit(
           LeadId: leadId,
           LOB: "Home",
           Submitter: ASSIGNED_EMAIL,
+          ...(carriers?{Carriers:carriers}:{}),
+          ...(hooks.callbackUrl?{callbackUrl:hooks.callbackUrl}:{}),
         }),
       }
     );
@@ -536,7 +515,7 @@ export async function importAndSubmit(
     };
   }
   console.log(
-    "[quoterush] SubmitQuoteRequest:", submitText
+    "[quoterush] SubmitQuoteRequest status:", submitRes.status
   );
 
   return {
@@ -570,9 +549,6 @@ export async function getQuotes(
       }
     );
     const text = await res.text();
-    console.log(
-      "[quoterush] GetQuotes response:", text
-    );
 
     if (!res.ok) {
       return {
@@ -580,15 +556,22 @@ export async function getQuotes(
         quotes: [],
         leadId,
         quoteCounter: 0,
-        errorMessage: `GetQuotes ${res.status}: ` +
-                      text,
+        errorMessage: `GetQuotes failed (${res.status})`,
       };
     }
 
     const json = JSON.parse(text);
+    const parsed=parseQuoteRushResponse(json,leadId);
+    console.log("[quoterush] GetQuotes counts:",parsed.quoteCounter,parsed.quotes.length);
+    return parsed;
+  } catch {
+    return {status:"error",quotes:[],leadId,quoteCounter:0,errorMessage:"QuoteRUSH results unavailable"};
+  }
+}
+
+export function parseQuoteRushResponse(json:any,leadId:number):QuoteRushResult {
     const rawQuotes: any[] = json.Quotes ?? [];
-    const quoteCounter: number =
-      json.QuoteCounter ?? 0;
+    const quoteCounter = Number.isSafeInteger(Number(json.QuoteCounter)) && Number(json.QuoteCounter)>=0 ? Number(json.QuoteCounter):0;
 
     if (quoteCounter === 0) {
       return {
@@ -613,19 +596,18 @@ export async function getQuotes(
           siteName: String(
             q.SiteName ?? "Unknown Carrier"
           ),
-          annualPremium: Math.round(annual),
-          monthlyPremium: Math.round(annual / 12),
+          annualPremium: Math.round(annual*100)/100,
+          monthlyPremium: Math.round(annual/12*100)/100,
           coverageA: parseInt(
             String(q.CoverageA ?? "0"), 10
           ),
+          returnedCoverageA:Number(q.CoverageA)>0&&Number.isFinite(Number(q.CoverageA))?Number(q.CoverageA):null,
           hurricaneDeductible: String(
             q.HurricaneDeductible ?? ""
           ),
           aop: String(q.AOP ?? ""),
           quoteUrl: q.QuoteURL ?? null,
-          quoteMessage: String(
-            q.QuoteMessage ?? ""
-          ),
+          quoteMessage: "", // Provider free text can contain private applicant data.
           quoteDate: String(q.QuoteDate ?? ""),
           rank: 0,
         };
@@ -647,16 +629,4 @@ export async function getQuotes(
       leadId,
       quoteCounter,
     };
-  } catch (err: any) {
-    console.error(
-      "[quoterush] getQuotes error:", err
-    );
-    return {
-      status: "error",
-      quotes: [],
-      leadId,
-      quoteCounter: 0,
-      errorMessage: err?.message,
-    };
-  }
 }

@@ -1,4 +1,6 @@
 export interface QuoteRushCacheCandidate {
+  answerHash?:string|null;
+  ownerUserId?:string|null;
   agencyDefaultSnapshot?: unknown;
   assumptions?: unknown;
 }
@@ -11,6 +13,9 @@ export interface QuoteRushCacheCandidate {
 export function isReusableSharedQuoteCandidate(
   row: QuoteRushCacheCandidate,
 ): boolean {
+  // New rows are authorized separately against the complete answer hash and
+  // an authenticated run-access token; old private-date exclusions don't apply.
+  if(row.answerHash&&row.ownerUserId)return true;
   const snapshot =
     row.agencyDefaultSnapshot &&
     typeof row.agencyDefaultSnapshot === "object"

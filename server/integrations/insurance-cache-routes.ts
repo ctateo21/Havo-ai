@@ -7,6 +7,7 @@ import {
 } from "@shared/schema";
 import { isValidQuoteRushDate } from "@shared/quoterush-property-defaults";
 import { selectReusableSharedQuoteCandidate } from "./quoterush-shared-cache";
+import {verifyQuoteAccess} from "./quote-answer-identity";
 import {
   savePrivateInsuranceProperty as saveManagedPrivateInsuranceProperty,
 } from "../managed-account-records";
@@ -119,6 +120,8 @@ export function registerInsuranceCacheRoutes(
 
   app.get("/api/insurance/qr-cache", async (req, res) => {
     try {
+      const user=await dependencies.optionalUser(req);
+      if(!user||!req.get("X-Quote-Access"))return res.json({found:false});
       const address = String(req.query.address ?? "");
       const policyType = z.enum(["HO3", "HO6", "DP3"]).default("HO3")
         .parse(req.query.policyType);
@@ -140,7 +143,7 @@ export function registerInsuranceCacheRoutes(
           });
 
       const row = selectReusableSharedQuoteCandidate(
-        rows as Array<typeof insuranceQuoteCache.$inferSelect>,
+        (rows as Array<typeof insuranceQuoteCache.$inferSelect>).filter(row=>verifyQuoteAccess(req.get("X-Quote-Access"),row,user.id)),
       );
       if (!row) return res.json({ found: false });
       return res.json({

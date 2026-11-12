@@ -48,10 +48,8 @@ test("direct delivery uses the internal inbox and a stable idempotency key", asy
   }
 });
 
-test("only a newly started live quote sends the new direct alert", () => {
-  const routes = readFileSync("server/routes.ts", "utf8");
-  assert.equal((routes.match(/void sendLiveInsuranceLeadAlert\(/g) ?? []).length, 1);
-  const call = routes.indexOf("void sendLiveInsuranceLeadAlert(");
-  assert.ok(call > routes.indexOf('"/api/insurance/qr-start"'));
-  assert.ok(call < routes.indexOf('"/api/insurance/qr-quotes"'));
+test("durable import worker sends the operational agent alert", () => {
+  const worker = readFileSync("server/integrations/quoterush-import-jobs.ts", "utf8");
+  assert.match(worker,/await sendLiveInsuranceLeadAlert/);
+  assert.match(worker,/import requires manual reconciliation/);
 });

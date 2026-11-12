@@ -224,6 +224,7 @@ const DEFAULT_FROM = "Havo Showing Alerts <alerts@updates.tateoco.com>";
 
 async function sendOne(args: {
   to: string;
+  bcc?: string;
   replyTo?: string | null;
   subject: string;
   html: string;
@@ -239,6 +240,7 @@ async function sendOne(args: {
       from, to: args.to, subject: args.subject, html: args.html, text: args.text,
     };
     if (args.replyTo) payload.reply_to = args.replyTo;
+    if (args.bcc) payload.bcc = args.bcc;
     if (args.headers) payload.headers = args.headers;
     const { error } = await resend.emails.send(
       payload as any,
@@ -477,8 +479,15 @@ export function quoteRushResultsContent(args: {
   windMitigationReportConfirmed?: boolean;
   unsubscribeUrl: string;
   physicalAddress: string;
+  assumptions?: string[];
 }): { subject: string; html: string; text: string } {
-  const quotes = args.quotes.slice(0, 3);
+  const quotes = args.quotes.filter(q=>q.annualPremium>0).sort((a,b)=>a.annualPremium-b.annualPremium).slice(0, 3);
+  const license="Quotes provided by Tateo Insurance Corp (License #L132640) · Agent Paul Christian Tateo (W142842) · Real-time carrier rates via Tateo & Co.";
+  const binder="These are preliminary quotes, not a binder or proof of insurance. Coverage is not in force until a carrier accepts an application and issues a binder or policy. Premiums can change after underwriting and inspections.";
+  const assumptions=[`Assumed credit: ${process.env.QUOTERUSH_ASSUMED_CREDIT_SCORE||"Excellent"} (no credit check performed)`,...(args.assumptions??[])];
+  const rawSchedule=process.env.SCHEDULE_CALL_URL??"https://calendar.app.google/bGd2q1fVCsmzPgPb6";
+  let schedule="";try{const u=new URL(rawSchedule);if(u.protocol==="https:")schedule=u.toString();}catch{/* No unsafe link. */}
+  const noQuotes="Our agents are finishing your quotes manually and will contact you.";
   const rows = quotes.map((quote, index) => ({
     ...quote,
     rank: index + 1,
@@ -487,7 +496,7 @@ export function quoteRushResultsContent(args: {
     `${quote.rank}. ${quote.siteName}\n` +
     `Annual premium: ${quoteRushMoney(quote.annualPremium)}\n` +
     `Monthly equivalent: ${quoteRushMoney(quote.monthlyPremium)}\n` +
-    `Coverage A: ${quoteRushMoney(quote.coverageA)}\n` +
+    `Coverage A: ${quote.coverageA>0?quoteRushMoney(quote.coverageA):"Unavailable"}\n` +
     `Hurricane deductible: ${quote.hurricaneDeductible || "—"}\n` +
     `AOP deductible: ${quote.aop || "—"}`
   );
@@ -499,8 +508,9 @@ export function quoteRushResultsContent(args: {
     `Your preliminary insurance carrier quotes\n\n` +
     `Property: ${args.propertyAddress}\n\n` +
     textRows.join("\n\n") +
+    (rows.length?"":noQuotes)+
     disclosure +
-    `\n\nHavo · Every Step Home · Tateo Insurance Corp · License #L132640\n` +
+    `\n\n${assumptions.join("\n")}\n${schedule?`Schedule a call: ${schedule}`:"Contact your agent to schedule a call."}\n\n${license}\n${binder}\n` +
     `${args.physicalAddress}\n` +
     `Unsubscribe: ${args.unsubscribeUrl}`;
   const htmlRows = rows.map(quote =>
@@ -509,7 +519,7 @@ export function quoteRushResultsContent(args: {
     `<td style="padding:8px 10px;vertical-align:top">` +
     `Annual premium: ${esc(quoteRushMoney(quote.annualPremium))}<br/>` +
     `Monthly equivalent: ${esc(quoteRushMoney(quote.monthlyPremium))}<br/>` +
-    `Coverage A: ${esc(quoteRushMoney(quote.coverageA))}<br/>` +
+    `Coverage A: ${quote.coverageA>0?esc(quoteRushMoney(quote.coverageA)):"Unavailable"}<br/>` +
     `Hurricane deductible: ${esc(quote.hurricaneDeductible || "—")}<br/>` +
     `AOP deductible: ${esc(quote.aop || "—")}` +
     `</td></tr>`
@@ -524,8 +534,11 @@ export function quoteRushResultsContent(args: {
     `<p>Property: <strong>${esc(args.propertyAddress)}</strong></p>` +
     `<table cellpadding="0" style="border-collapse:collapse;width:100%;font-size:14px">${htmlRows}</table>` +
     htmlDisclosure +
+    (rows.length?"":`<p>${esc(noQuotes)}</p>`)+
+    `<ul>${assumptions.map(a=>`<li>${esc(a)}</li>`).join("")}</ul>`+
+    (schedule?`<p><a href="${esc(schedule)}" style="display:inline-block;padding:12px;background:#007f77;color:white">Schedule a call</a></p>`:"<p>Contact your agent to schedule a call.</p>")+
     `<p style="font-size:12px;color:#888;margin-top:20px">` +
-    `Havo · Every Step Home · Tateo Insurance Corp · License #L132640<br/>` +
+    `${esc(license)}<br/>${esc(binder)}<br/>` +
     `${esc(args.physicalAddress)}<br/>` +
     `<a href="${esc(args.unsubscribeUrl)}" style="color:#888">Unsubscribe</a></p>` +
     `</div>`;
@@ -543,26 +556,14 @@ export async function sendQuoteRushResultsEmail(args: {
   quotes: QuoteRushEmailQuote[];
   windMitigationReportConfirmed?: boolean;
   idempotencyKey: string;
+  assumptions?: string[];
 }): Promise<{ status: SendStatus; error: string | null }> {
   if (!args.to || !args.userId) {
     return { status: "skipped", error: "missing recipient identity" };
   }
-  const unsubscribed = await isUnsubscribed(args.userId);
-  if (unsubscribed !== false) {
-    return {
-      status: "skipped",
-      error: unsubscribed === true
-        ? "user unsubscribed"
-        : "unsubscribe check failed",
-    };
-  }
-  const physicalAddress = process.env.AGENCY_PHYSICAL_ADDRESS?.trim();
-  if (!physicalAddress) {
-    return {
-      status: "failed",
-      error: "AGENCY_PHYSICAL_ADDRESS is not configured",
-    };
-  }
+  // Requested quote results are transactional, independent of marketing consent.
+  const physicalAddress = process.env.AGENCY_PHYSICAL_ADDRESS?.trim() || "Tampa Bay, Florida";
+  if(!process.env.AGENCY_PHYSICAL_ADDRESS?.trim())console.warn("[quote-email] AGENCY_PHYSICAL_ADDRESS missing; using regional fallback");
   const unsubscribeUrl = unsubscribeUrlFor(args.userId);
   const content = quoteRushResultsContent({
     propertyAddress: args.propertyAddress,
@@ -570,9 +571,11 @@ export async function sendQuoteRushResultsEmail(args: {
     windMitigationReportConfirmed: args.windMitigationReportConfirmed,
     unsubscribeUrl,
     physicalAddress,
+    assumptions:args.assumptions,
   });
   const result = await sendOne({
     to: args.to,
+    bcc:process.env.QUOTE_RESULTS_BCC?.trim()||"sales@havofl.com",
     subject: content.subject,
     html: content.html,
     text: content.text,

@@ -7,9 +7,9 @@ import { LEADERBOARD_TEAM } from "./integrations/fub-leaderboard";
 
 export async function requireInterestAdmin(req: Request, res: Response): Promise<boolean> {
   res.setHeader("Cache-Control", "no-store");
-  if (!supabaseAdmin) { res.status(503).json({ error: "Database unavailable." }); return false; }
   const token = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? "")?.[1];
   if (!token) { res.status(401).json({ error: "Sign in to view results." }); return false; }
+  if (!supabaseAdmin) { res.status(503).json({ error: "Database unavailable." }); return false; }
   const { data, error } = await supabaseAdmin.auth.getUser(token);
   if (error || !data.user?.email) { res.status(401).json({ error: "Your session expired. Sign in again." }); return false; }
   const admins = new Set([
