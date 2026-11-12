@@ -88,6 +88,40 @@ export function parseCollectorHtml(html: string, year: number): Omit<OfficialBil
   const $ = load(html);
   const text = pageText(html);
   if (!text.includes(String(year))) throw new Error(`Current ${year} bill not found`);
+  const avGrid=$('[id$="_tpTaxes_TaxesGrid"]'), navGrid=$('[id$="_tpTaxes_TaxesNonAdValoremGrid"]');
+  if(avGrid.length===1 && navGrid.length===1) {
+    const section=(grid:typeof avGrid,amountIndex:number) => {
+      let cents:number|null=null; const lines:{name:string;amount:number}[]=[];
+      grid.find("tr").each((_,el)=>{
+        const cells=$(el).find("td").map((_,td)=>$(td).text().trim()).get();
+        if(cells.length<=amountIndex) return;
+        const amount=moneyCents(cells[amountIndex]);
+        if(/^TOTAL$/i.test(cells[0])) cents=amount;
+        else lines.push({name:cells[0],amount:amount/100});
+      });
+      if(cents===null) throw new Error("Collector charged total missing");
+      if(Math.round(lines.reduce((s,l)=>s+l.amount,0)*100)!==cents) throw new Error("Collector charged lines do not reconcile");
+      return {cents:cents as number,lines};
+    };
+    // Charged, not Due/Paid: a settled bill must not become a zero-tax bill.
+    const av=section(avGrid,2),nav=section(navGrid,1);
+    if(!$('[id$="lblGITaxYearBanner"]').text().includes(String(year))) throw new Error("Collector bill year mismatch");
+    return {adValoremCents:av.cents,navCents:nav.cents,combinedCents:av.cents+nav.cents,lines:nav.lines,taxYear:year,snapshot:JSON.stringify({av:av.cents,nav:nav.cents,lines:nav.lines})};
+  }
+  if($("#currentTableObject1").length && $("#currentTableObject3").length) {
+    const avMatch=/TOTAL AD VALOREM TAXES:\s*[\d.]+\s*(\$[\d,]+\.\d{2})/i.exec(text);
+    const navMatch=/TOTAL NON-AD VALOREM ASSESSMENTS:\s*(\$[\d,]+\.\d{2})/i.exec(text);
+    const combinedMatch=/COMBINED TAXES AND ASSESSMENTS:\s*(\$[\d,]+\.\d{2})/i.exec(text);
+    if(!avMatch || !navMatch || !combinedMatch) throw new Error("Manatee gross totals missing");
+    const av=moneyCents(avMatch[1]),nav=moneyCents(navMatch[1]),combined=moneyCents(combinedMatch[1]);
+    const lines:{name:string;amount:number}[]=[];
+    $("#currentTableObject3 tr").each((_,el)=>{
+      const cells=$(el).find("td").map((_,td)=>$(td).text().trim()).get();
+      if(cells.length===3 && /^\d[\d,]*\.\d{2}$/.test(cells[2])) lines.push({name:cells[1],amount:moneyCents(cells[2])/100});
+    });
+    if(av+nav!==combined || Math.round(lines.reduce((s,l)=>s+l.amount,0)*100)!==nav) throw new Error("Manatee totals do not reconcile");
+    return {adValoremCents:av,navCents:nav,combinedCents:combined,lines,taxYear:year,snapshot:JSON.stringify({av,nav,combined,lines})};
+  }
   const tables = $("table").toArray();
   function sectionTotal(label: RegExp): number {
     const row = $("tr").toArray().find(el => label.test($(el).text()) && $(el).find("tr").length === 0);
@@ -140,7 +174,8 @@ async function directBill(county: CountySlug, parcel: string, year: number): Pro
     url = unique[0];
   }
   html = await session.request(url);
-  if (!norm(pageText(html)).includes(norm(parcel))) throw new Error("Collector bill parcel does not match");
+  const expectedAccount = county==="pinellas" ? new URL(url).searchParams.get("p") : parcel;
+  if (!expectedAccount || !norm(pageText(html)).includes(norm(expectedAccount))) throw new Error("Collector bill parcel does not match");
   return {...parseCollectorHtml(html,year),url,fetchedAt:new Date().toISOString()};
 }
 export function fetchOfficialBill(county: CountySlug, parcel: string, year: number, cachedUrl?: string): Promise<OfficialBill> {

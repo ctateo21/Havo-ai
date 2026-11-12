@@ -1,0 +1,6 @@
+/** Synthetic transport fixture for NON-tax browser tests. Not county evidence. */
+export function officialTaxFixture(purchasePrice = 400000, homestead = true) {
+  const source = {name:"Synthetic browser-test county source",url:"https://gis.hcpafl.org/PropertySearch/TaxEstimator.aspx",fetchedAt:"2026-11-12T14:00:00Z",taxYear:2026,parcelId:"SYNTHETIC-TEST-FIXTURE",purchasePrice,homestead};
+  return {annualTax:5100,monthlyTax:425,adValoremTax:5000,nonAdValoremTax:100,source:"hillsborough-county-estimator",nonAdValoremPending:false,
+    breakdown:{adValorem:{cents:500000,source},nonAdValorem:{cents:10000,source,lines:[{name:"Synthetic assessment",amount:100}]},total:{cents:510000},warnings:[]}};
+}

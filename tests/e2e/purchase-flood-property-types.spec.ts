@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { officialTaxFixture } from "./official-tax-fixture";
 
 const ADDRESS = "100 Purchase Flood Test Way, Tampa, FL 33602";
 const EXCLUDED_PROPERTY_TYPES = [
@@ -11,6 +12,11 @@ const EXCLUDED_PROPERTY_TYPES = [
 async function installApiMocks(page: Page): Promise<void> {
   await page.route("**/api/**", async route => {
     const url = new URL(route.request().url());
+    if(url.pathname.startsWith("/api/property-tax/")) {
+      const input=route.request().postDataJSON();
+      await route.fulfill({json:officialTaxFixture(input.purchasePrice,input.isPrimaryResidence)});
+      return;
+    }
 
     if (url.pathname === "/api/flood-zone") {
       await route.fulfill({

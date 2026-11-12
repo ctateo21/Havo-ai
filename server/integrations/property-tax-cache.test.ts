@@ -70,7 +70,7 @@ function baseRow(): ValidInput {
     homesteadNonSchoolExemption: null,
     rateYear: null,
     nonAdValoremAmtCents: 0,
-    source: "manatee-formula-plus-arcgis-nav",
+    source: "county-estimator",
     expiresAt: new Date(Date.UTC(2027, 10, 1)), // far future
   };
 }
@@ -385,7 +385,7 @@ test("source labels: a Pinellas bill is not a purchase-estimator cache", () => {
   assert.equal(isCacheRowValid(row, 400_000, NOW), false);
 });
 
-test("source labels: manatee-formula-plus-arcgis-nav is valid for cache", () => {
+test("source labels: Manatee formula rows cannot become official purchase estimates", () => {
   const row: ValidInput = {
     parcelId: "M123",
     folio: "M123",
@@ -396,5 +396,5 @@ test("source labels: manatee-formula-plus-arcgis-nav is valid for cache", () => 
     source: "manatee-formula-plus-arcgis-nav",
     expiresAt: new Date(Date.UTC(2027, 10, 1)),
   };
-  assert.equal(isCacheRowValid(row, 350_000, NOW), true);
+  assert.equal(isCacheRowValid(row, 350_000, NOW), false);
 });

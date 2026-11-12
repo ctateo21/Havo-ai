@@ -82,6 +82,10 @@ export interface PropertyTaxCacheRow {
  *
  * Exported for unit testing.
  */
+export function isOfficialEstimatorCacheSource(source: unknown): boolean {
+  return typeof source === "string" && /^(?:county-estimator|(?:hillsborough|pinellas|pasco|polk|sarasota|lee|hernando|collier)-county-estimator)$/.test(source.trim().toLowerCase());
+}
+
 export function isCacheRowValid(
   row: Pick<
     PropertyTaxCacheRow,
@@ -103,6 +107,7 @@ export function isCacheRowValid(
   purchasePrice: number,
   now: Date = new Date(),
 ): boolean {
+  if (!isOfficialEstimatorCacheSource(row.source)) return false;
   // A collector bill is not a purchase-estimator result.
   if (row.source === "pinellas-bill-live") return false;
   // Must have verified parcel identity

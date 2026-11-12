@@ -5,7 +5,8 @@ import { composeOfficialTax } from "../../shared/official-tax";
 import { officialTaxExpiry } from "./official-tax-cache";
 import { calculateCollierPurchaseAdValorem } from "../../shared/collier-property-tax";
 import { hcpaOfficialLowEndAdValorem } from "./hillsborough-estimator";
-import { parseCountyBill, assertRealEstateAccount } from "./official-county-bills";
+import { parseCountyBill, parseCollectorHtml, assertRealEstateAccount } from "./official-county-bills";
+import { load } from "cheerio";
 import { moneyCents } from "./county-tax-http";
 
 test("county composition uses estimator AV plus collector NAV, in integer cents", () => {
@@ -45,4 +46,18 @@ test("tangible accounts cannot become real-estate bills", () => {
   assert.throws(()=>assertRealEstateAccount(root+Buffer.from("lee:tangible:123").toString("base64"),"lee"));
   assert.throws(()=>assertRealEstateAccount(root+Buffer.from("collier:real_estate:123").toString("base64"),"lee"));
   assert.doesNotThrow(()=>assertRealEstateAccount(root+Buffer.from("lee:real_estate:123").toString("base64"),"lee"));
+});
+test("captured direct collector bills match the supplied 2026 gross totals", () => {
+  for(const [county,av,nav,total] of [["pinellas",452107,0,452107],["polk",382818,0,382818],["manatee",273698,174356,448054]] as const) {
+    const html=readFileSync(`test/fixtures/estimators/${county}-2026-bill-taxes.html`,"utf8");
+    const result=parseCollectorHtml(html,2026);
+    assert.deepEqual([result.adValoremCents,result.navCents,result.combinedCents],[av,nav,total]);
+  }
+});
+test("a paid Phenix bill still reports charged gross taxes, not zero due", () => {
+  const $=load(readFileSync("test/fixtures/estimators/pinellas-2026-bill-taxes.html","utf8"));
+  $('[id$="_tpTaxes_TaxesGrid"] tr').each((_,el)=>{
+    const cells=$(el).find("td"); if(cells.length>=5) {cells.eq(3).text(cells.eq(2).text());cells.eq(4).text("$0.00");}
+  });
+  assert.equal(parseCollectorHtml($.html(),2026).combinedCents,452107);
 });

@@ -109,11 +109,13 @@ export async function directEstimator(input: EstimatorInput): Promise<EstimatorO
     const iframe = $("iframe[src]").first().attr("src");
     const agreement = iframe ? new URL(iframe,start).href : start;
     if (iframe) html = await s.request(agreement);
-    const button = $("input[type=submit]").filter((_,e)=>/agree/i.test($(e).attr("value")||"")).first().attr("name");
+    const agreementPage = load(html);
+    const button = agreementPage("input[type=submit]").filter((_,e)=>/agree/i.test(agreementPage(e).attr("value")||"")).first().attr("name");
     const form = webForm(html,{});
     if (button) form.set(button,"I Agree");
     else {
-      const postback = /__doPostBack\(['"]([^'"]+)['"],['"]([^'"]*)['"]\)/.exec(html);
+      const agreeControl = agreementPage("button,a").filter((_,e)=>/^I Agree$/i.test(agreementPage(e).text().trim())).first();
+      const postback = /__doPostBack\(['"]([^'"]+)['"],['"]([^'"]*)['"]\)/.exec(agreeControl.attr("onclick")||agreeControl.attr("href")||"");
       if (!postback) throw new Error("Sarasota agreement control unavailable");
       form.set("__EVENTTARGET",postback[1]); form.set("__EVENTARGUMENT",postback[2]);
     }

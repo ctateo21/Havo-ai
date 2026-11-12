@@ -10,7 +10,8 @@ in the verified-estimator registry. Browser feature flags remain off.
   and npx --no-install tsx. tsx was already a devDependency.
 - Replaced Replit-only lockfile download URLs with public npm URLs without
   changing the locked package versions or integrity hashes.
-- Clean npm 10.9.2 install, TypeScript, and 455 serial unit tests passed locally.
+- Clean npm 10.9.2 install, TypeScript, and full npm test passed locally:
+  459 unit tests and 25 browser tests.
 - Serial test execution avoids a timing-sensitive existing leaderboard test
   failing under the full suite's parallel load.
 - Applied the additive parcel/year cache migration to live Supabase.
@@ -27,14 +28,14 @@ in the verified-estimator registry. Browser feature flags remain off.
 | County | Estimator method / endpoint | Status |
 |---|---|---|
 | Hillsborough | Direct HCPA BasicSearch and TaxEstimator | $600k HX returned $9,236.59 |
-| Pinellas | POST pcpao.gov/tax_estimatorout | $289k HX returned $4,018 |
+| Pinellas | POST pcpao.gov/tax_estimatorout | $289k HX returned $4,018; gross bill $4,521.07 live verified |
 | Pasco | WebForms search.pascopa.com/estimate-taxes.aspx | Identified AV $4,988.48 in page; parser adjusted but not fully reverified; gross bill $18,216.91 verified |
-| Polk | WebForms polkflpa.gov/TaxEstimatorIntro.aspx and taxEstimator.aspx | $400k HX returned $5,696 with letter NAV zero |
+| Polk | WebForms polkflpa.gov/TaxEstimatorIntro.aspx and taxEstimator.aspx | $400k HX returned $5,696 with letter NAV zero; bill AV $3,828.18 / NAV zero live verified |
 | Sarasota | Session + sarasotapropertyappraiser.gov/TaxEstimator/TaxEstOut.aspx | Session redirected to TaxEst.aspx, estimate unavailable; gross bill $3,371.93 verified |
 | Lee | leepa.org/taxestimator/TaxEstimationService.asmx/CalculateTaxes | Known FolioId $400k HX returned $4,274.09; STRAP lookup not verified |
-| Hernando | Firecrawl interaction, feature flag off | Estimator not verified; gross bill $10,010.53 verified |
-| Manatee | Purchase disabled; direct collector bill adapter drafted | Bill adapter not live verified |
-| Collier | Firecrawl interaction, feature flag off | Estimator not live verified; collector bill gross $4,998.85, AV $4,729.08, NAV $269.77 verified |
+| Hernando | Firecrawl interaction, feature flag off | Browser attempt unsuccessful; session stopped; gross bill $10,010.53 verified |
+| Manatee | Purchase disabled; direct collector bill | Gross bill $4,480.54 live verified |
+| Collier | Firecrawl interaction, feature flag off | Browser attempt unsuccessful; session stopped; collector bill gross $4,998.85, AV $4,729.08, NAV $269.77 verified |
 
 ## Remaining acceptance work
 - Finish verifying the reconciliation of PR #6 predecessor changes with the
@@ -49,8 +50,9 @@ in the verified-estimator registry. Browser feature flags remain off.
   cleanup and pacing checks. Hillsborough cache/composition is live verified.
 - Browser-test the purchase UI and add the breakdown to existing refinance
   consumers; they still need the full disclosure presentation.
-- Fix collector adapters: Pinellas failed parcel match; Polk failed section
-  parsing; Manatee failed total parsing; Lee Firecrawl could not load the page.
-- Run full npm test (including browser tests), all known-answer fixtures, live
-  suites and GitHub Actions. Only then enable verified counties.
+- Lee Firecrawl could not load the collector page. Its live collector path
+  still needs work; the other eight collector samples were verified.
+- Add the complete requested known-answer matrix and nightly opt-in live suite,
+  finish browser estimators and GitHub verification. Only then enable the other
+  counties. Passing general app tests is not proof of all-county parity.
 - Do not merge or publish until Christian reviews and approves.
