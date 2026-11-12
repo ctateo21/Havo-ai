@@ -1994,9 +1994,10 @@ export async function register(
   name: string,
   email: string,
   password: string,
-  opts?: { phone?: string; agent?: string; dateOfBirth?: string }
+  opts?: { phone?: string; agent?: string; dateOfBirth?: string; marketingConsent?:boolean }
 ): Promise<{ ok: boolean; error?: string }> {
   if (!supabaseReady) return NOT_CONFIGURED;
+  if(password.length<8)return {ok:false,error:"Password must be at least 8 characters."};
   const cleanEmail = email.toLowerCase().trim();
   const cleanPhone = opts?.phone?.trim() || "";
   const dateOfBirth = normalizeDateOfBirth(opts?.dateOfBirth);
@@ -2030,6 +2031,7 @@ export async function register(
       userId: data.user.id,
       profileSetupNonce,
       dateOfBirth,
+      marketingConsent:opts?.marketingConsent===true,
     }),
   });
   if (!profileResponse.ok) {
@@ -2120,7 +2122,7 @@ export async function updatePassword(
   _currentPassword: string,
   newPassword: string
 ): Promise<{ ok: boolean; error?: string }> {
-  if (newPassword.length < 6) return { ok: false, error: "New password must be at least 6 characters." };
+  if (newPassword.length < 8) return { ok: false, error: "New password must be at least 8 characters." };
   // Supabase doesn't require the current password when an active session exists;
   // the session itself proves identity.
   const { error } = await supabase.auth.updateUser({ password: newPassword });
@@ -2169,8 +2171,8 @@ export async function completePasswordReset(
   newPassword: string,
 ): Promise<{ ok: boolean; error?: string }> {
   if (!supabaseReady) return NOT_CONFIGURED;
-  if (newPassword.length < 6) {
-    return { ok: false, error: "Password must be at least 6 characters." };
+  if (newPassword.length < 8) {
+    return { ok: false, error: "Password must be at least 8 characters." };
   }
   const { error } = await supabase.auth.updateUser({ password: newPassword });
   if (error) {

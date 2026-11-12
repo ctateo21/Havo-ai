@@ -1,4 +1,5 @@
 import { useState } from "react";
+import {MARKETING_CONSENT_TEXT} from "@shared/marketing-consent";
 import { useLocation } from "wouter";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
@@ -62,6 +63,7 @@ export default function AuthDialog({
   const [regName, setRegName] = useState("");
   const [regEmail, setRegEmail] = useState("");
   const [regPhone, setRegPhone] = useState("");
+  const [marketingConsent,setMarketingConsent]=useState(false);
   const [regDateOfBirth, setRegDateOfBirth] = useState("");
   const [regPassword, setRegPassword] = useState("");
   const [regConfirm, setRegConfirm] = useState("");
@@ -85,6 +87,7 @@ export default function AuthDialog({
   // re-opens on the tabs view with a clean forgot-password form.
   function handleOpenChange(next: boolean) {
     if (!next) {
+      setMarketingConsent(false);
       setMode("tabs");
       setFpEmail(""); setFpError(""); setFpSent(false);
     }
@@ -124,7 +127,7 @@ export default function AuthDialog({
       setRegError("Please enter a valid date of birth.");
       return;
     }
-    if (regPassword.length < 6) { setRegError("Password must be at least 6 characters."); return; }
+    if (regPassword.length < 8) { setRegError("Password must be at least 8 characters."); return; }
     if (regPassword !== regConfirm) { setRegError("Passwords do not match."); return; }
     // Agent picker hidden for now — all new accounts default to the
     // FUB-routed "Team" assignment. See DEFAULT_AGENT_NAME above.
@@ -133,6 +136,7 @@ export default function AuthDialog({
       phone: phoneDigits,
       dateOfBirth: regDateOfBirth,
       agent: DEFAULT_AGENT_NAME,
+      marketingConsent,
     });
     setRegLoading(false);
     if (!result.ok) { setRegError(result.error || "Registration failed."); return; }
@@ -348,12 +352,13 @@ export default function AuthDialog({
                   </p>
                 </div>
                 <div className="space-y-1">
+                  <label className="flex gap-2 text-xs mb-3"><input type="checkbox" checked={marketingConsent} onChange={e=>setMarketingConsent(e.target.checked)}/><span>{MARKETING_CONSENT_TEXT}</span></label>
                   <Label htmlFor="reg-password">Password</Label>
                   <Input
                     id="reg-password"
                     name="new-password"
                     type="password"
-                    placeholder="At least 6 characters"
+                    placeholder="At least 8 characters"
                     value={regPassword}
                     onChange={e => setRegPassword(e.target.value)}
                     required

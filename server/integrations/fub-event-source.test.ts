@@ -37,6 +37,7 @@ test("FUB event source override leaves defaults and event type unchanged", async
   const send = new Function(
     "process", "console", "fetch", "FUB_AGENT_IDS", "normalizePhoneDigits",
     "formatReferralBlock", "findFubPersonByEmail", "fubHeaders", "formatPhoneDisplay",
+    "supabaseAdmin",
     `${helperJs}; return createFollowUpBossContact;`,
   )(
     { env: { FOLLOWUPBOSS_API_KEY: "mock-only" } },
@@ -47,6 +48,7 @@ test("FUB event source override leaves defaults and event type unchanged", async
     },
     {}, (phone: string) => phone, () => "", async () => null,
     () => ({}), (phone: string) => phone,
+    {from(){const q:any={select(){return q;},eq(){return q;},in(){return q;},order(){return q;},limit:async()=>({data:[{marketing_consent:true,consent:true,consent_at:"2026-11-12",recorded_at:"2026-11-12"}],error:null})};return q;}},
   );
   const input = {
     firstName: "Test", lastName: "Only", email: "test@example.com", phone: "",

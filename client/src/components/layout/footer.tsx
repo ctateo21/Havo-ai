@@ -39,55 +39,9 @@ export default function Footer() {
               estate, mortgage, &amp;
               insurance industry.
             </p>
-            <div className="flex space-x-2
-              mb-6">
-              <a href=
-                "https://www.facebook.com/tateoco"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="bg-[#00B6A9] h-8
-                  w-8 rounded-full flex
-                  items-center justify-center
-                  transition-colors"
-                aria-label="Facebook">
-                <Facebook size={16}
-                  className="text-[#0F1B3D]"/>
-              </a>
-              <a href=
-                "https://www.instagram.com/tateocommunities/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="bg-[#00B6A9] h-8
-                  w-8 rounded-full flex
-                  items-center justify-center
-                  transition-colors"
-                aria-label="Instagram">
-                <Instagram size={16}
-                  className="text-[#0F1B3D]"/>
-              </a>
-              <a href=
-                "https://www.linkedin.com/company/tateo-co/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="bg-[#00B6A9] h-8
-                  w-8 rounded-full flex
-                  items-center justify-center
-                  transition-colors"
-                aria-label="LinkedIn">
-                <Linkedin size={16}
-                  className="text-[#0F1B3D]"/>
-              </a>
-              <a href="#"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="bg-[#00B6A9] h-8
-                  w-8 rounded-full flex
-                  items-center justify-center
-                  transition-colors"
-                aria-label="Youtube">
-                <Youtube size={16}
-                  className="text-[#0F1B3D]"/>
-              </a>
+            <div className="flex gap-4 mb-6">
+              <a href="https://www.instagram.com/havofl/" target="_blank" rel="noopener noreferrer">Instagram</a>
+              <a href="https://www.tiktok.com/@havofl" target="_blank" rel="noopener noreferrer">TikTok</a>
             </div>
             <div className="mt-2">
               <a href="tel:+18132148356"

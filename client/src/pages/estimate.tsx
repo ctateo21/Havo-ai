@@ -2,6 +2,8 @@ import { useMemo, useState, useRef, useEffect, useCallback, type ReactNode } fro
 import ScenarioActions from "@/components/scenario-actions";
 import { officialTaxRequestKey, parseOfficialPropertyTaxResponse, resolvePurchasePropertyTaxSource } from "@/lib/official-property-tax";
 import { purchaseHomestead } from "@shared/purchase-homestead";
+import {conventionalPmiMonthly} from "@shared/pmi-rates";
+import {MortgageCompliance} from "@/components/mortgage-compliance";
 import type { OfficialTaxBreakdown } from "@shared/official-tax";
 import { OfficialTaxDisclosure } from "@/components/official-tax-disclosure";
 import { buildScenarioFileName } from "@/lib/scenario-pdf";
@@ -154,19 +156,7 @@ function clampDownPaymentPct(pct: number, min: number): number {
  *  dollars; $0 when LTV ≤ 80% or when the score is below the program
  *  minimum (in which case Conventional shouldn't be selectable anyway). */
 function calcConventionalPMI(loanAmount: number, purchasePrice: number, creditScore: number): number {
-  const ltv = loanAmount / purchasePrice;
-  if (ltv <= 0.8) return 0;
-  if (creditScore < CONVENTIONAL_MIN_FICO) return 0;
-  let annualFactor: number;
-  if      (creditScore >= 760) annualFactor = 0.0019;
-  else if (creditScore >= 740) annualFactor = 0.0029;
-  else if (creditScore >= 720) annualFactor = 0.0036;
-  else if (creditScore >= 700) annualFactor = 0.0045;
-  else if (creditScore >= 680) annualFactor = 0.0061;
-  else if (creditScore >= 660) annualFactor = 0.0098;
-  else if (creditScore >= 640) annualFactor = 0.0104;
-  else                         annualFactor = 0.0117; // 620–639
-  return (loanAmount * annualFactor) / 12;
+  return conventionalPmiMonthly(loanAmount,purchasePrice,creditScore);
 }
 
 function calcFHAMIP(loanAmount: number): number {
@@ -314,6 +304,7 @@ type PurchasePriceSource =
   | "zillow_cache";
 
 interface Inputs {
+  qualificationInputsConfirmed?:boolean;
   occupancy: "primary" | "secondary" | "investment";
   propertyUseSelected?: boolean;
   purchasePrice: number;
@@ -1702,7 +1693,7 @@ export default function Estimate() {
   }, [step, activeScenarioId]);
   const [answersOpen, setAnswersOpen] = useState(false);
 
-  function generateEstimatePDF() {
+  async function generateEstimatePDF() {
     if (!calcRef.current.taxComplete) {
       toast({ title: "Complete property taxes first", description: "Enter the annual bill before downloading a complete mortgage estimate.", variant: "destructive" });
       return;
@@ -1798,6 +1789,9 @@ export default function Estimate() {
     doc.text(qualText, W / 2, y + 19, { align: "center" });
     doc.setTextColor(30, 30, 30);
     y += 38;
+    doc.setFontSize(8);
+    doc.text("Based on debt-to-income only. Not a prequalification or approval.",margin,y);
+    y+=14;
 
     // ── Key metrics ──────────────────────────────────────────────────────
     const bw = (W - margin * 2) / 3 - 6;
@@ -2044,6 +2038,17 @@ export default function Estimate() {
       doc.text(`Page ${i} of ${totalPages}`, W - margin, pageH - 16, { align: "right" });
     }
 
+    const logoResponse=await fetch("/equal-housing-opportunity.png");
+    if(!logoResponse.ok)throw new Error("Equal Housing logo unavailable");
+    const logo=new Uint8Array(await logoResponse.arrayBuffer());
+    for(let i=1;i<=totalPages;i++){
+      doc.setPage(i);const h=doc.internal.pageSize.getHeight();
+      doc.setFillColor(255,255,255);doc.rect(0,h-58,W,58,"F");
+      doc.addImage(logo,"PNG",margin,h-54,28,28);
+      doc.setTextColor(60,60,60);doc.setFontSize(7);
+      doc.text("Christian Tateo NMLS #1223755 · Barrett Financial Group NMLS #181106",margin+34,h-43);
+      doc.text("Estimate only, not a loan offer or commitment to lend.",margin+34,h-31);
+    }
     doc.save(buildScenarioFileName("purchase", address));
   }
 
@@ -2539,6 +2544,13 @@ export default function Estimate() {
   }
 
   const [inputs, setInputs] = useState<Inputs>(() => inputsForAddress(address));
+  const confirmedInputs=useRef("");
+  useEffect(()=>{
+    const key=JSON.stringify([activeScenarioId,inputs.monthlyIncome,inputs.monthlyDebts,inputs.creditScore,inputs.downPaymentPct,inputs.purchasePrice]);
+    if(confirmedInputs.current && confirmedInputs.current!==key && inputs.qualificationInputsConfirmed)
+      setInputs(p=>({...p,qualificationInputsConfirmed:false}));
+    confirmedInputs.current=key;
+  },[activeScenarioId,inputs.monthlyIncome,inputs.monthlyDebts,inputs.creditScore,inputs.downPaymentPct,inputs.purchasePrice]);
   const inputsRef = useRef(inputs);
   inputsRef.current = inputs;
 
@@ -3118,6 +3130,7 @@ export default function Estimate() {
 
   function setCreditScore(score: number) {
     setInputs((p) => {
+      p={...p,qualificationInputsConfirmed:false};
       const isAltLoan = p.loanType === "dscr" || p.loanType === "bank_statement";
       // Below Conventional's program floor (620), Conventional isn't a
       // valid option — auto-switch to FHA on primary residences so the
@@ -3237,6 +3250,7 @@ export default function Estimate() {
 
   function setDownPayment(pct: number) {
     setInputs((p) => {
+      p={...p,qualificationInputsConfirmed:false};
       const minDown = getMinDown(p.loanType, p.hasMortgage, p.occupancy);
       const newDown = Math.min(Math.max(pct, minDown), MAX_DOWN_PAYMENT_PCT);
       // Re-derive the $ amount so the Dollar-Amount input/display
@@ -3811,7 +3825,7 @@ export default function Estimate() {
     // Per spec, the qualification status is driven purely by the DTI
     // thresholds. Reserves are surfaced as an advisory row below, not a
     // gate on the "Likely Qualifies" / "Needs Review" badge.
-    const qualifies = dtiLikelyQualifies;
+    const qualifies = inputs.qualificationInputsConfirmed===true && dtiLikelyQualifies;
 
     const estimatedHOIns = calcInsuranceEstimate(purchasePrice, impactWindows, roofAttachment, swr);
 
@@ -4842,6 +4856,7 @@ export default function Estimate() {
                           ...p,
                           monthlyIncome: v,
                           monthlyIncomeSource: "manual",
+                          qualificationInputsConfirmed:false,
                         }));
                       }}
                       min={1000} max={50000} step={100}
@@ -5829,7 +5844,8 @@ export default function Estimate() {
             )}
 
             {step === 3 && (
-              <div className="flex justify-between pt-2">
+              <div className="flex flex-wrap justify-between gap-3 pt-2">
+                <label className="w-full text-xs flex gap-2"><input type="checkbox" checked={inputs.qualificationInputsConfirmed===true} onChange={e=>setInputs(p=>({...p,qualificationInputsConfirmed:e.target.checked}))}/>I confirm the income, debts, credit score and down payment shown are my current inputs, not unreviewed defaults.</label>
                 <Button variant="outline" onClick={() => setStep(2)} className="gap-2">
                   <ChevronLeft className="h-4 w-4" /> Back
                 </Button>
@@ -5842,6 +5858,9 @@ export default function Estimate() {
             {/* ── STEP 4: Estimate ─── */}
             {step === 4 && (
               <div className="space-y-4">
+                <p className="text-xs">Based on debt-to-income only. Not a prequalification or approval. Confirm your income, debts, credit score and down payment before relying on the qualification indicator.</p>
+                <MortgageCompliance/>
+                <p className="text-xs">PMI is an adjustable planning estimate by credit and LTV, not a mortgage-insurance quote.</p>
 
                 {/* Property photo carousel — at the very top of the
                     detail/numbers page per spec. Photos come from the
@@ -6065,8 +6084,9 @@ export default function Estimate() {
                 <div className={`w-full py-2 px-4 text-center text-sm font-semibold tracking-wide ${!calc.taxComplete ? "bg-muted text-muted-foreground" : calc.qualifies ? "bg-green-600 text-white" : "bg-red-600 text-white"}`}>
                   {calc.qualifies
                     ? "Likely Qualifies"
-                    : calc.taxComplete ? "Needs Review — DTI exceeds guidelines" : "Incomplete — enter annual property taxes"}
+                    : calc.taxComplete ? inputs.qualificationInputsConfirmed ? "Needs Review — DTI exceeds guidelines" : "Confirm your inputs — qualification not assessed" : "Incomplete — enter annual property taxes"}
                 </div>
+                <p className="px-5 text-xs">Based on debt-to-income only. Not a prequalification or approval.</p>
                 {/* Metrics row */}
                 <div className="bg-primary/5 px-5 py-4">
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">

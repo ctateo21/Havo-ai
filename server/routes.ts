@@ -8,7 +8,9 @@ import { storage } from "./storage";
 import { getLiveRates } from "./refi-rates";
 import { analyzeMortgageStatement, analyzeClosingDisclosure } from "./anthropic-analyze";
 import { authenticateAi } from "./ai-auth";
-import { registerInterestRoutes } from "./b2b-interest-routes";
+import { registerInterestRoutes, requireInterestAdmin } from "./b2b-interest-routes";
+import {randomInt,createHash,timingSafeEqual} from "node:crypto";
+import {MARKETING_CONSENT_TEXT,MARKETING_CONSENT_VERSION} from "../shared/marketing-consent";
 import { sendAiLimitError, withAiUser } from "./ai-usage";
 import { z } from "zod";
 import { 
@@ -267,10 +269,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Get configuration for Zillow API integration
   app.get("/api/config/zillow-api-key", async (req, res) => {
-    // In a real implementation, this would retrieve the API key from secure environment variables
-    // Here we're using a placeholder for demonstration purposes
-    const apiKey = process.env.ZILLOW_API_KEY || "demo-key";
-    res.json({ apiKey });
+    res.status(404).json({error:"Not found"});
   });
   
   // Get configuration for Google Maps API integration
@@ -1019,6 +1018,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           userId: z.string().uuid(),
           profileSetupNonce: z.string().uuid(),
           dateOfBirth: z.string(),
+          marketingConsent:z.boolean().default(false),
         }).parse(req.body);
         if (!validProfileDateOfBirth(input.dateOfBirth)) {
           return res
@@ -1054,6 +1054,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           authUser.id,
           input.dateOfBirth,
         );
+        const consent=await supabaseAdmin.from("marketing_consent_records").insert({user_id:authUser.id,phone:metadata.phone??null,consent:input.marketingConsent,wording:MARKETING_CONSENT_TEXT,version:MARKETING_CONSENT_VERSION,ip:req.ip,user_agent:req.get("user-agent")?.slice(0,1000)});
+        if(consent.error)return res.status(503).json({error:"Consent could not be saved. Please try again."});
 
         // Consume the proof so the public completion endpoint cannot be
         // replayed. Raw DOB remains only in the private server database.
@@ -2535,9 +2537,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ─── Lead Capture ──────────────────────────────────────────────────────────
   // In-memory stores (survives process lifetime; use a DB for persistence)
-  const _verifyCodes = new Map<string, { code: string; expiresAt: number }>();
-  type CapturedLead = { email: string; phone: string; address: string; createdAt: string };
-  const _leads: CapturedLead[] = [];
+  const _verifyCodes = new Map<string, { hash: Buffer; expiresAt: number; attempts:number }>();
 
   async function sendSms(to: string, body: string): Promise<void> {
     const sid   = process.env.TWILIO_ACCOUNT_SID;
@@ -2570,14 +2570,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (digits.length < 10) return res.status(400).json({ error: "Invalid phone number" });
       const e164 = digits.startsWith("1") ? `+${digits}` : `+1${digits}`;
       const isTwilioConfigured = !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER);
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      _verifyCodes.set(e164, { code, expiresAt: Date.now() + 10 * 60 * 1000 });
       if (isTwilioConfigured) {
+        for(const [key,value] of _verifyCodes)if(value.expiresAt<Date.now())_verifyCodes.delete(key);
+        if(_verifyCodes.size>=10000)return res.status(503).json({error:"Please try again later."});
+        const code = String(randomInt(100000,1000000));
+        _verifyCodes.set(e164, { hash:createHash("sha256").update(code).digest(), expiresAt: Date.now() + 10 * 60 * 1000,attempts:0 });
         await sendSms(e164, `Your Havo verification code is: ${code}`);
         res.json({ ok: true, smsEnabled: true });
       } else {
-        // Twilio not configured — skip SMS, return auto-verify code so frontend can bypass the step
-        res.json({ ok: true, smsEnabled: false, autoCode: code });
+        res.json({ ok: true, smsEnabled: false, phoneVerified:false });
       }
     } catch (err: any) {
       console.error("send-code error:", err);
@@ -2588,12 +2589,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // POST /api/leads/verify
   app.post("/api/leads/verify", async (req, res) => {
     try {
-      const { firstName, lastName, email, phone, code, address, agent, scenarioDetails, referral } = z.object({
+      const { firstName, lastName, email, phone, code, address, agent, scenarioDetails, referral,marketingConsent } = z.object({
         firstName: z.string().min(1),
         lastName: z.string().min(1),
         email: z.string().email(),
         phone: z.string().min(10),
-        code: z.string().length(6),
+        code: z.string().length(6).optional(),
+        marketingConsent:z.boolean().default(false),
         address: z.string().optional(),
         agent: z.string().optional(),
         scenarioDetails: z.string().optional(),
@@ -2602,22 +2604,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const digits = phone.replace(/\D/g, "");
       const e164 = digits.startsWith("1") ? `+${digits}` : `+1${digits}`;
       const stored = _verifyCodes.get(e164);
+      const smsConfigured=!!(process.env.TWILIO_ACCOUNT_SID&&process.env.TWILIO_AUTH_TOKEN&&process.env.TWILIO_PHONE_NUMBER);
+      if(smsConfigured) {
       if (!stored) return res.status(400).json({ error: "No code sent to this number. Request a new code." });
       if (Date.now() > stored.expiresAt) {
         _verifyCodes.delete(e164);
         return res.status(400).json({ error: "Code expired. Request a new code." });
       }
-      if (stored.code !== code) return res.status(400).json({ error: "Incorrect code. Please try again." });
+      stored.attempts++;
+      if(stored.attempts>5){_verifyCodes.delete(e164);return res.status(429).json({error:"Too many attempts. Request a new code."});}
+      if (!code || !timingSafeEqual(stored.hash,createHash("sha256").update(code).digest())) return res.status(400).json({ error: "Incorrect code. Please try again." });
       _verifyCodes.delete(e164);
-
-      // Save lead locally
-      if (!_leads.find(l => l.email === email || l.phone === e164)) {
-        _leads.push({ email, phone: e164, address: address || "", createdAt: new Date().toISOString() });
-        console.log(`[LEAD] New lead: ${firstName} ${lastName} | ${email} | ${e164} | agent: ${agent || "none"}`);
       }
 
+      if(!supabaseAdmin)return res.status(503).json({error:"Lead storage unavailable. Please try again."});
+      const saved=await supabaseAdmin.from("private_leads").insert({first_name:firstName,last_name:lastName,email,phone:e164,phone_verified:smsConfigured,address,agent,scenario_details:scenarioDetails,
+        marketing_consent:marketingConsent,consent_wording:MARKETING_CONSENT_TEXT,consent_version:MARKETING_CONSENT_VERSION,consent_ip:req.ip,consent_user_agent:req.get("user-agent")?.slice(0,1000)});
+      if(saved.error)return res.status(503).json({error:"We could not save your information. Please try again."});
+
       // Create contact in FollowUpBoss (non-blocking — don't fail the verify if FUB errors)
-      createFollowUpBossContact({ firstName, lastName, email, phone: e164, address, agent, scenarioDetails, referral }).catch(err =>
+      if(marketingConsent) createFollowUpBossContact({ firstName, lastName, email, phone: e164, address, agent, scenarioDetails, referral }).catch(err =>
         console.error("[FUB] Failed to create contact:", err.message)
       );
 
@@ -2626,7 +2632,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("[welcome-email] failed:", err?.message ?? err)
       );
 
-      res.json({ ok: true });
+      res.json({ ok: true, phoneVerified:smsConfigured });
     } catch (err: any) {
       console.error("verify error:", err);
       res.status(400).json({ error: err.message || "Verification failed" });
@@ -2646,6 +2652,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // GET /api/leads/test-fub — verify API key, list users, AND send a test event
   app.get("/api/leads/test-fub", async (_req, res) => {
+    if(process.env.NODE_ENV==="production")return res.status(404).json({error:"Not found"});
+    if(!await requireInterestAdmin(_req,res))return;
     const apiKey = process.env.FOLLOWUPBOSS_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "FOLLOWUPBOSS_API_KEY not set on server" });
 
@@ -2793,6 +2801,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     source?: string;
     referral?: ReferralPayload;
   }) {
+    // Contact storage is retained internally. Never enroll a person in CRM
+    // calling/texting workflows unless a server-owned consent record permits it.
+    if(!supabaseAdmin)return {ok:false,noteAdded:false,personId:null,skipped:true,error:"Consent store unavailable"};
+    const consentPhoneDigits=params.phone.replace(/\D/g,"");
+    const phoneE164=consentPhoneDigits.startsWith("1")?`+${consentPhoneDigits}`:`+1${consentPhoneDigits}`;
+    const [leadConsent,accountConsent]=await Promise.all([
+      supabaseAdmin.from("private_leads").select("marketing_consent,consent_at").eq("phone",phoneE164).order("consent_at",{ascending:false}).limit(1),
+      supabaseAdmin.from("marketing_consent_records").select("consent,recorded_at").in("phone",[params.phone,phoneE164,consentPhoneDigits]).order("recorded_at",{ascending:false}).limit(1),
+    ]);
+    if(leadConsent.error||accountConsent.error)return {ok:false,noteAdded:false,personId:null,skipped:true,error:"Consent could not be checked"};
+    const consentHistory=[...(leadConsent.data??[]).map(r=>({yes:r.marketing_consent,at:r.consent_at})),...(accountConsent.data??[]).map(r=>({yes:r.consent,at:r.recorded_at}))].sort((a,b)=>Date.parse(b.at)-Date.parse(a.at));
+    if(consentHistory[0]?.yes!==true)return {ok:true,noteAdded:false,personId:null,skipped:true,error:null};
     const apiKey = process.env.FOLLOWUPBOSS_API_KEY;
     if (!apiKey) {
       console.log("[FUB] FOLLOWUPBOSS_API_KEY not set — skipping contact creation.");
@@ -2821,7 +2841,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     if (personId) {
       // Existing contact — just add a note instead of creating a new contact.
-      console.log(`[FUB] Existing person ${personId} found for ${emailNorm}; adding note`);
+      console.log("[FUB] Updating existing contact");
       try {
         const noteRes = await fetch("https://api.followupboss.com/v1/notes", {
           method: "POST",
@@ -2861,7 +2881,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       if (params.address) payload.property = { street: params.address };
 
-      console.log(`[FUB] No existing contact for ${emailNorm}; creating via /v1/events (agent: ${agentName} / id:${agentId})`);
+      console.log("[FUB] Creating consented contact");
 
       const res = await fetch("https://api.followupboss.com/v1/events", {
         method: "POST",
@@ -2877,7 +2897,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       personId = data?.person?.id ?? data?.id ?? null;
       noteAdded = true; // the /v1/events call also delivers the message/note
-      console.log(`[FUB] Contact created: ${params.firstName} ${params.lastName} | event id: ${data.id ?? "unknown"} | person id: ${personId ?? "unknown"}`);
+      console.log("[FUB] Contact created");
     }
 
     // Step 2: PUT /v1/people/{id} to ensure assignment + email + phone are set in FUB's required format
@@ -3082,7 +3102,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         referral: referralSchema,
       }).parse(req.body);
 
-      console.log(`[LEAD] New property scenario: ${email} → ${address} (agent: ${agent || "Team"})`);
+      console.log("[LEAD] New property scenario received");
 
       // Non-blocking — never fail the request if FUB has an issue
       createFollowUpBossContact({
@@ -3177,7 +3197,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/fub/leaderboard/debug", async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    if (req.query.key !== "tateo-debug-2026") return res.status(401).json({ error: "Not authorized" });
+    if(!await requireInterestAdmin(req,res))return;
     const apiKey = process.env.FOLLOWUPBOSS_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "FOLLOWUPBOSS_API_KEY not set" });
 
@@ -3278,9 +3298,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ? "User selected Call for showing request."
           : "Showing request started from Havo.";
       console.log("[api/fub/showing-request] request received");
-      console.log(`[api/fub/showing-request] property address: ${body.address}`);
-      console.log(`[api/fub/showing-request] user email: ${body.email || "(none)"}`);
-      console.log(`[api/fub/showing-request] user phone: ${body.phone || "(none)"}`);
+      console.log("[api/fub/showing-request] received");
       console.log(`[showing-alert-env] RESEND_API_KEY present ${!!process.env.RESEND_API_KEY}`);
       console.log(`[showing-alert-env] ALERT_FROM_EMAIL present ${!!process.env.ALERT_FROM_EMAIL}`);
       console.log(`[showing-alert-env] INTERNAL_ALERT_EMAIL present ${!!process.env.INTERNAL_ALERT_EMAIL}`);
@@ -3593,8 +3611,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // GET /api/leads (simple admin view — protect in production)
-  app.get("/api/leads", (_req, res) => {
-    res.json({ count: _leads.length, leads: _leads });
+  app.get("/api/leads", async (_req, res) => {
+    if(!await requireInterestAdmin(_req,res))return;
+    const result=await supabaseAdmin!.from("private_leads").select("*").order("created_at",{ascending:false}).limit(100);
+    if(result.error)return res.status(503).json({error:"Lead storage unavailable"});
+    res.json({ count: result.data.length, leads: result.data });
   });
 
   // ── POST /api/zillow-property-lookup ──────────────────────────────
@@ -3652,7 +3673,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .select("normalized, fetched_at")
           .eq("cache_key", cacheKey)
           .maybeSingle();
-        if (cached?.normalized) {
+        if (cached?.normalized && cached.fetched_at && Date.now()-Date.parse(cached.fetched_at)<7*24*60*60*1000) {
           const ageMs = cached.fetched_at
             ? Date.now() - new Date(cached.fetched_at).getTime()
             : null;

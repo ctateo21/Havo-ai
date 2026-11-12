@@ -317,7 +317,7 @@ export default function Settings() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="set-new-pw">New Password</Label>
-              <Input id="set-new-pw" type="password" placeholder="At least 6 characters" value={newPw} onChange={e => setNewPw(e.target.value)} required autoComplete="new-password" />
+              <Input id="set-new-pw" type="password" placeholder="At least 8 characters" value={newPw} onChange={e => setNewPw(e.target.value)} required autoComplete="new-password" />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="set-confirm-pw">Confirm New Password</Label>

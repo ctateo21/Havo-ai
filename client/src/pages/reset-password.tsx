@@ -43,7 +43,7 @@ export default function ResetPassword() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    if (pw.length < 6) { setError("Password must be at least 6 characters."); return; }
+    if (pw.length < 8) { setError("Password must be at least 8 characters."); return; }
     if (pw !== confirm) { setError("Passwords do not match."); return; }
     setLoading(true);
     const result = await completePasswordReset(pw);
@@ -94,7 +94,7 @@ export default function ResetPassword() {
                   id="rp-password"
                   name="new-password"
                   type="password"
-                  placeholder="At least 6 characters"
+                  placeholder="At least 8 characters"
                   value={pw}
                   onChange={e => setPw(e.target.value)}
                   required

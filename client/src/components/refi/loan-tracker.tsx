@@ -1389,6 +1389,9 @@ function LoanCard({ loan, liveRates, onRemove, onUpdate, allowPerLoanCreditScore
           {/* Rate & Term */}
           {!isFreeClear && !vaAnswerRequired && activeTab === "rate_term" && (
             <div className="space-y-4">
+              <p className="text-xs rounded border p-3">
+                Matched-term comparison ({Math.max(1,loan.estimatedRemainingYears).toFixed(1)} years remaining): new principal and interest {formatCurrency(calculateMonthlyPayment(rateTermNewLoanAmount,adjustedRate,Math.max(1,loan.estimatedRemainingYears)))}/mo versus current {formatCurrency(rateTerm.monthlyPaymentCurrent)}/mo. The 30-year option below may lower payments by extending repayment; it is not the same-term savings.
+              </p>
               <div className="grid sm:grid-cols-2 gap-4">
                 <div className="rounded-lg border bg-muted/30 p-4 space-y-2">
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Current Loan</p>
