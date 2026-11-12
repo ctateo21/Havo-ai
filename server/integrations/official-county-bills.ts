@@ -2,6 +2,7 @@ import { load } from "cheerio";
 import { CountySession, moneyCents, pageText, webForm } from "./county-tax-http";
 import { interactTaxPage, scrapeTaxPage } from "./firecrawl-tax";
 import type { CountySlug } from "./parcel-resolver";
+import { streetAddressMatches } from "./hillsborough-tax";
 export interface OfficialBill {
   adValoremCents: number;
   navCents: number;
@@ -11,6 +12,7 @@ export interface OfficialBill {
   fetchedAt: string;
   taxYear: number;
   snapshot: string;
+  situsAddress?: string;
 }
 const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
 function finalMoney(line: string): number {
@@ -145,7 +147,7 @@ export function parseCollectorHtml(html: string, year: number): Omit<OfficialBil
   if (av.cents + nav.cents !== combined || Math.round(nav.lines.reduce((n,l)=>n+l.amount,0)*100)!==nav.cents) throw new Error("Collector totals do not reconcile");
   return {adValoremCents:av.cents,navCents:nav.cents,combinedCents:combined,lines:nav.lines,taxYear:year,snapshot:JSON.stringify({av:av.cents,nav:nav.cents,combined,lines:nav.lines})};
 }
-async function directBill(county: CountySlug, parcel: string, year: number): Promise<OfficialBill> {
+async function directBill(county: CountySlug, parcel: string, year: number, address?:string): Promise<OfficialBill> {
   const session = new CountySession();
   let html: string, url: string;
   if (county === "manatee") {
@@ -176,8 +178,15 @@ async function directBill(county: CountySlug, parcel: string, year: number): Pro
   html = await session.request(url);
   const expectedAccount = county==="pinellas" ? new URL(url).searchParams.get("p") : parcel;
   if (!expectedAccount || !norm(pageText(html)).includes(norm(expectedAccount))) throw new Error("Collector bill parcel does not match");
-  return {...parseCollectorHtml(html,year),url,fetchedAt:new Date().toISOString()};
+  let situsAddress:string|undefined;
+  if(county==="pinellas") {
+    const $=load(html);
+    const physical=$('[id$="lblGIPhysicalAddress"]').html()??"";
+    situsAddress=physical.split(/<br\s*\/?>/i).map(line=>pageText(line).replace(/^PROPERTY ADDRESS:\s*/i,"").trim()).find(Boolean);
+    if(!address || !situsAddress || !streetAddressMatches(address,situsAddress)) throw new Error("Pinellas collector bill address does not match");
+  }
+  return {...parseCollectorHtml(html,year),url,fetchedAt:new Date().toISOString(),situsAddress};
 }
-export function fetchOfficialBill(county: CountySlug, parcel: string, year: number, cachedUrl?: string): Promise<OfficialBill> {
-  return ["pinellas","polk","manatee"].includes(county) ? directBill(county,parcel,year) : taxSysBill(county,parcel,year,cachedUrl);
+export function fetchOfficialBill(county: CountySlug, parcel: string, year: number, cachedUrl?: string,address?:string): Promise<OfficialBill> {
+  return ["pinellas","polk","manatee"].includes(county) ? directBill(county,parcel,year,address) : taxSysBill(county,parcel,year,cachedUrl);
 }

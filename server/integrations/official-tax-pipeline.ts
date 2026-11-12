@@ -17,7 +17,7 @@ export async function officialParcelTax(input: EstimatorInput, refinance = false
   catch { warnings.push("The official tax cache is unavailable; fresh county data is required."); }
   await Promise.all([
     (async()=>{
-      try { bill=cached?.bill || await fetchOfficialBill(input.county,input.parcelId,input.taxYear); }
+      try { bill=cached?.bill || await fetchOfficialBill(input.county,input.parcelId,input.taxYear,undefined,input.address); }
       catch(e) { billError = e instanceof Error ? e.message : "Collector bill unavailable"; }
     })(),
     (async()=>{
