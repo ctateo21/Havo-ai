@@ -44,7 +44,7 @@ test("purchase routes fail closed when no official county estimator is verified"
     assert.equal(result.annualTax, null, county);
     assert.equal(result.monthlyTax, null, county);
     assert.match(result.source, /county-estimator-unavailable$/, county);
-    assert.equal(result.nonAdValoremTax, 0, county);
+    assert.equal(result.nonAdValoremTax, null, county);
   }
 
   const hillsborough = await getHillsboroughPurchaseTax({
@@ -187,8 +187,8 @@ test("other counties name why the official estimator is not shown", async () => 
     isPrimaryResidence: true,
   });
   assert.equal(polk.annualTax, null);
-  assert.match(polk.operationalError ?? "", /Manual entry/);
-  assert.match(polk.audit?.exemptionNote ?? "", /No formula/);
+  assert.match(polk.operationalError ?? "", /not passed verification/);
+  assert.equal(polk.breakdown?.total.cents, null);
 });
 
 test("Pinellas live estimate ignores a higher current just value", () => {

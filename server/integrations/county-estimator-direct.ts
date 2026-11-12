@@ -46,8 +46,8 @@ export function parseEstimatorPage(county: CountySlug, html: string): Pick<Estim
     adValoremCents = moneyCents(range[1]) - estimatorNavCents;
     if (adValoremCents < 0) throw new Error("Polk estimator assessment exceeds total");
   } else {
-    adValoremCents = amountAfter(text, /(?:Total\s+Estimated\s+Ad\s+Valorem(?:\s+Tax(?:es)?)?|Total\s+Ad\s+Valorem(?:\s+Tax(?:es)?)?|Ad\s+Valorem\s+Taxes)\s*[:]?/i);
-    try { estimatorNavCents = amountAfter(text, /(?:Total\s+)?Non[- ]Ad\s+Valorem(?:\s+(?:Taxes|Assessments))?\s*[:]?/i); }
+    adValoremCents = amountAfter(text, /(?:Total\s+Estimated\s+Ad\s+Valorem(?:\s+Tax(?:es)?)?|Total\s+Ad\s+Valorem(?:\s+Tax(?:es)?)?)\s*[:]?/i);
+    try { estimatorNavCents = amountAfter(text, /Total\s+(?:Estimated\s+)?Non[- ]Ad\s+Valorem(?:\s+(?:Taxes|Assessments))?\s*[:]?/i); }
     catch { /* Some estimators explicitly exclude NAV; the bill remains mandatory. */ }
   }
   return {adValoremCents,estimatorNavCents,snapshot:text.slice(0,12000)};

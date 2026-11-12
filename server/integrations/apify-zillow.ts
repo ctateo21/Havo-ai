@@ -15,7 +15,7 @@ const APIFY_RUN_TIMEOUT_MS = 90_000; // hard ceiling per request
 // ── Types ───────────────────────────────────────────────────────────
 export type PropertyTypeNorm =
   | "Single Family" | "Townhome" | "Condo" | "Multifamily"
-  | "Manufactured" | "Land" | "Other";
+  | "Manufactured" | "Villa" | "Land" | "Other";
 
 export type OccupancyType = "Primary" | "Secondary" | "Investment" | "";
 
@@ -225,10 +225,35 @@ function normalizeCity(s: string): string {
 interface ParsedAddr {
   streetNum?: string;
   streetName?: string;   // normalized
+  unit?: string;         // normalized subpremise identity (designator excluded)
+  unitConflict?: boolean;// contradictory unit values were present in the source
   city?: string;         // normalized (lowercase, no punct)
   cityRaw?: string;      // original casing/punct for display
   state?: string;        // uppercase 2-letter
   zip5?: string;
+}
+
+function normalizeUnit(raw: string): string | undefined {
+  const value = raw.trim().toLowerCase().replace(/\s*-\s*/g, "-").replace(/\s+/g, "");
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) ? value : undefined;
+}
+
+/** Parse an explicitly-designated unit suffix, never a bare trailing token. */
+function parseDesignatedUnit(raw: string): { unit?: string; withoutUnit: string } {
+  const match = raw.match(
+    /^(.*?)(?:\s+|^)(?:(?:apt|apartment|unit)\.?\s*#?\s*|#\s*)([a-z0-9]+(?:\s*-\s*[a-z0-9]+)*)\s*$/i,
+  );
+  if (!match) return { withoutUnit: raw.trim() };
+  const unit = normalizeUnit(match[2]);
+  return unit
+    ? { unit, withoutUnit: match[1].trim() }
+    : { withoutUnit: raw.trim() };
+}
+
+function addUnit(out: ParsedAddr, unit: string | undefined): void {
+  if (!unit) return;
+  if (out.unit && out.unit !== unit) out.unitConflict = true;
+  else out.unit = unit;
 }
 
 /**
@@ -250,7 +275,8 @@ export function buildNormalizedPropertyKey(addr: string): string | null {
   // including state would prevent state-less variants (e.g. "4311 63rd
   // Way N 33709") from sharing a cache entry with state-tagged ones.
   const street = `${parsed.streetNum}-${parsed.streetName}`.replace(/\s+/g, "-");
-  const slug = `${street}-${parsed.zip5}`.replace(/[^a-z0-9-]/gi, "").toLowerCase();
+  const unit = parsed.unit ? `-unit-${parsed.unit}` : "";
+  const slug = `${street}${unit}-${parsed.zip5}`.replace(/[^a-z0-9-]/gi, "").toLowerCase();
   return `addr:v2:${slug}`;
 }
 
@@ -269,8 +295,20 @@ function stripCountrySuffix(addr: string): string {
  */
 function parseAddressString(addr: string): ParsedAddr {
   const cleaned = stripCountrySuffix(addr);
-  const parts = cleaned.split(",").map(s => s.trim()).filter(Boolean);
+  const rawParts = cleaned.split(",").map(s => s.trim()).filter(Boolean);
   const out: ParsedAddr = {};
+  const first = parseDesignatedUnit(rawParts[0] ?? "");
+  addUnit(out, first.unit);
+  const parts = [first.withoutUnit];
+  for (const part of rawParts.slice(1)) {
+    const designated = parseDesignatedUnit(part);
+    // A comma-separated "Unit 4B" is part of the street address, not a city.
+    if (designated.unit && !designated.withoutUnit) {
+      addUnit(out, designated.unit);
+    } else {
+      parts.push(part);
+    }
+  }
   let street = parts[0] ?? "";
 
   // No-comma form like "4311 63rd Way N 33709" — peel a trailing ZIP5 (and
@@ -285,6 +323,10 @@ function parseAddressString(addr: string): ParsedAddr {
     }
   }
 
+  // In the no-comma form the unit precedes the state/ZIP just peeled off.
+  const streetUnit = parseDesignatedUnit(street);
+  addUnit(out, streetUnit.unit);
+  street = streetUnit.withoutUnit;
   const m = street.match(/^(\d+\w?)\s+(.+)$/);
   if (m) {
     out.streetNum = m[1];
@@ -342,10 +384,18 @@ function parseAddressFromRow(row: any): ParsedAddr {
       value.line1 ??
       "",
     ).trim();
-    const m = street.match(/^(\d+\w?)\s+(.+)$/);
+    const designatedStreet = parseDesignatedUnit(street);
+    addUnit(out, designatedStreet.unit);
+    const m = designatedStreet.withoutUnit.match(/^(\d+\w?)\s+(.+)$/);
     if (m) {
       out.streetNum = m[1];
       out.streetName = normalizeStreetName(m[2]);
+    }
+    for (const rawUnit of [value.subpremise, value.unit, value.unitNumber]) {
+      if (rawUnit == null || typeof rawUnit === "object") continue;
+      const text = String(rawUnit).trim();
+      const designated = parseDesignatedUnit(text);
+      addUnit(out, designated.unit ?? normalizeUnit(text));
     }
     if (value.city) {
       out.cityRaw = String(value.city);
@@ -369,18 +419,31 @@ function parseAddressFromRow(row: any): ParsedAddr {
       parsed.state ||
       parsed.city
     ) {
+      for (const rawUnit of [row?.subpremise, row?.unit, row?.unitNumber]) {
+        if (rawUnit == null || typeof rawUnit === "object") continue;
+        const text = String(rawUnit).trim();
+        const designated = parseDesignatedUnit(text);
+        addUnit(parsed, designated.unit ?? normalizeUnit(text));
+      }
       return parsed;
     }
   }
 
   // Some actor responses flatten the address at the row level.
-  return parseAddressString(
+  const flattened = parseAddressString(
     typeof row?.streetAddress === "string"
       ? row.streetAddress
       : typeof row?.fullAddress === "string"
         ? row.fullAddress
         : "",
   );
+  for (const rawUnit of [row?.subpremise, row?.unit, row?.unitNumber]) {
+    if (rawUnit == null || typeof rawUnit === "object") continue;
+    const text = String(rawUnit).trim();
+    const designated = parseDesignatedUnit(text);
+    addUnit(flattened, designated.unit ?? normalizeUnit(text));
+  }
+  return flattened;
 }
 
 interface MatchDecision {
@@ -436,6 +499,13 @@ function decideAddressMatch(googleParsed: ParsedAddr, row: any): MatchDecision {
   const matched: string[] = [];
   const mismatched: string[] = [];
 
+  if (googleParsed.unitConflict || zillow.unitConflict) {
+    return { accept: false, reason: "contradictory unit identifiers", cityMismatch: false, matched, mismatched: ["unit"] };
+  }
+  if (!googleParsed.unit && zillow.unit) {
+    return { accept: false, reason: "unexpected unit in Zillow address", cityMismatch: false, matched, mismatched: ["unit"] };
+  }
+
   const check = (field: keyof ParsedAddr, hard: boolean): "ok" | "diff" | "skip" => {
     const g = googleParsed[field];
     const z = zillow[field];
@@ -455,6 +525,25 @@ function decideAddressMatch(googleParsed: ParsedAddr, row: any): MatchDecision {
   if (zip === "diff")       return { accept: false, reason: "ZIP mismatch",            cityMismatch: false, matched, mismatched };
   if (state === "diff")     return { accept: false, reason: "state mismatch",          cityMismatch: false, matched, mismatched };
   if (streetName === "diff")return { accept: false, reason: "street name mismatch",    cityMismatch: false, matched, mismatched };
+
+  // A requested unit is a required property identifier. It must be explicit
+  // in Zillow's parsed address and must agree everywhere Zillow supplies it.
+  // In particular, a building-level or sparse ZIP-only row cannot satisfy a
+  // unit-address request.
+  if (googleParsed.unit) {
+    if (zillow.unitConflict) {
+      mismatched.push("unit");
+      return { accept: false, reason: "contradictory Zillow unit identifiers", cityMismatch: false, matched, mismatched };
+    }
+    if (!zillow.unit) {
+      return { accept: false, reason: "requested unit missing from Zillow address", cityMismatch: false, matched, mismatched };
+    }
+    if (googleParsed.unit !== zillow.unit) {
+      mismatched.push("unit");
+      return { accept: false, reason: "unit mismatch", cityMismatch: false, matched, mismatched };
+    }
+    matched.push("unit");
+  }
 
   // Require at least one strong identifier to actually have matched —
   // otherwise we have nothing to base acceptance on (e.g. an unparseable
@@ -494,6 +583,7 @@ function normalizePropertyType(raw: unknown): PropertyTypeNorm | "" {
   const s = String(raw).toUpperCase().replace(/[^A-Z]/g, "");
   if (s.includes("CONDO") || s === "APARTMENT") return "Condo";
   if (s.includes("TOWN")) return "Townhome";
+  if (s.includes("VILLA")) return "Villa";
   if (s.includes("MULTI")) return "Multifamily";
   if (s.includes("MANUFACTURED") || s.includes("MOBILE")) return "Manufactured";
   if (s.includes("LOT") || s.includes("LAND")) return "Land";
@@ -1056,21 +1146,38 @@ export async function fetchZillowProperty(addressOrUrl: string): Promise<Propert
     if (v && !variants.includes(v)) variants.push(v);
   };
 
-  pushVariant(input);
-  // Drop "USA" / "United States" — same data, but the actor sometimes
-  // geocodes the country-suffixed form to nothing.
-  pushVariant(stripCountrySuffix(input));
-  if (googleParsed.streetNum && googleParsed.streetName) {
+  if (googleParsed.unit && googleParsed.streetNum && googleParsed.streetName) {
+    // Unit aliases share a canonical query plan. Prefer country-free "Apt"
+    // because Zillow indexes that form reliably, with one bounded "#"
+    // alternative. City-present and city-free forms keep the historical
+    // four-run ceiling, and every run retains the exact requested unit.
     const street = `${googleParsed.streetNum} ${googleParsed.streetName}`;
-    // "<street>, <state> <zip>" — city omitted entirely. Most-likely
-    // winner when Google and Zillow disagree on the city.
-    if (googleParsed.state && googleParsed.zip5) {
-      pushVariant(`${street}, ${googleParsed.state} ${googleParsed.zip5}`);
-    }
-    // "<street> <zip>" — even shorter; helps when the actor's
-    // state-parser is the failure point.
-    if (googleParsed.zip5) {
-      pushVariant(`${street} ${googleParsed.zip5}`);
+    const tail = googleParsed.state && googleParsed.zip5
+      ? `${googleParsed.state} ${googleParsed.zip5}`
+      : googleParsed.zip5 ?? googleParsed.state ?? "";
+    const withCity = [googleParsed.cityRaw, tail].filter(Boolean).join(", ");
+    const withoutCity = tail;
+    pushVariant(`${street} Apt ${googleParsed.unit}${withCity ? `, ${withCity}` : ""}`);
+    pushVariant(`${street} #${googleParsed.unit}${withCity ? `, ${withCity}` : ""}`);
+    pushVariant(`${street} Apt ${googleParsed.unit}${withoutCity ? `, ${withoutCity}` : ""}`);
+    pushVariant(`${street} #${googleParsed.unit}${withoutCity ? `, ${withoutCity}` : ""}`);
+  } else {
+    pushVariant(input);
+    // Drop "USA" / "United States" — same data, but the actor sometimes
+    // geocodes the country-suffixed form to nothing.
+    pushVariant(stripCountrySuffix(input));
+    if (googleParsed.streetNum && googleParsed.streetName) {
+      const street = `${googleParsed.streetNum} ${googleParsed.streetName}`;
+      // "<street>, <state> <zip>" — city omitted entirely. Most-likely
+      // winner when Google and Zillow disagree on the city.
+      if (googleParsed.state && googleParsed.zip5) {
+        pushVariant(`${street}, ${googleParsed.state} ${googleParsed.zip5}`);
+      }
+      // "<street> <zip>" — even shorter; helps when the actor's
+      // state-parser is the failure point.
+      if (googleParsed.zip5) {
+        pushVariant(`${street} ${googleParsed.zip5}`);
+      }
     }
   }
 

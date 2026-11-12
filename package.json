@@ -18,7 +18,7 @@
     "managed-data:reverse-dry-run": "tsx scripts/managed-data-migration.ts reverse-dry-run",
     "managed-data:reverse-restore": "tsx scripts/managed-data-migration.ts reverse-restore",
     "test": "npm run test:unit && npm run test:e2e",
-    "test:unit": "npx --no-install tsx --test client/src/lib/*.test.ts server/*.test.ts server/integrations/*.test.ts",
+    "test:unit": "npx --no-install tsx --test --test-concurrency=1 client/src/lib/*.test.ts server/*.test.ts server/integrations/*.test.ts",
     "test:live:county-tax": "tsx --test scripts/county-tax-live-contract.test.ts",
     "test:managed-data-rehearsal": "tsc --project tsconfig.managed-data-rehearsal.json && tsx scripts/run-managed-data-rehearsal.ts",
     "test:e2e": "playwright test"

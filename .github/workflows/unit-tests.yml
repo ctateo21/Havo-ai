@@ -51,4 +51,4 @@ jobs:
             ! -name 'ifw-activity-claims.test.ts' \
             ! -name 'insurance-cache-routes.test.ts' \
             | sort)
-          node_modules/.bin/tsx --test $files
+          npx --no-install tsx --test --test-concurrency=1 $files
