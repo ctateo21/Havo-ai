@@ -684,12 +684,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post(
     "/api/property-tax/hillsborough",
     async (req, res) => {
+      if(typeof req.body?.isPrimaryResidence!=="boolean") return res.json({annualTax:null,source:"hillsborough-county-estimator-unavailable",operationalError:"Select Property Use to calculate property tax."});
       try {
         const schema = z.object({
           address: z.string().min(5),
           purchasePrice: z.number().positive(),
-          isPrimaryResidence: z.boolean()
-            .default(true),
+          isPrimaryResidence: z.boolean({required_error:"Select Property Use to calculate property tax."}),
         });
         const params = schema.parse(req.body);
 
@@ -763,12 +763,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // exact millage cache path. Polk resolves parcel identity but remains an
   // explicitly labeled formula fallback until its Phenix collector is parsed.
   app.post("/api/property-tax/county", async (req, res) => {
+    if(typeof req.body?.isPrimaryResidence!=="boolean") return res.json({annualTax:null,source:"county-estimator-unavailable",operationalError:"Select Property Use to calculate property tax."});
     try {
       const schema = z.object({
         address: z.string().min(5),
         county: z.string().min(3),
         purchasePrice: z.number().positive(),
-        isPrimaryResidence: z.boolean().default(true),
+        isPrimaryResidence: z.boolean({required_error:"Select Property Use to calculate property tax."}),
       });
       const p = schema.parse(req.body);
       const county = p.county.toLowerCase().trim() as CountySlug;

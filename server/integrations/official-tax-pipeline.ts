@@ -7,15 +7,23 @@ import { fetchOfficialBill, type OfficialBill } from "./official-county-bills";
 import { readOfficialCache, writeOfficialCache, currentBillYear } from "./official-tax-cache";
 import { calculateCollierPurchaseAdValorem } from "../../shared/collier-property-tax";
 import { MANATEE_RATES_SOURCE, manateeAdValoremCents } from "../../shared/manatee-property-tax";
+import { purchaseTaxVariantKey } from "../../shared/purchase-homestead";
 
 const title = (county: string) => county[0].toUpperCase()+county.slice(1);
-export async function officialParcelTax(input: EstimatorInput, refinance = false) {
+const countyTaxDependencies={readOfficialCache,writeOfficialCache,fetchOfficialBill,directEstimator,browserEstimator};
+export async function officialParcelTax(input: EstimatorInput, refinance = false, dependencies=countyTaxDependencies) {
+  const {readOfficialCache,writeOfficialCache,fetchOfficialBill,directEstimator,browserEstimator}=dependencies;
+  if(!refinance && typeof input.homestead!=="boolean") return composeOfficialTax(
+    {cents:null,reason:"Select Property Use to calculate property tax."},
+    {cents:null,reason:"Select Property Use to calculate property tax."});
   let bill: OfficialBill | undefined, estimator: EstimatorOutput | undefined;
   let billError = "", estimatorError = "";
   const warnings: string[] = COUNTY_TAX_WARNINGS[input.county] ? [COUNTY_TAX_WARNINGS[input.county]] : [];
   let cached: Awaited<ReturnType<typeof readOfficialCache>> = null;
   try { cached = await readOfficialCache(input.county,input.parcelId,input.taxYear); }
   catch { warnings.push("The official tax cache is unavailable; fresh county data is required."); }
+  const purchaseResults={...cached?.purchaseResults};
+  const resultKey=(hx:boolean)=>purchaseTaxVariantKey(input.purchasePrice,hx);
   await Promise.all([
     (async()=>{
       try { bill=cached?.bill || await fetchOfficialBill(input.county,input.parcelId,input.taxYear,undefined,input.address); }
@@ -30,6 +38,10 @@ export async function officialParcelTax(input: EstimatorInput, refinance = false
           return;
         }
         if(!isCountyEstimatorVerified(input.county)) throw new Error(`${title(input.county)} official estimator has not passed verification`);
+        if(["collier","hernando"].includes(input.county) && process.env[input.county==="collier"?"COLLIER_BROWSER_ESTIMATOR":"HERNANDO_BROWSER_ESTIMATOR"]!=="on")
+          throw new Error(`${title(input.county)} estimator requires browser automation (disabled)`);
+        const saved=purchaseResults[resultKey(input.homestead)];
+        if(saved && Number.isSafeInteger(saved.adValoremCents) && saved.adValoremCents>=0) {estimator=saved;return;}
         if(["collier","hernando"].includes(input.county)) {
           if(process.env[input.county==="collier"?"COLLIER_BROWSER_ESTIMATOR":"HERNANDO_BROWSER_ESTIMATOR"]!=="on")
             throw new Error(`${title(input.county)} estimator requires browser automation (disabled)`);
@@ -38,6 +50,17 @@ export async function officialParcelTax(input: EstimatorInput, refinance = false
             estimator = {...e,adValoremCents:100*calculateCollierPurchaseAdValorem(input.purchasePrice,input.homestead,{school:e.schoolMills,county:e.nonSchoolMills,municipal:0,other:0})};
           } else estimator=await browserEstimator(input);
         } else estimator=await directEstimator(input);
+        if(estimator) {
+          purchaseResults[resultKey(input.homestead)]={...estimator,snapshot:""};
+          // Capture both official answers, not a guessed linear rate. Once warm,
+          // occupancy switches reuse the exact price/homestead-specific result.
+          if(!["collier","manatee"].includes(input.county) && !purchaseResults[resultKey(!input.homestead)]) {
+            try {
+              const other=await (input.county==="hernando"?browserEstimator:directEstimator)({...input,homestead:!input.homestead});
+              purchaseResults[resultKey(!input.homestead)]={...other,snapshot:""};
+            } catch { warnings.push("The other homestead option could not be cached; selecting it will retry the official county lookup."); }
+          }
+        }
       } catch(e) { estimatorError=e instanceof Error?e.message:"Official estimator unavailable"; }
     })(),
   ]);
@@ -48,7 +71,7 @@ export async function officialParcelTax(input: EstimatorInput, refinance = false
   if(bill && estimator?.estimatorNavCents!=null && bill.navCents!==estimator.estimatorNavCents)
     warnings.push(`The estimator shows $${(estimator.estimatorNavCents/100).toFixed(2)} non-ad valorem; the current bill shows $${(bill.navCents/100).toFixed(2)}. The bill amount is used.`);
   if(bill || estimator) {
-    try { await writeOfficialCache({county:input.county,parcelId:input.parcelId,taxYear:input.taxYear,bill,estimator:estimator ?? (input.county==="manatee"?cached?.estimator:undefined)}); }
+    try { await writeOfficialCache({county:input.county,parcelId:input.parcelId,taxYear:input.taxYear,bill,estimator:estimator ?? (input.county==="manatee"?cached?.estimator:undefined),purchaseResults}); }
     catch { warnings.push("Official data was fetched, but could not be saved in the cache."); }
   }
   const breakdown=composeOfficialTax(adValorem,nav,warnings);

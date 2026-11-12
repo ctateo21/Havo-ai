@@ -116,6 +116,7 @@ async function openGuestIfw(page: Page): Promise<void> {
   await page.goto(
     `/estimate?address=${encodeURIComponent("123 Main St, Tampa, FL 33602")}`,
   );
+  await page.getByRole("button", {name:"primary",exact:true}).click();
   await page.getByRole("button", { name: /^Next/ }).click();
   await page.getByRole("button", { name: /^Next/ }).click();
   await page.getByRole("button", { name: /See My Estimate/ }).click();
@@ -219,6 +220,7 @@ test("rate and APR disclosures remain readable at phone width", async ({
   await page.goto(
     `/estimate?address=${encodeURIComponent("123 Main St, Tampa, FL 33602")}`,
   );
+  await page.getByRole("button", {name:"primary",exact:true}).click();
   await page.getByRole("button", { name: /^Next/ }).click();
   await page.getByRole("button", { name: /^Next/ }).click();
 
