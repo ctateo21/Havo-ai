@@ -67,6 +67,7 @@ export interface PropertyTaxCacheRow {
   nonAdValoremLines: Array<{ authority: string; amount: number }>;
   source: string;
   expiresAt: Date;
+  queriedAt?: string;
 }
 
 /**
@@ -307,6 +308,7 @@ function rowFromSupabase(r: Record<string, unknown>): PropertyTaxCacheRow {
       : [],
     source: String(r.source ?? ""),
     expiresAt: new Date(String(r.expires_at ?? "")),
+    queriedAt: r.queried_at ? String(r.queried_at) : undefined,
   };
 }
 

@@ -3,8 +3,10 @@
  *
  * This service is intentionally address-only and never receives or uses a
  * purchase price. Eight Tyler TaxSys counties share the same bill path. Polk
- * has verified parcel identity but returns manual-entry-required until its
- * separate Phenix bill shape is supported.
+ * uses the Phenix collector (polk.floridatax.us). The eight Tyler counties
+ * require APIFY_TOKEN in production; Cloudflare blocks a plain fetch, and
+ * a missing token is returned as live-bill-service-not-configured rather
+ * than a zero bill.
  */
 import { supabaseAdmin } from "../supabase";
 import { nextTaxRefreshBoundary } from "./property-tax-cache";
@@ -29,6 +31,7 @@ export type CurrentTaxBillResponse =
       adValoremTax?: number;
       nonAdValoremTax?: number;
       source: "tax-collector-bill-scrape" | "user-provided";
+      sourceLabel?: string;
       county: string;
       parcelId: string;
     }
@@ -168,6 +171,9 @@ function readyFromCache(row: CurrentBillRow): CurrentTaxBillResponse {
     source: row.source === "user-provided"
       ? "user-provided"
       : "tax-collector-bill-scrape",
+    sourceLabel: row.source === "user-provided"
+      ? "Entered manually"
+      : `${row.county} Tax Collector annual bill, tax year ${row.taxYear} (ad valorem + non-ad valorem, including CDD).`,
     county: row.county,
     parcelId: row.parcelId,
   };
@@ -322,6 +328,13 @@ export async function resolveCurrentTaxBill(
     adValoremTax: adValoremTaxCents / 100,
     nonAdValoremTax: nonAdValoremTaxCents / 100,
     source: "tax-collector-bill-scrape",
+    sourceLabel:
+      `${county} Tax Collector annual bill, tax year ${taxYear} ` +
+      `(ad valorem $${(adValoremTaxCents / 100).toFixed(2)} + non-ad valorem ` +
+      `$${(nonAdValoremTaxCents / 100).toFixed(2)}, including CDD).` +
+      (county === "polk"
+        ? ""
+        : " Tyler counties require APIFY_TOKEN in production."),
     county,
     parcelId,
   };

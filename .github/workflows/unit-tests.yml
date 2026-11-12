@@ -1,0 +1,54 @@
+name: Unit tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: npm run test:unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: |
+          set -o pipefail
+          npm install -g npm@10.9.2
+          npm ci --no-audit --no-fund
+          test -x node_modules/.bin/tsx
+          node_modules/.bin/tsx --version
+
+      # `npm test` also runs Playwright against a dev server that needs
+      # DATABASE_URL and Chromium. This job runs the unit files that do not
+      # open a live Postgres connection. The managed-data, IFW, and insurance
+      # cache files assert against a real database and are run where
+      # DATABASE_URL points at one.
+      - name: Run unit tests
+        env:
+          # Lets modules that construct a Pool import. Tests that actually
+          # connect are excluded below.
+          DATABASE_URL: postgres://unit-test:unit-test@127.0.0.1:5432/unit_test
+        run: |
+          set -o pipefail
+          files=$(find client/src/lib server server/integrations -name '*.test.ts' \
+            ! -name 'managed-data-*.test.ts' \
+            ! -name 'ifw-activity-claims.test.ts' \
+            ! -name 'insurance-cache-routes.test.ts' \
+            | sort)
+          node_modules/.bin/tsx --test $files

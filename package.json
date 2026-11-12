@@ -17,7 +17,7 @@
     "managed-data:reverse-restore": "tsx scripts/managed-data-migration.ts reverse-restore",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "tsx --test client/src/lib/*.test.ts server/*.test.ts server/integrations/*.test.ts",
-    "test:live:county-tax": "tsx --test scripts/county-tax-live-contract.test.ts",
+    "test:live:county-tax": "tsx --test scripts/county-tax-live-contract.test.ts scripts/hillsborough-estimator.live.test.ts",
     "test:county-estimator:acceptance": "tsx --test scripts/county-estimator.known-answers.test.ts",
     "test:managed-data-rehearsal": "tsc --project tsconfig.managed-data-rehearsal.json && tsx scripts/run-managed-data-rehearsal.ts",
     "test:e2e": "playwright test"

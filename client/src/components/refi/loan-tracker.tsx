@@ -116,6 +116,10 @@ export interface TrackedLoan {
   /** Where annualPropertyTax came from. "manual" is never overwritten by
    *  a background lookup. Stored on tracked_loans.annual_property_tax_source. */
   annualPropertyTaxSource?: "manual" | "tax-collector-bill-scrape" | "manatee-arcgis";
+  annualPropertyTaxSourceLabel?: string;
+  annualPropertyTaxAdValorem?: number;
+  annualPropertyTaxNonAdValorem?: number;
+  annualPropertyTaxCounty?: string;
   /** Tax year the bill was issued. Stored on
    *  tracked_loans.annual_property_tax_year. */
   annualPropertyTaxYear?: number;
@@ -773,8 +777,9 @@ function PropertyTaxSection({
           <p className="text-xs" data-testid={`property-tax-source-${loan.id}`}>
             {hasTax ? (
               <>
-                {loan.annualPropertyTaxSource ? sourceLabel[loan.annualPropertyTaxSource] : "Unknown"}
-                {loan.annualPropertyTaxYear ? ` · ${loan.annualPropertyTaxYear}` : ""}
+                {loan.annualPropertyTaxSourceLabel
+                  ? loan.annualPropertyTaxSourceLabel
+                  : `${loan.annualPropertyTaxSource ? sourceLabel[loan.annualPropertyTaxSource] : "Unknown"}${loan.annualPropertyTaxYear ? ` · ${loan.annualPropertyTaxYear}` : ""}`}
               </>
             ) : (
               <span className="text-muted-foreground italic">—</span>
@@ -782,6 +787,16 @@ function PropertyTaxSection({
           </p>
         </div>
       </div>
+
+      {typeof loan.annualPropertyTaxAdValorem === "number" &&
+        typeof loan.annualPropertyTaxNonAdValorem === "number" && (
+        <p className="text-xs text-muted-foreground" data-testid={`property-tax-breakdown-${loan.id}`}>
+          Ad valorem {formatCurrency(loan.annualPropertyTaxAdValorem)}
+          {" + non-ad valorem / CDD "}
+          {formatCurrency(loan.annualPropertyTaxNonAdValorem)}
+          {loan.annualPropertyTaxCounty ? ` · ${loan.annualPropertyTaxCounty} Tax Collector` : ""}
+        </p>
+      )}
 
       {/* Clarifying note — always visible */}
       <p className="text-xs text-muted-foreground flex items-start gap-1">

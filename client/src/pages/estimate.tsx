@@ -2556,7 +2556,9 @@ export default function Estimate() {
         * to enter the bill manually. */
       operationalError?: string;
       source?: string;
+      sourceLabel?: string;
     } | null>(null);
+  const [taxNotice, setTaxNotice] = useState<string | null>(null);
 
   // Live HCPA property tax lookup
   // (Hillsborough County addresses only)
@@ -2675,7 +2677,9 @@ export default function Estimate() {
                navPending: parsed.nonAdValoremPending,
                operationalError: parsed.operationalError,
                source: parsed.source,
+               sourceLabel: typeof data?.sourceLabel === "string" ? data.sourceLabel : parsed.source,
             });
+            setTaxNotice(null);
              if (parsed.nonAdValoremPending && attempt < 14) {
               retryTimer = setTimeout(
                 () => fetchTax(attempt + 1, routeIndex),
@@ -2689,6 +2693,15 @@ export default function Estimate() {
           } else {
              // Explicitly unavailable: the UI asks for a manual tax value.
             setHcpaTax(null);
+            const adValorem = typeof data?.adValoremTax === "number" ? data.adValoremTax : null;
+            const reason = typeof data?.operationalError === "string"
+              ? data.operationalError
+              : parsed.status === "unavailable" ? parsed.reason : undefined;
+            setTaxNotice(
+              adValorem != null && data?.nonAdValoremPending
+                ? (reason ?? `Official ad valorem is $${adValorem.toFixed(2)}. The yearly total stays blank until the tax collector bill is attached.`)
+                : (reason ?? null),
+            );
           }
         })
         .catch(() => {
@@ -6421,6 +6434,23 @@ export default function Estimate() {
                     >
                       <Loader2 className="h-3 w-3 animate-spin shrink-0" />
                       Checking the county tax bill for CDD &amp; special assessments — this figure may update in a few minutes…
+                    </p>
+                  )}
+                  {hcpaTax?.sourceLabel && (
+                    <p
+                      className="text-[10px] text-muted-foreground -mt-1 mb-1 px-1"
+                      data-testid="note-tax-source"
+                    >
+                      {hcpaTax.sourceLabel}
+                      {hcpaTax.isPrimary ? " Homestead: yes." : " Homestead: no."}
+                    </p>
+                  )}
+                  {taxNotice && !hcpaTax && (
+                    <p
+                      className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 -mt-1 mb-1"
+                      data-testid="note-tax-manual"
+                    >
+                      {taxNotice}
                     </p>
                   )}
                   {hcpaTax?.operationalError && (

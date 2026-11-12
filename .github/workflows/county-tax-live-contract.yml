@@ -32,8 +32,19 @@ jobs:
           node-version: 20
           cache: npm
 
+      # package-lock.json must resolve from registry.npmjs.org. Replit's
+      # package-firewall host is not reachable on GitHub, and npm 10.8.2
+      # can print "Exit handler never called!" and still exit 0. The tsx
+      # check turns that into a failed step.
       - name: Install dependencies
-        run: npm ci
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: |
+          set -o pipefail
+          npm install -g npm@10.9.2
+          npm ci --no-audit --no-fund
+          test -x node_modules/.bin/tsx
+          node_modules/.bin/tsx --version
 
       - name: Run live county tax contract check
         id: county_tax_contract

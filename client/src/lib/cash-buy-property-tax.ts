@@ -58,7 +58,11 @@ export type CashBuyTaxFetch = (
  */
 export function isParcelVerifiedTaxSource(source: string | undefined): boolean {
   if (!source) return false;
-  return source === "county-estimator" || source === "hcpa-api";
+  const normalized = source.trim().toLowerCase();
+  if (normalized.includes("unavailable") || normalized.includes("formula")) return false;
+  return normalized === "county-estimator" ||
+    normalized === "hcpa-api" ||
+    normalized.endsWith("-county-estimator");
 }
 
 function asPositiveNumber(value: unknown): number | undefined {
