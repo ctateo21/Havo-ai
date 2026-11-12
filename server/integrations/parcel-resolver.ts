@@ -499,7 +499,7 @@ async function readIdentityCache(
   }
 }
 
-async function writeIdentityCache(
+export async function writeIdentityCache(
   address: string,
   identity: ParcelIdentity,
   now: Date,
@@ -569,14 +569,11 @@ export async function resolveParcel(
   if (!county) return null;
 
   const now = options.now ?? new Date();
-  // Collier's current estimator varies by millage area. The durable identity
-  // row predates those rate fields, so a cache hit there would discard the
-  // official parcel millage and silently fall back to an unrelated area.
-  // Tax-estimate cache rows retain the complete rate components; refresh the
-  // parcel source whenever Collier needs a new tax row.
-  if (!options.skipCache && county !== "collier") {
+  // Browser-verified Collier identity is reusable; rates live separately in
+  // the annual official cache, never in a generic identity-derived fallback.
+  if (!options.skipCache) {
     const cached = await readIdentityCache(county, address, now);
-    if (cached) return cached;
+    if (cached && (county!=="collier" || cached.source==="collier-official-estimator-page")) return cached;
   }
 
   let identity: ParcelIdentity;

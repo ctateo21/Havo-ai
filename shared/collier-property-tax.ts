@@ -30,7 +30,7 @@ export function calculateCollierPurchaseAdValorem(
   homestead: boolean,
   rates: CollierMillageRates,
 ): number {
-  if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) return 0;
+  if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) throw new Error("Collier purchase price is missing or invalid");
 
   const schoolTaxable = homestead
     ? Math.max(purchasePrice - 25_000, 0)

@@ -7,6 +7,8 @@ export interface EstimatorInput {
   county: CountySlug; parcelId: string; address: string; purchasePrice: number; homestead: boolean; taxYear: number; folioId?: string; taxDistrict?: string;
 }
 export interface EstimatorOutput {
+  parcelId?: string;
+  situsAddress?: string;
   adValoremCents: number;
   estimatorNavCents: number | null;
   url: string;
@@ -78,7 +80,7 @@ export async function resolveLeeFolio(strap: string, session = new CountySession
 }
 export async function directEstimator(input: EstimatorInput): Promise<EstimatorOutput> {
   const {county,parcelId,purchasePrice:price,homestead:hx,taxYear:year,address} = input;
-  const s = new CountySession();
+  const s = new CountySession(county==="sarasota");
   let url: string, html: string;
   if (county === "hillsborough") {
     const folio = parcelId.replace(/^A/i,"").replace(/\D/g,"");

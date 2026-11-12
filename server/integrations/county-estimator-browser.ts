@@ -1,6 +1,7 @@
 import { interactTaxPage, paceCollier } from "./firecrawl-tax";
 import { browserOutput } from "./official-county-bills";
 import { moneyCents } from "./county-tax-http";
+import { streetAddressMatches } from "./hillsborough-tax";
 import type { EstimatorInput, EstimatorOutput } from "./county-estimator-direct";
 export async function browserEstimator(input: EstimatorInput): Promise<EstimatorOutput> {
   const {county,parcelId,purchasePrice,homestead} = input;
@@ -25,7 +26,8 @@ export async function browserEstimator(input: EstimatorInput): Promise<Estimator
     await entry.fill(p.address.split(',')[0]);
     await frame.locator('#SearchFullAddress').click();
     await frame.waitForURL('**/TaxEstimator.html?**');
-    if (new URL(frame.url()).searchParams.get('FolioID')!==p.parcelId) throw new Error('Estimator parcel mismatch');
+    const resolvedParcel=new URL(frame.url()).searchParams.get('FolioID');
+    if (!resolvedParcel || (p.parcelId && resolvedParcel!==p.parcelId)) throw new Error('Estimator parcel mismatch');
     await frame.locator('#txtPurchasePrice').fill(String(p.purchasePrice));
     await frame.locator('#txtPurchasePrice').press('Enter');
     await frame.locator(p.homestead?'#rbHXYes':'#rbHXNo').check();
@@ -34,7 +36,7 @@ export async function browserEstimator(input: EstimatorInput): Promise<Estimator
     const hidden = {};
     for(const id of ['hdnRatio','hdnRatioNonSchoolBoard','hdnRatioSchoolBoard','hdnTotalNAdvTaxes']) hidden[id] = await frame.locator('#'+id).inputValue();
     const text = await frame.locator('body').innerText();
-    console.log(JSON.stringify({text,hidden}));
+    console.log(JSON.stringify({text,hidden,parcelId:resolvedParcel}));
   ` : `
     const p = ${JSON.stringify(input)};
     await page.getByRole('button',{name:'I Understand & Continue'}).click();
@@ -57,6 +59,12 @@ export async function browserEstimator(input: EstimatorInput): Promise<Estimator
   `;
   const execute = () => interactTaxPage(url,code);
   const data = browserOutput(await (county==="collier" ? paceCollier(execute) : execute()));
+  if(county==="collier") {
+    const situsAddress=/Site Address\s+([^\n]+)/i.exec(String(data.text))?.[1]?.trim();
+    if(!situsAddress || !streetAddressMatches(input.address,situsAddress)) throw new Error("Collier estimator site address does not match");
+    if(!/^\d{11}$/.test(String(data.parcelId))) throw new Error("Collier estimator parcel identifier missing");
+    data.situsAddress=situsAddress;
+  }
   return parseBrowserEstimatorPage(county,data,url);
 }
 export function parseBrowserEstimatorPage(county:string,data:any,url:string):EstimatorOutput {
@@ -65,7 +73,7 @@ export function parseBrowserEstimatorPage(county:string,data:any,url:string):Est
   const amount = label.exec(text);
   if (!amount) throw new Error("Official browser estimator amount missing");
   const nav = /Approximate Non-Ad Valorem Assessments\s*\(\$\)\s*([\d,.]+)/i.exec(text);
-  const output: EstimatorOutput = {adValoremCents:moneyCents(amount[1]),estimatorNavCents:nav?moneyCents(nav[1]):null,url,fetchedAt:new Date().toISOString(),snapshot:text.slice(0,12000)};
+  const output: EstimatorOutput = {adValoremCents:moneyCents(amount[1]),estimatorNavCents:nav?moneyCents(nav[1]):null,url,fetchedAt:new Date().toISOString(),snapshot:text.slice(0,12000),parcelId:data.parcelId,situsAddress:data.situsAddress};
   if (county==="collier") {
     const nonSchool = Number(data.hidden?.hdnRatioNonSchoolBoard), school = Number(data.hidden?.hdnRatioSchoolBoard), total = Number(data.hidden?.hdnRatio);
     if (!(school>0 && nonSchool>0) || Math.abs(school+nonSchool-total)>1e-8) throw new Error("Collier hidden ratios missing or inconsistent");

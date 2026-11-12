@@ -3,14 +3,18 @@ const UA = "Mozilla/5.0 (compatible; HavoPropertyTax/1.0; +https://havofl.com)";
 /** Per-lookup cookie jar; hidden WebForms controls are copied verbatim. */
 export class CountySession {
   private cookies = new Map<string, string>();
+  private previousUrl?: string;
+  constructor(private readonly sendReferer = false) {}
   async request(url: string, body?: URLSearchParams | string, json = false): Promise<string> {
     for (let redirects = 0; redirects < 8; redirects++) {
       const r = await fetch(url, {
         method: body === undefined ? "GET" : "POST", redirect: "manual",
         headers: { "User-Agent": UA, Cookie: [...this.cookies].map(([k,v]) => `${k}=${v}`).join("; "),
+          ...(this.sendReferer && this.previousUrl && new URL(this.previousUrl).origin===new URL(url).origin ? {Referer:this.previousUrl} : {}),
           ...(body !== undefined ? { "Content-Type": json ? "application/json; charset=utf-8" : "application/x-www-form-urlencoded" } : {}) },
         ...(body === undefined ? {} : { body }), signal: AbortSignal.timeout(30_000),
       });
+      this.previousUrl=url;
       for (const c of r.headers.getSetCookie()) {
         const [pair] = c.split(";"); const p = pair.indexOf("=");
         if (p > 0) this.cookies.set(pair.slice(0,p), pair.slice(p+1));

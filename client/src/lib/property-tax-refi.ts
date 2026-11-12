@@ -1,3 +1,6 @@
+import type { OfficialTaxBreakdown } from "@shared/official-tax";
+import { parseOfficialTaxBreakdown } from "./official-property-tax";
+
 export type AnnualPropertyTaxSource =
   | "manual"
   | "tax-collector-bill-scrape"
@@ -12,15 +15,44 @@ export interface PropertyTaxLoanPatch {
   annualPropertyTaxAdValorem?: number;
   annualPropertyTaxNonAdValorem?: number;
   annualPropertyTaxCounty?: string;
+  annualPropertyTaxBreakdown?: OfficialTaxBreakdown | null;
 }
 
-/**
- * Converts a successful current-bill API response into the only four
- * tracked-loan fields the lookup is allowed to update.
- */
+/** No client clock or legacy lookup timestamp can stand in for county evidence. */
+export function currentBillFetchedAt(breakdown?: OfficialTaxBreakdown | null): string | undefined {
+  const sources = [breakdown?.adValorem.source, breakdown?.nonAdValorem.source, breakdown?.total.source];
+  const dates = sources.flatMap(source => source && Number.isFinite(Date.parse(source.fetchedAt))
+    ? [source.fetchedAt] : []);
+  // Oldest component determines freshness; each component retains its own timestamp.
+  return dates.sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+}
+
+/** Persistence guard: never attach evidence to a manual or mismatched amount. */
+export function savedCurrentBillBreakdown(value: unknown, source: unknown, annual: unknown) {
+  if (source !== "tax-collector-bill-scrape" && source !== "manatee-arcgis") return undefined;
+  const breakdown = parseOfficialTaxBreakdown(value);
+  return breakdown?.total.cents != null && typeof annual === "number"
+    && breakdown.total.cents === Math.round(annual * 100) ? breakdown : undefined;
+}
+
+/** Undefined omits the new column on legacy saves; null explicitly clears evidence. */
+export function currentBillEvidenceToRow(loan: {
+  annualPropertyTax?: number;
+  annualPropertyTaxSource?: AnnualPropertyTaxSource;
+  annualPropertyTaxBreakdown?: OfficialTaxBreakdown | null;
+}) {
+  if (loan.annualPropertyTaxSource !== "manual" && loan.annualPropertyTaxBreakdown === undefined) return {};
+  const breakdown = savedCurrentBillBreakdown(
+    loan.annualPropertyTaxBreakdown, loan.annualPropertyTaxSource, loan.annualPropertyTax);
+  return {
+    annual_property_tax_breakdown: breakdown ?? null,
+    annual_property_tax_queried_at: currentBillFetchedAt(breakdown) ?? null,
+  };
+}
+
+/** Converts a successful current-bill API response into tax-only fields. */
 export function buildCurrentTaxLookupPatch(
   data: unknown,
-  queriedAt = new Date(),
 ): PropertyTaxLoanPatch | null {
   if (!data || typeof data !== "object") return null;
   const result = data as Record<string, unknown>;
@@ -46,11 +78,20 @@ export function buildCurrentTaxLookupPatch(
     return null;
   }
 
+  const breakdown = parseOfficialTaxBreakdown(result.breakdown);
+  // A present but incomplete official breakdown cannot be replaced by a legacy number.
+  if (result.breakdown != null && breakdown?.total.cents == null) return null;
   const patch: PropertyTaxLoanPatch = {
-    annualPropertyTax: Math.round(result.annualTax * 100) / 100,
+    annualPropertyTax: breakdown?.total.cents != null
+      ? breakdown.total.cents / 100 : Math.round(result.annualTax * 100) / 100,
     annualPropertyTaxSource: result.source,
     annualPropertyTaxYear: result.taxYear,
-    annualPropertyTaxQueriedAt: queriedAt.toISOString(),
+    annualPropertyTaxQueriedAt: currentBillFetchedAt(breakdown),
+    annualPropertyTaxBreakdown: breakdown ?? null,
+    annualPropertyTaxSourceLabel: undefined,
+    annualPropertyTaxAdValorem: undefined,
+    annualPropertyTaxNonAdValorem: undefined,
+    annualPropertyTaxCounty: undefined,
   };
   if (typeof result.sourceLabel === "string" && result.sourceLabel.trim()) {
     patch.annualPropertyTaxSourceLabel = result.sourceLabel.trim();
@@ -63,6 +104,10 @@ export function buildCurrentTaxLookupPatch(
   }
   if (typeof result.county === "string" && result.county.trim()) {
     patch.annualPropertyTaxCounty = result.county.trim();
+  }
+  if (breakdown) {
+    patch.annualPropertyTaxAdValorem = breakdown.adValorem.cents! / 100;
+    patch.annualPropertyTaxNonAdValorem = breakdown.nonAdValorem.cents! / 100;
   }
   return patch;
 }
@@ -77,5 +122,10 @@ export function buildManualPropertyTaxPatch(
     annualPropertyTaxSource: "manual",
     annualPropertyTaxYear: undefined,
     annualPropertyTaxQueriedAt: undefined,
+    annualPropertyTaxBreakdown: null,
+    annualPropertyTaxSourceLabel: undefined,
+    annualPropertyTaxAdValorem: undefined,
+    annualPropertyTaxNonAdValorem: undefined,
+    annualPropertyTaxCounty: undefined,
   };
 }

@@ -30,10 +30,10 @@ export async function readOfficialCache(county: CountySlug, parcelId: string, ta
   const cents = (v:unknown) => v!==null && v!==undefined && Number.isFinite(Number(v)) && Number(v)>=0 ? Math.round(Number(v)*100) : null;
   const av=cents(r.bill_ad_valorem_total),nav=cents(r.nav_total),total=cents(r.bill_combined_total);
   if (av!==null && nav!==null && total===av+nav && r.bill_url && r.bill_queried_at && Array.isArray(r.nav_lines) && (county!=="pinellas" || metadata.situsAddress)) {
-    value.bill={adValoremCents:av,navCents:nav,combinedCents:total,lines:r.nav_lines,url:r.bill_url,fetchedAt:r.bill_queried_at,taxYear,snapshot:"",situsAddress:metadata.situsAddress};
+    value.bill={adValoremCents:av,navCents:nav,combinedCents:total,lines:r.nav_lines,url:r.bill_url,fetchedAt:r.bill_queried_at,taxYear,snapshot:typeof metadata.bill==="string"?metadata.bill:"",situsAddress:metadata.situsAddress};
   }
   if (r.estimator_source==="collier-official-page-verified-recompute" && r.mills_school!=null && r.mills_non_school!=null && r.estimator_url && r.estimator_queried_at) {
-    value.estimator={adValoremCents:0,estimatorNavCents:null,schoolMills:Number(r.mills_school),nonSchoolMills:Number(r.mills_non_school),assessmentRatio:Number(r.assessment_ratio),exemptionSchedule:r.exemption_schedule,url:r.estimator_url,fetchedAt:r.estimator_queried_at,snapshot:""};
+    value.estimator={adValoremCents:0,estimatorNavCents:null,schoolMills:Number(r.mills_school),nonSchoolMills:Number(r.mills_non_school),assessmentRatio:Number(r.assessment_ratio),exemptionSchedule:r.exemption_schedule,url:r.estimator_url,fetchedAt:r.estimator_queried_at,snapshot:typeof metadata.estimator==="string"?metadata.estimator:""};
   }
   return value;
 }

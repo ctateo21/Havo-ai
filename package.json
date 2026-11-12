@@ -20,6 +20,7 @@
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "npx --no-install tsx --test --test-concurrency=1 client/src/lib/*.test.ts server/*.test.ts server/integrations/*.test.ts",
     "test:live:county-tax": "tsx --test scripts/county-tax-live-contract.test.ts",
+    "test:live": "npx --no-install tsx --test --test-concurrency=1 scripts/official-tax-live.test.ts",
     "test:managed-data-rehearsal": "tsc --project tsconfig.managed-data-rehearsal.json && tsx scripts/run-managed-data-rehearsal.ts",
     "test:e2e": "playwright test"
   },

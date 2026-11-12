@@ -181,7 +181,7 @@ test("a cached Hillsborough millage is recomputed and the CDD stays flat", async
 
 test("unverified counties name why the official estimator is not shown", async () => {
   const polk = await getCountyPurchaseTax({
-    county: "hernando",
+    county: "sarasota",
     address: "45098 Hwy 54, Lakeland, FL 33809",
     purchasePrice: 400_000,
     isPrimaryResidence: true,

@@ -1,4 +1,6 @@
 import { supabase, supabaseReady } from "./supabase";
+import type { OfficialTaxBreakdown } from "@shared/official-tax";
+import { currentBillEvidenceToRow, currentBillFetchedAt, savedCurrentBillBreakdown } from "./property-tax-refi";
 import { authedFetch } from "./authed-fetch";
 import {
   ensureInsuranceForAddresses,
@@ -658,6 +660,7 @@ export interface TrackedLoan {
   /** ISO timestamp of last successful lookup. Stored on
    *  `tracked_loans.annual_property_tax_queried_at`. */
   annualPropertyTaxQueriedAt?: string;
+  annualPropertyTaxBreakdown?: OfficialTaxBreakdown | null;
 }
 
 export type TrackedLoanType = "va" | "fha" | "conventional" | "dscr" | "bank_statement";
@@ -1433,8 +1436,10 @@ function rowToTrackedLoan(row: any): TrackedLoan {
       const n = numOrUndef(row.annual_property_tax_year);
       return n !== undefined ? Math.round(n) : undefined;
     })(),
-    annualPropertyTaxQueriedAt: typeof row.annual_property_tax_queried_at === "string" && row.annual_property_tax_queried_at
-      ? row.annual_property_tax_queried_at : undefined,
+    annualPropertyTaxBreakdown: savedCurrentBillBreakdown(
+      row.annual_property_tax_breakdown, row.annual_property_tax_source, numOrUndef(row.annual_property_tax)),
+    annualPropertyTaxQueriedAt: currentBillFetchedAt(savedCurrentBillBreakdown(
+      row.annual_property_tax_breakdown, row.annual_property_tax_source, numOrUndef(row.annual_property_tax))),
     vaDisability: typeof row.va_disability === "boolean" ? row.va_disability : undefined,
   };
 }
@@ -1494,6 +1499,7 @@ function trackedLoanToRow(l: TrackedLoan, userId: string) {
       ? { annual_property_tax: l.annualPropertyTax } : {}),
     ...(l.annualPropertyTaxSource
       ? { annual_property_tax_source: l.annualPropertyTaxSource } : {}),
+    ...currentBillEvidenceToRow(l),
     ...(l.annualPropertyTaxSource === "manual"
       ? {
           annual_property_tax_year: null,
@@ -1502,8 +1508,6 @@ function trackedLoanToRow(l: TrackedLoan, userId: string) {
       : {
           ...(typeof l.annualPropertyTaxYear === "number" && l.annualPropertyTaxYear > 0
             ? { annual_property_tax_year: Math.round(l.annualPropertyTaxYear) } : {}),
-          ...(l.annualPropertyTaxQueriedAt
-            ? { annual_property_tax_queried_at: l.annualPropertyTaxQueriedAt } : {}),
         }),
   };
   return row;
@@ -2862,6 +2866,7 @@ const TRACKED_LOAN_OPTIONAL_COLUMNS = [
   "balance_confirmed", "free_and_clear",
   "annual_property_tax", "annual_property_tax_source",
   "annual_property_tax_year", "annual_property_tax_queried_at",
+  "annual_property_tax_breakdown",
   "current_escrow_balance",
 ] as const;
 

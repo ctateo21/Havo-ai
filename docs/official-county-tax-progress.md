@@ -1,5 +1,8 @@
 # Official county tax implementation — incomplete draft
 
+**Historical foundation notes. Current status:
+[official-county-tax-verification.md](official-county-tax-verification.md).**
+
 This is not ready for all-county underwriter use. Hillsborough alone is enabled
 in the verified-estimator registry. Browser feature flags remain off.
 

@@ -1,6 +1,6 @@
 import { composeOfficialTax, COUNTY_TAX_WARNINGS, type TaxPart, type TaxSource } from "../../shared/official-tax";
 import { isCountyEstimatorVerified } from "../../shared/county-estimator-policy";
-import { resolveParcel, type CountySlug } from "./parcel-resolver";
+import { resolveParcel, writeIdentityCache, type CountySlug } from "./parcel-resolver";
 import { directEstimator, type EstimatorInput, type EstimatorOutput } from "./county-estimator-direct";
 import { browserEstimator } from "./county-estimator-browser";
 import { fetchOfficialBill, type OfficialBill } from "./official-county-bills";
@@ -56,11 +56,21 @@ export async function officialPurchaseTax(params: {county:CountySlug;address:str
     const breakdown=composeOfficialTax({cents:null,reason},{cents:null,reason:"Collector bill not loaded for this unverified purchase estimate"});
     return {adValoremTax:null,nonAdValoremTax:null,annualTax:null,monthlyTax:null,source:`${params.county}-county-estimator-unavailable`,fromGeneralCache:false,breakdown,operationalError:reason,nonAdValoremPending:false,nonAdValoremLines:[]};
   }
-  const identity=await resolveParcel(params.county,params.address);
+  let identity=await resolveParcel(params.county,params.address);
+  let identityError="County parcel identity could not be verified";
+  if(params.county==="collier" && identity.status!=="found" && process.env.COLLIER_BROWSER_ESTIMATOR==="on"){
+    try{
+      const result=await browserEstimator({county:"collier",parcelId:"",address:params.address,purchasePrice:params.purchasePrice,homestead:params.isPrimaryResidence,taxYear:currentBillYear()});
+      if(!result.parcelId || !result.situsAddress) throw new Error("Collier browser parcel identity missing");
+      identity={status:"found",county:"collier",parcelId:result.parcelId,folio:result.parcelId,situsAddress:result.situsAddress,situsCity:null,taxDistrict:null,source:"collier-official-estimator-page"};
+      await writeIdentityCache(params.address,identity,new Date());
+      await writeOfficialCache({county:"collier",parcelId:result.parcelId,taxYear:currentBillYear(),estimator:result});
+    }catch(e){identityError=e instanceof Error?e.message:identityError;}
+  }
   const parcelId=["hillsborough","hernando"].includes(params.county) ? identity.folio : identity.parcelId;
   const breakdown=identity.status==="found" && parcelId
     ? await officialParcelTax({county:params.county,parcelId,address:params.address,purchasePrice:params.purchasePrice,homestead:params.isPrimaryResidence,taxYear:currentBillYear(),taxDistrict:identity.taxDistrict||undefined,folioId:params.county==="lee"?identity.folio||undefined:undefined})
-    : composeOfficialTax({cents:null,reason:"County parcel identity could not be verified"},{cents:null,reason:"Collector parcel identity could not be verified"});
+    : composeOfficialTax({cents:null,reason:identityError},{cents:null,reason:"Collector parcel identity could not be verified"});
   return {
     adValoremTax:breakdown.adValorem.cents===null?null:breakdown.adValorem.cents/100,
     nonAdValoremTax:breakdown.nonAdValorem.cents===null?null:breakdown.nonAdValorem.cents/100,
