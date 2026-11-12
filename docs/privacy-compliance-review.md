@@ -16,6 +16,9 @@ premium or flood calculation changes. Do not publish without approval.
   CRM contact workflows check stored consent and fail closed.
 - Havo provider/brand/social cleanup; insurance Tateo & Co attribution and
   license disclosures preserved.
+- Removed the injected CRM contact/tracking widget, which displayed the old
+  general Tateo branding and bypassed Havo's consent-recorded forms. Existing
+  CRM records were not deleted; site phone/email links remain.
 - HUD Equal Housing Opportunity logo from
   https://www.hud.gov/sites/dfiles/FHEO/images/fheo100.gif
   (converted to PNG), lender disclosures in result/worksheet and PDF footer.
