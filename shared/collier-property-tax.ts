@@ -15,7 +15,7 @@
  * (int_millage_rates.csv, 2026 millage area 32)
  */
 export const COLLIER_OFFICIAL_RATE_YEAR = 2026;
-export const COLLIER_OFFICIAL_NON_SCHOOL_EXEMPTION = 51_411;
+export const COLLIER_OFFICIAL_NON_SCHOOL_EXEMPTION = 50_000;
 
 export interface CollierMillageRates {
   county: number;

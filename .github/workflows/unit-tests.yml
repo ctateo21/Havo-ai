@@ -21,7 +21,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 20.20.0
           cache: npm
 
       - name: Install dependencies
@@ -30,9 +30,9 @@ jobs:
         run: |
           set -o pipefail
           npm install -g npm@10.9.2
-          npm ci --no-audit --no-fund
+          npm ci --include=dev --no-audit --no-fund
           test -x node_modules/.bin/tsx
-          node_modules/.bin/tsx --version
+          npx --no-install tsx --version
 
       # `npm test` also runs Playwright against a dev server that needs
       # DATABASE_URL and Chromium. This job runs the unit files that do not

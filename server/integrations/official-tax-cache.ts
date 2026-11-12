@@ -1,0 +1,49 @@
+import { supabaseAdmin } from "../supabase";
+import type { CountySlug } from "./parcel-resolver";
+import type { OfficialBill } from "./official-county-bills";
+import type { EstimatorOutput } from "./county-estimator-direct";
+/** Nov 1 is still EDT unless it is Sunday (the first Sunday ends DST at 2am).
+ * Midnight Nov 1 is therefore always UTC-04:00 under US rules. */
+export function officialTaxExpiry(now = new Date()): Date {
+  const year = Number(new Intl.DateTimeFormat("en-US",{year:"numeric",timeZone:"America/New_York"}).format(now));
+  const boundary = new Date(Date.UTC(year,10,1,4));
+  return now < boundary ? boundary : new Date(Date.UTC(year+1,10,1,4));
+}
+export function currentBillYear(now = new Date()): number {
+  const year = Number(new Intl.DateTimeFormat("en-US",{year:"numeric",timeZone:"America/New_York"}).format(now));
+  return now < new Date(Date.UTC(year,10,1,4)) ? year-1 : year;
+}
+export interface OfficialCache {
+  county: CountySlug; parcelId: string; taxYear: number;
+  bill?: OfficialBill;
+  estimator?: EstimatorOutput;
+}
+export async function readOfficialCache(county: CountySlug, parcelId: string, taxYear: number, now = new Date()): Promise<OfficialCache | null> {
+  if (!supabaseAdmin) return null;
+  const {data:r,error} = await supabaseAdmin.from("property_tax_cache").select("*").eq("county",county).eq("parcel_id",parcelId).eq("tax_year",taxYear).maybeSingle();
+  if (error) throw new Error("Official tax cache unavailable; verify the database migration");
+  if (!r || new Date(r.expires_at)<=now) return null;
+  const value: OfficialCache = {county,parcelId,taxYear};
+  const cents = (v:unknown) => v!==null && v!==undefined && Number.isFinite(Number(v)) && Number(v)>=0 ? Math.round(Number(v)*100) : null;
+  const av=cents(r.bill_ad_valorem_total),nav=cents(r.nav_total),total=cents(r.bill_combined_total);
+  if (av!==null && nav!==null && total===av+nav && r.bill_url && r.bill_queried_at && Array.isArray(r.nav_lines)) {
+    value.bill={adValoremCents:av,navCents:nav,combinedCents:total,lines:r.nav_lines,url:r.bill_url,fetchedAt:r.bill_queried_at,taxYear,snapshot:""};
+  }
+  if (r.estimator_source==="collier-official-page-verified-recompute" && r.mills_school!=null && r.mills_non_school!=null && r.estimator_url && r.estimator_queried_at) {
+    value.estimator={adValoremCents:0,estimatorNavCents:null,schoolMills:Number(r.mills_school),nonSchoolMills:Number(r.mills_non_school),assessmentRatio:Number(r.assessment_ratio),exemptionSchedule:r.exemption_schedule,url:r.estimator_url,fetchedAt:r.estimator_queried_at,snapshot:""};
+  }
+  return value;
+}
+export async function writeOfficialCache(value: OfficialCache): Promise<void> {
+  if (!supabaseAdmin) throw new Error("Official tax cache database unavailable");
+  const now = new Date(), b=value.bill, e=value.estimator;
+  const row: Record<string,unknown> = {
+    county:value.county,parcel_id:value.parcelId,tax_year:value.taxYear,
+    source:"official-county-tax-v1",queried_at:now.toISOString(),expires_at:officialTaxExpiry(now).toISOString(),
+    ...(b ? {nav_lines:b.lines,nav_total:b.navCents/100,bill_ad_valorem_total:b.adValoremCents/100,bill_combined_total:b.combinedCents/100,bill_url:b.url,bill_source:`${value.county} County Tax Collector ${value.taxYear} Annual Bill`,bill_queried_at:b.fetchedAt} : {}),
+    ...(e ? {mills_school:e.schoolMills??null,mills_non_school:e.nonSchoolMills??null,mills_total:e.schoolMills!=null&&e.nonSchoolMills!=null?e.schoolMills+e.nonSchoolMills:null,exemption_schedule:e.exemptionSchedule??null,assessment_ratio:e.assessmentRatio??null,estimator_url:e.url,estimator_queried_at:e.fetchedAt,estimator_source:value.county==="collier"?"collier-official-page-verified-recompute":`${value.county}-official-estimator`} : {}),
+    raw_snapshot:JSON.stringify({bill:b?.snapshot,estimator:e?.snapshot}).slice(0,24000),
+  };
+  const {error}=await supabaseAdmin.from("property_tax_cache").upsert(row,{onConflict:"county,parcel_id,tax_year"});
+  if(error) throw new Error("Official tax cache write failed");
+}
