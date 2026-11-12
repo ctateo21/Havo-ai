@@ -93,6 +93,13 @@ ALERT_FROM_EMAIL = "Havo Showing Alerts <alerts@updates.tateoco.com>"
 
 [userenv.production]
 VITE_PUBLIC_SITE_URL = "https://havofl.com"
+COLLIER_BROWSER_ESTIMATOR = "on"
+FIRECRAWL_MAX_CONCURRENCY = "2"
+HERNANDO_BROWSER_ESTIMATOR = "on"
+
+[userenv.development]
+COLLIER_BROWSER_ESTIMATOR = "on"
+HERNANDO_BROWSER_ESTIMATOR = "on"
 
 [postMerge]
 path = "scripts/post-merge.sh"
