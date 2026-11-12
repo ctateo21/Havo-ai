@@ -32,6 +32,8 @@ import {
   lookupPIN,
 } from "./hillsborough-tax";
 import type { CurrentTaxBillResponse } from "./current-tax-bill";
+import { officialPurchaseTax } from "./official-tax-pipeline";
+import type { OfficialTaxBreakdown } from "../../shared/official-tax";
 
 /**
  * The public route shape remains stable, but unavailable purchase estimates
@@ -41,7 +43,8 @@ import type { CurrentTaxBillResponse } from "./current-tax-bill";
  */
 export interface PurchaseTaxResult {
   adValoremTax: number | null;
-  nonAdValoremTax: number;
+  nonAdValoremTax: number | null;
+  breakdown?: OfficialTaxBreakdown;
   annualTax: number | null;
   monthlyTax: number | null;
   source: string;
@@ -91,7 +94,7 @@ function unavailablePurchaseResult(params: {
 }): PurchaseTaxResult {
   return {
     adValoremTax: null,
-    nonAdValoremTax: 0,
+    nonAdValoremTax: null,
     annualTax: null,
     monthlyTax: null,
     source: `${params.county}-county-estimator-unavailable`,
@@ -274,6 +277,7 @@ export async function getHillsboroughPurchaseTax(
   },
   deps: HillsboroughPurchaseDeps = {},
 ): Promise<PurchaseTaxResult> {
+  if (Object.keys(deps).length === 0) return officialPurchaseTax({ ...params, county: "hillsborough" });
   const now = deps.now ?? params.now ?? new Date();
   const lookup = deps.lookupPin ?? lookupPIN;
   const fetchRates = deps.fetchRates ?? fetchHcpaRatesForPin;
@@ -553,7 +557,7 @@ export const COUNTY_ESTIMATOR_BLOCKERS: Record<Exclude<CountySlug, "hillsborough
   pinellas:
     "Pinellas publishes a purchase estimator at pcpao.gov, but it is a multi-step Drupal form and its result already includes the parcel's latest non-ad valorem. It stays on manual entry until a known-answer run matches that page without double-counting CDD.",
   manatee:
-    "Manatee does not publish a standalone purchase-price estimator. The parcel page has an estimate widget that was not verified against a known answer. Manual entry is required.",
+    "Manatee purchase taxes are calculated from official parcel rates, not an official purchase-price estimator.",
   pasco:
     "Pasco's estimate is a link inside a property record, not a verified purchase-price calculator. Manual entry is required.",
   hernando:
@@ -575,38 +579,8 @@ export async function getCountyPurchaseTax(params: {
   isPrimaryResidence: boolean;
   now?: Date;
 }): Promise<PurchaseTaxResult> {
-  if (params.county === "hillsborough") {
-    return getHillsboroughPurchaseTax(params);
-  }
-  const reason = COUNTY_ESTIMATOR_BLOCKERS[params.county];
-  return {
-    adValoremTax: null,
-    nonAdValoremTax: 0,
-    annualTax: null,
-    monthlyTax: null,
-    source: `${params.county}-county-estimator-unavailable`,
-    fromGeneralCache: false,
-    nonAdValoremLines: [],
-    nonAdValoremPending: false,
-    operationalError: reason,
-    homestead: params.isPrimaryResidence,
-    sourceLabel: reason,
-    audit: {
-      county: params.county,
-      address: params.address,
-      purchasePrice: params.purchasePrice,
-      homestead: params.isPrimaryResidence,
-      capturedAt: (params.now ?? new Date()).toISOString(),
-      fromCache: false,
-      adValoremTax: null,
-      nonAdValoremTax: null,
-      nonAdValoremPending: false,
-      nonAdValoremLines: [],
-      exemptionNote: "No official estimator result. No formula was substituted.",
-    },
-  };
+  return officialPurchaseTax(params);
 }
-
 export async function getPinellasPurchaseTax(params: {
   address: string;
   purchasePrice: number;
@@ -614,7 +588,7 @@ export async function getPinellasPurchaseTax(params: {
   now?: Date;
 }): Promise<{
   adValorem: number | null;
-  nonAdValorem: number;
+  nonAdValorem: number | null;
   nonAdValoremLines: Array<{ authority: string; amount: number }>;
   nonAdValoremPending: boolean;
   source: string;
@@ -622,7 +596,7 @@ export async function getPinellasPurchaseTax(params: {
   millageRate: number | null;
   fromGeneralCache: boolean;
 }> {
-  const result = await runOfficialPurchaseEstimator({
+  const result: PurchaseTaxResult = await officialPurchaseTax({
     county: "pinellas",
     address: params.address,
     purchasePrice: params.purchasePrice,
@@ -647,13 +621,13 @@ export async function getManateePurchaseTax(params: {
   now?: Date;
 }): Promise<{
   adValorem: number | null;
-  nonAdValorem: number;
+  nonAdValorem: number | null;
   nonAdValoremLines: Array<{ authority: string; amount: number }>;
   source: string;
   parcelId: string | null;
   fromGeneralCache: boolean;
 }> {
-  const result = await runOfficialPurchaseEstimator({
+  const result: PurchaseTaxResult = await officialPurchaseTax({
     county: "manatee",
     address: params.address,
     purchasePrice: params.purchasePrice,

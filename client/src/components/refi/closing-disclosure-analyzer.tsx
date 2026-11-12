@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { analyzeDocument } from "@/lib/ai-request";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -123,7 +124,7 @@ export function ClosingDisclosureAnalyzer({ onAnalyzed }: ClosingDisclosureAnaly
     try {
       const formData = new FormData();
       formData.append("file", uploadedFile);
-      const response = await fetch("/api/analyze-closing-disclosure", { method: "POST", body: formData });
+      const response = await analyzeDocument("/api/analyze-closing-disclosure", formData);
       const json = await response.json();
       if (json.success && json.analysis) {
         const cd = json.analysis as ClosingDisclosureAnalysis;

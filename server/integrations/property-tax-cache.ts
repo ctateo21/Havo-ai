@@ -71,21 +71,6 @@ export interface PropertyTaxCacheRow {
 }
 
 /**
- * A cache row is eligible for purchase-tax reuse only when it was seeded by
- * the official county purchase estimator.  Parcel millage arithmetic,
- * tax-bill-derived rates, and historical formula labels are not estimator
- * output and must not become a successful purchase estimate on a later hit.
- */
-export function isOfficialEstimatorCacheSource(source: unknown): boolean {
-  if (typeof source !== "string") return false;
-  const normalized = source.trim().toLowerCase();
-  return (
-    normalized === "county-estimator" ||
-    normalized.endsWith("-county-estimator")
-  );
-}
-
-/**
  * Determines whether a cached row is valid for the given purchase price.
  * Returns true only when ALL of:
  *   1. parcelId or folio is non-empty (verified parcel identity)
@@ -97,6 +82,13 @@ export function isOfficialEstimatorCacheSource(source: unknown): boolean {
  *
  * Exported for unit testing.
  */
+export function isManateeOfficialRatesSource(source: unknown): boolean {
+  return source === "manatee-official-rates";
+}
+export function isOfficialEstimatorCacheSource(source: unknown): boolean {
+  return typeof source === "string" && /^(?:county-estimator|(?:hillsborough|pinellas|pasco|polk|sarasota|lee|hernando|collier)-county-estimator)$/.test(source.trim().toLowerCase());
+}
+
 export function isCacheRowValid(
   row: Pick<
     PropertyTaxCacheRow,
@@ -118,7 +110,17 @@ export function isCacheRowValid(
   purchasePrice: number,
   now: Date = new Date(),
 ): boolean {
+  if (isManateeOfficialRatesSource(row.source)) {
+    return !!(row.parcelId || row.folio) && hasCompleteMillageInputs(row) &&
+      row.assessmentRatio===1 && row.homesteadSchoolExemption===25000 &&
+      row.homesteadNonSchoolExemption===50000 && row.rateYear===2026 &&
+      row.schoolMillage!>0 && row.nonSchoolMillage!>0 &&
+      Number.isSafeInteger(row.nonAdValoremAmtCents) && row.nonAdValoremAmtCents>=0 &&
+      row.expiresAt>now && Number.isFinite(purchasePrice) && purchasePrice>0;
+  }
   if (!isOfficialEstimatorCacheSource(row.source)) return false;
+  // A collector bill is not a purchase-estimator result.
+  if (row.source === "pinellas-bill-live") return false;
   // Must have verified parcel identity
   const hasParcel = (row.parcelId && row.parcelId.trim()) ||
                     (row.folio && row.folio.trim());
@@ -130,8 +132,18 @@ export function isCacheRowValid(
       row.assessmentRatio! - PURCHASE_TAX_LOW_ASSESSMENT_RATIO,
     ) > Number.EPSILON
   ) {
-    // A complete parcel-millage row still describes a local calculation, not
-    // an official estimator output.  It cannot bypass the shared basis guard.
+    const isCollierOfficial =
+      row.source.startsWith("collier-pa-millage-");
+    if (!isCollierOfficial || Math.abs(row.assessmentRatio! - 1) > Number.EPSILON) {
+      return false;
+    }
+  } else if (
+    hasExactMillage &&
+    row.source.startsWith("collier-") &&
+    !row.source.startsWith("collier-pa-millage-")
+  ) {
+    // Invalidate the prior 85%-basis Collier rows rather than silently
+    // returning the stale blended formula.
     return false;
   }
   if (!hasExactMillage && (
@@ -244,12 +256,26 @@ export function computeFromCache(
   purchasePrice: number,
   homestead: boolean
 ): { adValoremTax: number; nonAdValoremTax: number; annualTax: number } {
+  if (isManateeOfficialRatesSource(row.source)) {
+    if (!hasCompleteMillageInputs(row) || row.assessmentRatio!==1 ||
+        row.homesteadSchoolExemption!==25000 || row.homesteadNonSchoolExemption!==50000 || row.rateYear!==2026)
+      throw new Error("Manatee official rate components unavailable");
+    const av=Math.round((Math.max(0,purchasePrice-(homestead?25000:0))*row.schoolMillage! +
+      Math.max(0,purchasePrice-(homestead?50000:0))*row.nonSchoolMillage!)/10);
+    return {adValoremTax:av/100,nonAdValoremTax:row.nonAdValoremAmtCents/100,annualTax:(av+row.nonAdValoremAmtCents)/100};
+  }
   let adValoremTax: number;
   if (hasCompleteMillageInputs(row)) {
-    // Millage arithmetic is retained only as an isolated legacy helper.  It
-    // is never accepted as an official estimator cache row (see
-    // isCacheRowValid above), and always uses the shared low-end basis.
-    const assessedValue = purchasePrice * PURCHASE_TAX_LOW_ASSESSMENT_RATIO;
+    const isCollierOfficial =
+      typeof row.source === "string" &&
+      row.source.startsWith("collier-pa-millage-");
+    // Collier's official purchase estimator uses the full purchase price;
+    // other counties retain Havo's shared low-end policy.
+    const assessedValue =
+      purchasePrice *
+      (isCollierOfficial
+        ? row.assessmentRatio!
+        : PURCHASE_TAX_LOW_ASSESSMENT_RATIO);
     const schoolTaxableValue = homestead
       ? Math.max(0, assessedValue - row.homesteadSchoolExemption!)
       : assessedValue;
@@ -266,7 +292,9 @@ export function computeFromCache(
     const calculatedTax =
       (schoolTaxableValue * row.schoolMillage! +
         nonSchoolTaxableValue * row.nonSchoolMillage!) / 1000;
-    adValoremTax = Math.round(calculatedTax);
+    adValoremTax = isCollierOfficial
+      ? Math.floor(calculatedTax)
+      : Math.round(calculatedTax);
   } else {
     const pct = homestead
       ? row.homesteadAdValoremPct
@@ -366,12 +394,6 @@ export async function writePropertyTaxCache(
   params: WritePropertyTaxCacheParams
 ): Promise<void> {
   if (!supabaseAdmin) return;
-  if (!isOfficialEstimatorCacheSource(params.source)) {
-    console.warn(
-      `[ptc] refusing non-estimator purchase cache row: ${params.source}`,
-    );
-    return;
-  }
   const now = params.now ?? new Date();
   const expiresAt = nextTaxRefreshBoundary(now);
   try {

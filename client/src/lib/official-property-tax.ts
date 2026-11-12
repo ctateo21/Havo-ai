@@ -1,3 +1,5 @@
+import type { OfficialTaxBreakdown, TaxPart, TaxSource } from "@shared/official-tax";
+
 /**
  * Client-side guard for purchase property-tax responses.
  *
@@ -18,10 +20,12 @@ export type OfficialPropertyTaxResolution =
       nonAdValoremTax: number;
       nonAdValoremPending: boolean;
       operationalError?: string;
+      breakdown?: OfficialTaxBreakdown;
     }
   | {
       status: "unavailable";
       reason?: string;
+      breakdown?: OfficialTaxBreakdown;
     };
 
 /**
@@ -46,12 +50,105 @@ export function hasMatchingOfficialAnnualTax(
   );
 }
 
+/** Include scenario identity as well as every provider input so responses
+ * cannot cross tabs or survive price/address/homestead edits.
+ */
+export function officialTaxRequestKey(
+  scenarioId: string,
+  address: string,
+  purchasePrice: number,
+  homestead: boolean,
+): string {
+  return JSON.stringify([scenarioId, address, purchasePrice, homestead]);
+}
+
+/** A manual bill is independent of background requests. Official amounts
+ * require the current request AND the complete, matching cents total.
+ */
+export function resolvePurchasePropertyTaxSource(
+  annualTax: number,
+  recordedSource: string | undefined,
+  currentKey: string,
+  resolved: { key: string; breakdown?: OfficialTaxBreakdown } | null,
+): "manual" | "official" | "unavailable" {
+  if (!Number.isFinite(annualTax) || annualTax < 0) return "unavailable";
+  if (recordedSource === "manual") return "manual";
+  if (recordedSource !== "official" || resolved?.key !== currentKey ||
+      resolved.breakdown?.total.cents == null) return "unavailable";
+  return hasMatchingOfficialAnnualTax(resolved.breakdown.total.cents / 100, annualTax)
+    ? "official" : "unavailable";
+}
+
 type TaxResponse = Record<string, unknown>;
 
 function asRecord(value: unknown): TaxResponse | null {
   return value !== null && typeof value === "object"
     ? value as TaxResponse
     : null;
+}
+
+function validCents(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function parseSource(value: unknown): TaxSource | undefined {
+  const source = asRecord(value);
+  if (!source || typeof source.name !== "string" || typeof source.url !== "string" ||
+      typeof source.fetchedAt !== "string" || !Number.isFinite(Date.parse(source.fetchedAt)) ||
+      !Number.isInteger(source.taxYear) || typeof source.parcelId !== "string") return undefined;
+  try {
+    if (!["http:", "https:"].includes(new URL(source.url).protocol)) return undefined;
+  } catch { return undefined; }
+  return {
+    name: source.name, url: source.url, fetchedAt: source.fetchedAt,
+    taxYear: source.taxYear as number, parcelId: source.parcelId,
+    ...(typeof source.purchasePrice === "number" && Number.isFinite(source.purchasePrice)
+      ? { purchasePrice: source.purchasePrice } : {}),
+    ...(typeof source.homestead === "boolean" ? { homestead: source.homestead } : {}),
+  };
+}
+
+/** Validate the cents contract without coercing missing values to zero.
+ * The total must agree with BOTH components; a legacy annualTax cannot fill a gap.
+ */
+export function parseOfficialTaxBreakdown(value: unknown): OfficialTaxBreakdown | undefined {
+  const data = asRecord(value);
+  if (!data) return undefined;
+  const part = (value: unknown): TaxPart => {
+    const data = asRecord(value);
+    const source = parseSource(data?.source);
+    const cents = validCents(data?.cents) ? data.cents : null;
+    return {
+      cents,
+      ...(cents === null ? { reason: typeof data?.reason === "string" && data.reason.trim()
+        ? data.reason : "Official tax component missing" } : {}),
+      ...(source ? { source } : {}),
+      ...(Array.isArray(data?.lines) ? {
+        lines: data.lines.flatMap((line: unknown) => {
+          const row = asRecord(line);
+          return row && typeof row.name === "string" && validCents(row.amount)
+            ? [{ name: row.name, amount: row.amount }] : [];
+        }),
+      } : {}),
+    };
+  };
+  const adValorem = part(data.adValorem);
+  const nonAdValorem = part(data.nonAdValorem);
+  const total = part(data.total);
+  if (adValorem.cents === null || nonAdValorem.cents === null) {
+    total.cents = null;
+    total.reason = [adValorem.cents === null && adValorem.reason,
+      nonAdValorem.cents === null && nonAdValorem.reason].filter(Boolean).join("; ");
+  } else if (!validCents(adValorem.cents + nonAdValorem.cents) ||
+      total.cents !== adValorem.cents + nonAdValorem.cents) {
+    total.cents = null;
+    total.reason ||= "Official total missing or does not match its components";
+  }
+  return {
+    adValorem, nonAdValorem, total,
+    warnings: Array.isArray(data.warnings)
+      ? data.warnings.filter((warning): warning is string => typeof warning === "string") : [],
+  };
 }
 
 /**
@@ -89,6 +186,8 @@ function unavailableReason(data: TaxResponse): string | undefined {
 
 function unavailable(data?: TaxResponse): OfficialPropertyTaxResolution {
   const reason = data ? unavailableReason(data) : undefined;
+  const breakdown = parseOfficialTaxBreakdown(data?.breakdown);
+  if (breakdown) return { status: "unavailable", reason: reason ?? breakdown.total.reason, breakdown };
   return reason
     ? { status: "unavailable", reason }
     : { status: "unavailable" };
@@ -118,6 +217,18 @@ export function parseOfficialPropertyTaxResponse(
   }
 
   const source = typeof data.source === "string" ? data.source : "";
+  const breakdown = parseOfficialTaxBreakdown(data.breakdown);
+  if (breakdown) {
+    if (breakdown.total.cents === null) return unavailable(data);
+    return {
+      status: "available",
+      annualTax: breakdown.total.cents / 100,
+      source,
+      nonAdValoremTax: breakdown.nonAdValorem.cents! / 100,
+      nonAdValoremPending: data.nonAdValoremPending === true,
+      breakdown,
+    };
+  }
   if (data.annualTax == null) {
     return unavailable(data);
   }

@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import type { OfficialTaxBreakdown } from "@shared/official-tax";
+import { CurrentBillDisclosure } from "./current-bill-disclosure";
+import { parseOfficialTaxBreakdown } from "@/lib/official-property-tax";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +21,7 @@ import { calculateRefinance, calculateMonthlyPayment, formatCurrency } from "@/l
 import {
   buildCurrentTaxLookupPatch,
   buildManualPropertyTaxPatch,
+  savedCurrentBillBreakdown,
 } from "@/lib/property-tax-refi";
 import { priceLoan } from "@/lib/mortgage-pricing";
 import { PHYSICAL_PROPERTY_TYPE_OPTIONS } from "@/lib/property-type-options";
@@ -126,6 +130,7 @@ export interface TrackedLoan {
   /** ISO timestamp of last successful lookup. Stored on
    *  tracked_loans.annual_property_tax_queried_at. */
   annualPropertyTaxQueriedAt?: string;
+  annualPropertyTaxBreakdown?: OfficialTaxBreakdown | null;
 }
 
 export interface LiveRate {
@@ -524,6 +529,7 @@ interface TaxLookupState {
   pendingMessage?: string;
   unavailableReason?: string;
   errorMessage?: string;
+  breakdown?: OfficialTaxBreakdown;
 }
 
 const AUTO_TAX_REFRESH_MS = 180 * 24 * 60 * 60 * 1000;
@@ -537,6 +543,7 @@ function requestCurrentPropertyTaxBill(address: string) {
   const request = fetch("/api/refinance/property-tax/current", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ address }),
   }).then(async res => ({
     ok: res.ok,
@@ -680,6 +687,7 @@ function PropertyTaxSection({
       } else if (data.state === "unavailable") {
         setLookupState({
           status: "unavailable",
+          breakdown: parseOfficialTaxBreakdown(data.breakdown),
           unavailableReason:
             data.operationalError ||
             data.reason ||
@@ -777,7 +785,7 @@ function PropertyTaxSection({
           <p className="text-xs" data-testid={`property-tax-source-${loan.id}`}>
             {hasTax ? (
               <>
-                {loan.annualPropertyTaxSourceLabel
+                {loan.annualPropertyTaxSource === "manual" ? "Entered manually" : loan.annualPropertyTaxSourceLabel
                   ? loan.annualPropertyTaxSourceLabel
                   : `${loan.annualPropertyTaxSource ? sourceLabel[loan.annualPropertyTaxSource] : "Unknown"}${loan.annualPropertyTaxYear ? ` · ${loan.annualPropertyTaxYear}` : ""}`}
               </>
@@ -788,7 +796,7 @@ function PropertyTaxSection({
         </div>
       </div>
 
-      {typeof loan.annualPropertyTaxAdValorem === "number" &&
+      {loan.annualPropertyTaxSource !== "manual" && typeof loan.annualPropertyTaxAdValorem === "number" &&
         typeof loan.annualPropertyTaxNonAdValorem === "number" && (
         <p className="text-xs text-muted-foreground" data-testid={`property-tax-breakdown-${loan.id}`}>
           Ad valorem {formatCurrency(loan.annualPropertyTaxAdValorem)}
@@ -796,6 +804,14 @@ function PropertyTaxSection({
           {formatCurrency(loan.annualPropertyTaxNonAdValorem)}
           {loan.annualPropertyTaxCounty ? ` · ${loan.annualPropertyTaxCounty} Tax Collector` : ""}
         </p>
+      )}
+
+      {hasTax && <CurrentBillDisclosure
+        manual={loan.annualPropertyTaxSource === "manual"}
+        breakdown={savedCurrentBillBreakdown(loan.annualPropertyTaxBreakdown, loan.annualPropertyTaxSource, loan.annualPropertyTax)}
+      />}
+      {lookupState.status === "unavailable" && lookupState.breakdown && (
+        <CurrentBillDisclosure breakdown={lookupState.breakdown} partial />
       )}
 
       {/* Clarifying note — always visible */}

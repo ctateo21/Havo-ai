@@ -74,7 +74,9 @@ export interface PinellasParcelData {
   justValue: number | null;
 }
 
-export async function lookupPinellasParcel(
+export { lookupPinellasParcel } from "./pinellas-parcel";
+
+async function legacyPinellasParcelLookupUnused(
   address: string
 ): Promise<PinellasParcelData | null> {
   try {

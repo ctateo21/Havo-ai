@@ -1,6 +1,6 @@
 // AI-powered weekly market analysis for For Sale listings.
 //
-// All Anthropic calls live server-side; the frontend never sees the API key.
+// All OpenRouter calls live server-side; the frontend never sees the API key.
 // Results are cached in Supabase (`listing_market_analyses`) and refreshed at
 // most once per Friday-aligned week per listing.
 //
@@ -10,12 +10,11 @@
 // scalar fields (recommended_next_steps, data_limitations, confidence_level,
 // price_review_recommended) into dedicated columns for back-compat and
 // indexing.
-import Anthropic from "@anthropic-ai/sdk";
+import { completeWithOpenRouter } from "../openrouter";
+import { withAiUser } from "../ai-usage";
 import { supabaseAdmin } from "../supabase";
 import { type RealtorScrapeResult } from "./realtor-apify";
 import { getOrFetchRealtorComps, type RealtorCachedResult } from "./realtor-cache";
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ───────────────────────────── Types ──────────────────────────────────
 
@@ -323,7 +322,7 @@ export function isStale(record: { analysis_week_of: string; next_update_due_at: 
 
 // ─────────────────────── Anthropic prompt + call ─────────────────────
 
-function buildPrompt(input: ListingInput, weekOfStr: string): string {
+export function buildPrompt(input: ListingInput, weekOfStr: string): string {
   // Strip nulls/undefined/empty so the model isn't told "null" over and over
   // — easier to reason about which fields it actually has.
   const known: Record<string, unknown> = {};
@@ -426,21 +425,17 @@ export interface AnthropicCitation {
 }
 
 /**
- * Calls Anthropic with the built-in `web_search_20250305` tool enabled so
- * Claude can fetch live market data (Redfin, Realtor.com, Homes.com,
- * neighborhood reports, news) for the listing's area. We cap searches per
- * call so the weekly recap stays cheap (~$0.05 in search fees per fresh
- * generation; cached weeks cost $0). Returns the final JSON text PLUS a
+ * Calls OpenRouter with native web search for live market context.
+ * Existing weekly caching avoids unnecessary repeat generations.
+ * Search costs are additional to model tokens. Returns JSON text PLUS a
  * flat list of unique citation URLs so the seller can see exactly which
  * pages fed the recap.
  */
-async function callAnthropic(prompt: string): Promise<{ raw: string; citations: AnthropicCitation[] }> {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error("ANTHROPIC_API_KEY is not configured");
-  }
-  const response = await anthropic.messages.create({
-    model: "claude-opus-4-5",
-    max_tokens: 8192,
+export async function callMarketAi(prompt: string): Promise<{ raw: string; citations: AnthropicCitation[] }> {
+  const response = await completeWithOpenRouter({
+    purpose: "market",
+    maxTokens: 8192,
+    webSearch: true,
     system:
       "You are a careful, conservative real estate analyst writing a weekly listing recap for a home seller. " +
       "You analyze the structured listing data the user provides AND you may use the `web_search` tool to " +
@@ -451,60 +446,10 @@ async function callAnthropic(prompt: string): Promise<{ raw: string; citations: 
       "(e.g. 'per Redfin', 'per Realtor.com'). If neither the structured data nor a reputable web result " +
       "supports a comp, address, DOM, page view, save, or market stat, say it is unavailable instead of " +
       "guessing. You respond with a single valid JSON object and nothing else.",
-    messages: [{ role: "user", content: prompt }],
-    tools: [
-      {
-        type: "web_search_20250305",
-        name: "web_search",
-        max_uses: 5,
-      } as any,
-    ],
-  } as any);
-
-  // Anthropic returns interleaved blocks: server_tool_use (the model's
-  // search queries), web_search_tool_result (the search hits Anthropic
-  // fetched), and finally text blocks that may carry inline citations.
-  // We concatenate every text block (the model sometimes splits the JSON
-  // across blocks when it re-enters after a search) and collect unique
-  // citation URLs from both web_search_tool_result blocks and inline
-  // text citations.
-  let combinedText = "";
-  const citationsByUrl = new Map<string, AnthropicCitation>();
-
-  for (const block of response.content as any[]) {
-    if (!block || typeof block !== "object") continue;
-
-    if (block.type === "text" && typeof block.text === "string") {
-      combinedText += block.text;
-      // Anthropic adds a `citations` array on text blocks when web_search
-      // grounds a span of text.
-      const inline = (block as any).citations;
-      if (Array.isArray(inline)) {
-        for (const c of inline) {
-          const url = typeof c?.url === "string" ? c.url : null;
-          const title = typeof c?.title === "string" ? c.title : (url ?? "");
-          if (url && !citationsByUrl.has(url)) citationsByUrl.set(url, { url, title });
-        }
-      }
-    } else if (block.type === "web_search_tool_result") {
-      // The tool result holds the actual fetched pages.
-      const list = (block as any).content;
-      if (Array.isArray(list)) {
-        for (const r of list) {
-          const url = typeof r?.url === "string" ? r.url : null;
-          const title = typeof r?.title === "string" ? r.title : (url ?? "");
-          if (url && !citationsByUrl.has(url)) citationsByUrl.set(url, { url, title });
-        }
-      }
-    }
-  }
-
-  if (!combinedText.trim()) {
-    throw new Error("Empty response from Anthropic");
-  }
-  const raw = combinedText.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const citations = Array.from(citationsByUrl.values());
-  return { raw, citations };
+    content: prompt,
+  });
+  const raw = response.text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  return { raw, citations: response.citations };
 }
 
 // ─────────────────────── JSON parsing helpers ────────────────────────
@@ -793,12 +738,12 @@ function computeDataSources(
     if (zillowW) detailParts.push(`${zillowW} Zillow`);
     if (other)   detailParts.push(`${other} other`);
     available.push({
-      source: "Anthropic web search (live)",
+      source: "OpenRouter native web search (live)",
       detail: `${citations.length} page${citations.length === 1 ? "" : "s"} fetched — ${detailParts.join(", ")}`,
     });
   } else {
     missing.push({
-      source: "Anthropic web search (Redfin / Realtor.com / Homes.com / market reports)",
+      source: "OpenRouter native web search (Redfin / Realtor.com / Homes.com / market reports)",
       reason: "The model didn't run web search on this listing — usually because the cached recap was reused. Click Refresh to fetch live web data.",
     });
   }
@@ -979,12 +924,11 @@ export async function getOrGenerateMarketAnalysis(
   const prompt = buildPrompt(enrichedInput, cur.weekOfStr);
 
 
-
   let structured: StructuredAnalysis | null = null;
   let raw: string | null = null;
   let errorMessage: string | null = null;
   try {
-    const result = await callAnthropic(prompt);
+    const result = await withAiUser(input.userId, () => callMarketAi(prompt));
     raw = result.raw;
     structured = coerceStructured(tryParseJsonObject(raw), cur.weekOfStr);
     // Attach the live citations to the structured payload BEFORE computing
@@ -994,7 +938,7 @@ export async function getOrGenerateMarketAnalysis(
     structured.data_sources = computeDataSources(enrichedInput, result.citations, realtor);
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : String(err);
-    console.warn("[market-analysis] Anthropic call failed:", errorMessage);
+    console.warn("[market-analysis] OpenRouter call failed:", errorMessage);
   }
 
   // Don't overwrite a previously-rich saved analysis with a weaker one.

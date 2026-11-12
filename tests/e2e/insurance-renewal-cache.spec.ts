@@ -57,6 +57,9 @@ async function installAuthenticatedRenewalMocks(page: Page) {
   let savedExpiration: string | null = null;
   let startSubmissions = 0;
 
+  // Keep the fixture's 30-day shared quote valid regardless of the real date.
+  // setFixedTime controls Date without pausing application timers.
+  await page.clock.setFixedTime(new Date("2026-09-10T12:00:00.000Z"));
   await page.addInitScript(
     ({ user, address, sharedQuote }) => {
       const session = JSON.stringify({
@@ -156,6 +159,8 @@ async function installAuthenticatedRenewalMocks(page: Page) {
 test("renewal expiration persists without replacing or rerunning a shared quote", async ({
   page,
 }) => {
+  // Keep the fixture's September quote inside its October expiry window.
+  await page.clock.setFixedTime(new Date("2026-09-07T12:00:00.000Z"));
   const state = await installAuthenticatedRenewalMocks(page);
   await page.goto(`/insurance?address=${encodeURIComponent(ADDRESS)}`);
 

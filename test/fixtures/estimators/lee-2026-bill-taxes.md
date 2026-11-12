@@ -1,0 +1,27 @@
+2026 Annual bill
+### Ad Valorem Taxes
+
+| Taxing authority | Millage | Assessed | Exemption | Taxable | Tax |
+| --- | --- | --- | --- | --- | --- |
+| LEE COUNTY GENERAL REVENUE | 3.7623 | $211,803.00 | $51,411.00 | $160,392.00 | $603.44 |
+| PUBLIC SCHOOL - BY LOCAL BOARD | 2.2480 | $211,803.00 | $25,000.00 | $186,803.00 | $419.93 |
+| PUBLIC SCHOOL - BY STATE LAW | 3.0230 | $211,803.00 | $25,000.00 | $186,803.00 | $564.71 |
+| LEE COUNTY ALL HAZARDS - MSTU | 0.0693 | $211,803.00 | $51,411.00 | $160,392.00 | $11.12 |
+| LEE COUNTY UNINCORPORATED - MSTU | 0.8398 | $211,803.00 | $51,411.00 | $160,392.00 | $134.70 |
+| LEE COUNTY LIBRARY FUND | 0.4218 | $211,803.00 | $51,411.00 | $160,392.00 | $67.65 |
+| SFL WATER MGMT-DISTRICT LEVY | 0.0948 | $211,803.00 | $51,411.00 | $160,392.00 | $15.21 |
+| SFL WATER MGMT-EVERGLADE CONST | 0.0327 | $211,803.00 | $51,411.00 | $160,392.00 | $5.24 |
+| SFL WATER MGMT-OKEECHOBEE LEVY | 0.1026 | $211,803.00 | $51,411.00 | $160,392.00 | $16.46 |
+| IONA MCGREGOR FIRE DISTRICT | 2.5000 | $211,803.00 | $51,411.00 | $160,392.00 | $400.98 |
+| LEE COUNTY HYACINTH CONTROL | 0.0190 | $211,803.00 | $51,411.00 | $160,392.00 | $3.05 |
+| LEE COUNTY MOSQUITO CONTROL | 0.2096 | $211,803.00 | $51,411.00 | $160,392.00 | $33.62 |
+| WEST COAST INLAND NAVIGATION DISTRICT | 0.0394 | $211,803.00 | $51,411.00 | $160,392.00 | $6.32 |
+| Total Ad Valorem Taxes | 13.3623 |  | $2,282.43 |
+
+### Non-Ad Valorem Assessments
+
+| Levying authority | Rate | Amount |
+| --- | --- | --- |
+| LEE COUNTY SOLID WASTE ASSESSMENT |  | $376.41 |
+| Total Non-Ad Valorem Assessments |  | $376.41 |
+Combined taxes and assessments: $2,658.84

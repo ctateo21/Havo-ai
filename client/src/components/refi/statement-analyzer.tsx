@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { analyzeDocument } from "@/lib/ai-request";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -52,7 +53,7 @@ export function StatementAnalyzer({
     try {
       const formData = new FormData();
       formData.append("file", uploadedFile);
-      const response = await fetch("/api/analyze-statement", { method: "POST", body: formData });
+      const response = await analyzeDocument("/api/analyze-statement", formData);
       const result = await response.json();
       if (result.success && result.analysis) {
         setAnalysis(result.analysis);

@@ -21,6 +21,7 @@ import {
   type NonAdValoremLookup,
 } from "./tax-bill-scraper";
 import { getPolkPhenixTaxBill } from "./polk-phenix-tax";
+import type { OfficialTaxBreakdown } from "../../shared/official-tax";
 
 export type CurrentTaxBillResponse =
   | {
@@ -34,6 +35,7 @@ export type CurrentTaxBillResponse =
       sourceLabel?: string;
       county: string;
       parcelId: string;
+      breakdown?: OfficialTaxBreakdown;
     }
   | {
       state: "pending";
@@ -46,6 +48,7 @@ export type CurrentTaxBillResponse =
       county?: string;
       reason: string;
       operationalError?: string;
+      breakdown?: OfficialTaxBreakdown;
     };
 
 interface CurrentBillRow {
@@ -243,6 +246,18 @@ export async function resolveCurrentTaxBill(
     };
   }
   const { county, parcelId } = identity;
+  if (!options.resolveParcelFn && !options.getBillFn) {
+    const { officialParcelTax } = await import("./official-tax-pipeline");
+    const { currentBillYear } = await import("./official-tax-cache");
+    const collectorParcel = ["hillsborough","hernando"].includes(county) ? identity.folio : parcelId;
+    if (!collectorParcel) return {state:"unavailable",manualEntryRequired:true,county,reason:"Collector parcel identifier missing"};
+    const breakdown = await officialParcelTax({county,parcelId:collectorParcel,address,purchasePrice:0,homestead:false,taxYear:currentBillYear(now)},true);
+    if (breakdown.total.cents === null) return {state:"unavailable",manualEntryRequired:true,county,reason:breakdown.total.reason || "Current official bill unavailable",breakdown};
+    return {state:"ready",county,parcelId:collectorParcel,taxYear:currentBillYear(now),
+      annualTax:breakdown.total.cents/100,monthlyTax:Math.round(breakdown.total.cents/12)/100,
+      adValoremTax:breakdown.adValorem.cents!/100,nonAdValoremTax:breakdown.nonAdValorem.cents!/100,
+      source:"tax-collector-bill-scrape",sourceLabel:breakdown.total.source?.name,breakdown};
+  }
 
   if (!options.skipCache) {
     const cached = await readCurrentBillCache(county, parcelId, now);

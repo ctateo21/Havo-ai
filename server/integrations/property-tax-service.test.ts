@@ -14,6 +14,7 @@ import {
 } from "./property-tax-service";
 import { calcAdValorem } from "./hillsborough-tax";
 import { PURCHASE_TAX_LOW_ASSESSMENT_RATIO } from "@shared/property-tax-policy";
+import { isCountyEstimatorVerified } from "../../shared/county-estimator-policy";
 
 const NOW = new Date("2026-08-21T12:00:00.000Z");
 const BILL_MILLS = [
@@ -34,6 +35,8 @@ test("purchase routes fail closed when no official county estimator is verified"
   ] as const;
 
   for (const county of counties) {
+    // Verified providers belong in the opt-in live matrix, not this gate test.
+    if(county==="manatee" || isCountyEstimatorVerified(county)) continue;
     const result = await getCountyPurchaseTax({
       county,
       address: "112 Palmetto Dunes Cir, Naples, FL 34113",
@@ -44,7 +47,7 @@ test("purchase routes fail closed when no official county estimator is verified"
     assert.equal(result.annualTax, null, county);
     assert.equal(result.monthlyTax, null, county);
     assert.match(result.source, /county-estimator-unavailable$/, county);
-    assert.equal(result.nonAdValoremTax, 0, county);
+    assert.equal(result.nonAdValoremTax, null, county);
   }
 
   const hillsborough = await getHillsboroughPurchaseTax({
@@ -179,16 +182,16 @@ test("a cached Hillsborough millage is recomputed and the CDD stays flat", async
   assert.match(result.sourceLabel ?? "", /2026-08-01/);
 });
 
-test("other counties name why the official estimator is not shown", async () => {
+test("Manatee purchase without a verified parcel stays unavailable", async () => {
   const polk = await getCountyPurchaseTax({
-    county: "polk",
-    address: "45098 Hwy 54, Lakeland, FL 33809",
+    county: "manatee",
+    address: "Bradenton, FL",
     purchasePrice: 400_000,
     isPrimaryResidence: true,
   });
   assert.equal(polk.annualTax, null);
-  assert.match(polk.operationalError ?? "", /Manual entry/);
-  assert.match(polk.audit?.exemptionNote ?? "", /No formula/);
+  assert.match(polk.operationalError ?? "", /identity could not be verified/);
+  assert.equal(polk.breakdown?.total.cents, null);
 });
 
 test("Pinellas live estimate ignores a higher current just value", () => {

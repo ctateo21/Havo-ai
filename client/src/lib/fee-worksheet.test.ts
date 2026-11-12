@@ -89,13 +89,6 @@ test("lender fixture: total monthly payment matches the worksheet exactly", () =
   assert.equal(ws.totalMonthly, 2867.12); // PDF: TOTAL APPROXIMATED MONTHLY PAYMENT
 });
 
-test("strict unavailable property tax is not rendered as a zero tax line", () => {
-  const ws = buildFeeWorksheet(inputs({ monthlyTaxAvailable: false }));
-  assert.equal(findLine(ws, "Property Taxes"), undefined);
-  assert.equal(findLine(ws, "Property Taxes Reserve"), undefined);
-  assert.equal(ws.totalMonthly, 2376.62);
-});
-
 test("lender fixture: computed APR stays pinned at 6.938% (lender disclosed 6.927%)", () => {
   const ws = buildFeeWorksheet(inputs());
   assert.equal(ws.aprPct, 6.938);

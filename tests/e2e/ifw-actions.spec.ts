@@ -1,5 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
+import { officialTaxFixture } from "./official-tax-fixture";
+
+test.beforeEach(async ({page}) => {
+  await page.route("**/api/property-tax/**", route => {
+    const input = route.request().postDataJSON();
+    return route.fulfill({json:officialTaxFixture(input.purchasePrice,input.isPrimaryResidence)});
+  });
+});
 
 const TEST_USER = {
   id: "00000000-0000-4000-8000-000000000031",

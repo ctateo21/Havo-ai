@@ -136,7 +136,7 @@ async function installGooglePlacesMock(page: Page) {
   });
 }
 
-async function waitForPredictionRequest(page: Page, input: string) {
+async function waitForPredictionRequest(page: Page, input: string, count = 1) {
   await expect
     .poll(() =>
       page.evaluate(
@@ -147,7 +147,7 @@ async function waitForPredictionRequest(page: Page, input: string) {
         input,
       ),
     )
-    .toBeGreaterThan(0);
+    .toBeGreaterThanOrEqual(count);
 }
 
 async function predictionToken(page: Page, input: string) {
@@ -351,6 +351,121 @@ async function installAuthenticatedUser(page: Page) {
 
 test.beforeEach(async ({ page }) => {
   await installGooglePlacesMock(page);
+});
+
+for (const [typedAddress, label] of [
+  ["123 Main St Unit 2", "Unit"],
+  ["123 Main St Apt 2", "Apt"],
+  ["123 Main St #2", "hash"],
+] as const) {
+  test(`homepage preserves a ${label} unit while querying and selecting its base address`, async ({
+    page,
+  }) => {
+    const queryAddress = "123 Main St";
+    const googleAddress = "123 Main St, Tampa, FL 33602";
+    const canonicalAddress = "123 Main St Unit 2, Tampa, FL 33602";
+    const placeId = `main-st-${label.toLowerCase()}`;
+
+    await page.goto("/");
+    const input = page.getByPlaceholder("Enter a property address...");
+    await input.fill(typedAddress);
+    await waitForPredictionRequest(page, queryAddress);
+    await resolvePredictions(page, queryAddress, [
+      { address: googleAddress, placeId },
+    ]);
+
+    const option = page.getByRole("option", {
+      name: /123 Main St Unit 2, Tampa, FL 33602/,
+    });
+    await expect(option).toBeVisible();
+    await option.click();
+    await waitForDetailRequest(page, placeId);
+    await resolveDetails(page, placeId, googleAddress);
+
+    await expectAddressInUrl(page, canonicalAddress);
+  });
+}
+
+test("homepage strips a unit suffix from a complete address and restores it after selection", async ({
+  page,
+}) => {
+  const typedAddress = "123 Main St, Tampa, FL 33602 #2";
+  const queryAddress = "123 Main St, Tampa, FL 33602";
+  const canonicalAddress = "123 Main St Unit 2, Tampa, FL 33602";
+
+  await page.goto("/");
+  const input = page.getByPlaceholder("Enter a property address...");
+  await input.fill(typedAddress);
+  await waitForPredictionRequest(page, queryAddress);
+  await resolvePredictions(page, queryAddress, [
+    { address: queryAddress, placeId: "complete-main-st" },
+  ]);
+
+  const option = page.getByRole("option", {
+    name: /123 Main St Unit 2, Tampa, FL 33602/,
+  });
+  await expect(option).toBeVisible();
+  await option.click();
+  await waitForDetailRequest(page, "complete-main-st");
+  await resolveDetails(page, "complete-main-st", queryAddress);
+
+  await expectAddressInUrl(page, canonicalAddress);
+});
+
+test("unit-only edits reuse the active Google typing session", async ({
+  page,
+}) => {
+  const queryAddress = "123 Main St";
+
+  await page.goto("/");
+  const input = page.getByPlaceholder("Enter a property address...");
+  await input.fill("123 Main St Unit 2");
+  await waitForPredictionRequest(page, queryAddress);
+  const unit2Token = await predictionToken(page, queryAddress);
+
+  await input.fill("123 Main St Unit 3");
+  await waitForPredictionRequest(page, queryAddress, 2);
+  const unit3Token = await predictionToken(page, queryAddress);
+
+  expect(unit2Token).toBeDefined();
+  expect(unit3Token).toBe(unit2Token);
+});
+
+test("stale unit details cannot replace a later unit selection", async ({
+  page,
+}) => {
+  const queryAddress = "123 Main St";
+  const googleAddress = "123 Main St, Tampa, FL 33602";
+  const unit2Address = "123 Main St Unit 2, Tampa, FL 33602";
+  const unit3Address = "123 Main St Unit 3, Tampa, FL 33602";
+
+  await page.goto("/");
+  const input = page.getByPlaceholder("Enter a property address...");
+
+  await input.fill("123 Main St Unit 2");
+  await waitForPredictionRequest(page, queryAddress);
+  await resolvePredictions(page, queryAddress, [
+    { address: googleAddress, placeId: "main-st-unit-2" },
+  ]);
+  await page.getByRole("option", { name: /123 Main St Unit 2,/ }).click();
+  await waitForDetailRequest(page, "main-st-unit-2");
+
+  await input.fill("123 Main St Unit 3");
+  await waitForPredictionRequest(page, queryAddress, 2);
+  await resolvePredictions(page, queryAddress, [
+    { address: googleAddress, placeId: "main-st-unit-3" },
+  ]);
+  await page.getByRole("option", { name: /123 Main St Unit 3,/ }).click();
+  await waitForDetailRequest(page, "main-st-unit-3");
+
+  await resolveDetails(page, "main-st-unit-3", googleAddress);
+  await expectAddressInUrl(page, unit3Address);
+
+  await resolveDetails(page, "main-st-unit-2", googleAddress);
+  await expectAddressInUrl(page, unit3Address);
+  expect(new URL(page.url()).searchParams.get("address")).not.toBe(
+    unit2Address,
+  );
 });
 
 test("homepage mouse selection ignores reordered predictions and stale place details", async ({

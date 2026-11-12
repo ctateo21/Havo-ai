@@ -1,0 +1,28 @@
+name: Official county tax live checks
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 9 * * *"
+jobs:
+  official-tax-live:
+    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_OFFICIAL_TAX_NIGHTLY == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: official-county-tax-live
+      cancel-in-progress: false
+    env:
+      FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+      FIRECRAWL_MAX_CONCURRENCY: "2"
+      COLLIER_BROWSER_ESTIMATOR: "on"
+      HERNANDO_BROWSER_ESTIMATOR: "on"
+      COUNTY_TAX_NIGHTLY: ${{ github.event_name == 'schedule' && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.20.0"
+          cache: npm
+      - run: npm install -g npm@10.9.2
+      - run: npm ci --include=dev
+      - run: npm run test:live

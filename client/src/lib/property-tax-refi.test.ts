@@ -14,7 +14,6 @@ import {
   type PropertyTaxLoanPatch,
 } from "./property-tax-refi";
 
-const queriedAt = new Date("2026-08-21T12:00:00.000Z");
 
 // ── Tests ─────────────────────────────────────────────────────────────
 
@@ -26,12 +25,12 @@ test("buildCurrentTaxLookupPatch: annualTax field", () => {
     source: "tax-collector-bill-scrape",
     county: "hillsborough",
     parcelId: "A-1234",
-  }, queriedAt);
+  });
   assert.ok(patch !== null, "should parse successfully");
   assert.equal(patch!.annualPropertyTax, 4800);
   assert.equal(patch!.annualPropertyTaxSource, "tax-collector-bill-scrape");
   assert.equal(patch!.annualPropertyTaxYear, 2025);
-  assert.equal(patch!.annualPropertyTaxQueriedAt, queriedAt.toISOString());
+  assert.equal(patch!.annualPropertyTaxQueriedAt, undefined);
 });
 
 test("buildCurrentTaxLookupPatch: accepts Manatee's actual annual total", () => {
@@ -40,7 +39,7 @@ test("buildCurrentTaxLookupPatch: accepts Manatee's actual annual total", () => 
     annualTax: 4469.66,
     taxYear: 2025,
     source: "manatee-arcgis",
-  }, queriedAt);
+  });
   assert.ok(patch !== null);
   assert.equal(patch!.annualPropertyTax, 4469.66);
   assert.equal(patch!.annualPropertyTaxSource, "manatee-arcgis");
@@ -81,7 +80,7 @@ test("lookup patch only touches tax fields", () => {
     annualTax: 5200,
     taxYear: 2025,
     source: "tax-collector-bill-scrape",
-  }, queriedAt);
+  });
   assert.ok(patch !== null);
   // Verify none of the non-tax fields appear in the patch
   const patchKeys = Object.keys(patch!);

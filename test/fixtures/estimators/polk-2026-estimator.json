@@ -1,0 +1,10 @@
+[
+  {
+    "homestead": true,
+    "html": "<p>Unofficial Estimated Tax Range $5,696 to $6,416</p><a href=\"https://www.polkflpa.gov/TaxEstLetter/TELett.aspx?strap=242820239230000032&amp;owner=BROCKHOEFT%20TAYLOR&amp;value=400000&amp;td=91510 LAKELAND/SWFWMD/LKLD MASS&amp;HmstdEx=51411&amp;PrtVal=0.00&amp;NonAvAssmnt=0&amp;la1=1515%20%20NEW%20JERSEY%20OAKS%20CT&amp;la2=LAKELAND%20FL%2033801&amp;tr=$5,696 to $6,416&amp;pdf=TRUE\" target=\"_blank\"><img src=\"Images/ico_pdf.gif\" alt=\"PDF\"> PDF &nbsp;</a>"
+  },
+  {
+    "homestead": false,
+    "html": "<p>Unofficial Estimated Tax Range $6,483 to $7,203</p><a href=\"https://www.polkflpa.gov/TaxEstLetter/TELett.aspx?strap=242820239230000032&amp;owner=BROCKHOEFT%20TAYLOR&amp;value=400000&amp;td=91510 LAKELAND/SWFWMD/LKLD MASS&amp;HmstdEx=0&amp;PrtVal=0.00&amp;NonAvAssmnt=0&amp;la1=1515%20%20NEW%20JERSEY%20OAKS%20CT&amp;la2=LAKELAND%20FL%2033801&amp;tr=$6,483 to $7,203&amp;pdf=TRUE\" target=\"_blank\"><img src=\"Images/ico_pdf.gif\" alt=\"PDF\"> PDF &nbsp;</a>"
+  }
+]

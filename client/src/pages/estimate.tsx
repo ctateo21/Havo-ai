@@ -1,12 +1,10 @@
 import { useMemo, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import ScenarioActions from "@/components/scenario-actions";
+import { officialTaxRequestKey, parseOfficialPropertyTaxResponse, resolvePurchasePropertyTaxSource } from "@/lib/official-property-tax";
+import type { OfficialTaxBreakdown } from "@shared/official-tax";
+import { OfficialTaxDisclosure } from "@/components/official-tax-disclosure";
 import { buildScenarioFileName } from "@/lib/scenario-pdf";
 import { getCountyTaxLink, getCountyName } from "@/lib/county-tax-estimator";
-import {
-  parseOfficialPropertyTaxResponse,
-  hasMatchingOfficialAnnualTax,
-  type OfficialPropertyTaxResolution,
-} from "@/lib/official-property-tax";
 import { getConventionalAmiRateDiscount } from "@/lib/ami-discount";
 import { buildFeeWorksheet, money as feeMoney, type FeeSection } from "@/lib/fee-worksheet";
 import { formatAprParenthetical } from "@/lib/apr-disclosure";
@@ -120,6 +118,11 @@ import { useToast } from "@/hooks/use-toast";
 import { authedFetch } from "@/lib/authed-fetch";
 import { jsPDF } from "jspdf";
 import { InsuranceEstimateForm, type InsurancePolicyType, type ResidenceUse, type RentalTerm } from "@/components/insurance/insurance-estimate-form";
+import {
+  effectiveAnnualFloodInsurance,
+  FLOOD_HOA_ASSUMPTION_NOTE,
+  suppressSeparateFloodInsurance,
+} from "@shared/flood-insurance-policy";
 
 // ─── Calculation helpers ────────────────────────────────────────────────────
 
@@ -337,10 +340,6 @@ interface Inputs {
   loanType: "conventional" | "jumbo" | "fha" | "va" | "usda" | "dscr" | "bank_statement";
   creditScore: number;
   interestRate: number;
-  /** Annual purchase property tax. A value is borrower-visible only when its
-   * source is "official" or "manual"; unavailable is represented by $0
-   * internally so legacy calculations remain numeric, but the UI never
-   * renders that sentinel as a verified tax amount. */
   annualTaxes: number;
   hoaMonthly: number;
   cddAnnual: number;
@@ -368,8 +367,8 @@ interface Inputs {
    *  Strictly boolean — there is no "not sure" / unknown state. When the
    *  user has not answered (or has not been asked because they don't
    *  receive VA disability), this is null. A `true` value combined with
-   *  `occupancy === "primary"` may qualify for a homestead exemption, but
-   *  the amount still comes only from official data or manual entry. */
+   *  `occupancy === "primary"` may qualify for an exemption. Tax amounts
+   *  still require official data or an explicitly manual bill. */
   vaDisabilityRating100: boolean | null;
   vaLoanUse: "first" | "second" | null;
   currentLoanFHA: boolean | null;
@@ -411,6 +410,20 @@ interface Inputs {
    *  - "silent": no payments; borrower must keep the home 10 years
    *    and owes the full amount back on refinance. */
   dpaSecondType?: "amortizing" | "silent" | null;
+}
+
+/** Enforce the property-type flood policy at every state-boundary where a
+ * scenario can be selected, restored, or updated asynchronously. Calculations
+ * also apply the policy independently, so a stale snapshot can never flash a
+ * flood charge before React state catches up. */
+function enforceFloodInsurancePolicy(inputs: Inputs): Inputs {
+  const annualFloodIns = effectiveAnnualFloodInsurance(
+    inputs.propertyType,
+    inputs.annualFloodIns,
+  );
+  return annualFloodIns === inputs.annualFloodIns
+    ? inputs
+    : { ...inputs, annualFloodIns };
 }
 
 
@@ -533,25 +546,13 @@ function makeDefaultInputs(price = 350000): Inputs {
     loanType: "conventional", creditScore: 780,
     interestRate: FALLBACK_RATES.conventional,
     annualTaxes: 0, hoaMonthly: 0, cddAnnual: 0,
+    userAnswerSources: { annual_taxes: "unavailable" },
     annualHOIns: calculateDefaultHomeownersInsurance(price).annualInsurance, annualFloodIns: 2000,
     monthlyDebts: 0, monthlyIncome: 8000, monthlyIncomeSource: "default", reserves: 35000,
     impactWindows: false, roofAttachment: "toenails", swr: false,
     hasMortgage: null, currentLoanFHA: null, hasRentalIncome: null, monthlyRentalIncome: 0, rentalType: null,
-    userAnswerSources: { annual_taxes: "unavailable" },
     isVeteran: null, vaDisability: null, vaDisabilityRating100: null, vaLoanUse: null,
   };
-}
-
-function hasUsablePurchaseTax(
-  value: Pick<Inputs, "annualTaxes" | "userAnswerSources">,
-): boolean {
-  const source = value.userAnswerSources?.annual_taxes;
-  return (
-    (source === "manual" || source === "official") &&
-    typeof value.annualTaxes === "number" &&
-    Number.isFinite(value.annualTaxes) &&
-    value.annualTaxes >= 0
-  );
 }
 
 function shortLabel(addr: string): string {
@@ -1128,7 +1129,7 @@ export default function Estimate() {
         next.propertyTypeSource = "zillow";
       }
     }
-    return next;
+    return enforceFloodInsurancePolicy(next);
   }
 
   // Given a LookedUpProperty + cache flag + the resolved zPrice, infer
@@ -1352,9 +1353,13 @@ export default function Estimate() {
         components.find(component => component.types.includes(type));
       const streetNumber = get("street_number")?.long_name || "";
       const route = get("route")?.long_name || "";
+      const subpremise = get("subpremise")?.long_name || "";
       const meta: PlaceMeta = {
         placeId: place.place_id,
-        street: [streetNumber, route].filter(Boolean).join(" ") || undefined,
+        street: [
+          [streetNumber, route].filter(Boolean).join(" "),
+          subpremise ? `Unit ${subpremise}` : "",
+        ].filter(Boolean).join(" ") || undefined,
         city: get("locality")?.long_name || get("sublocality")?.long_name,
         state: get("administrative_area_level_1")?.short_name,
         zip: get("postal_code")?.long_name,
@@ -1424,7 +1429,9 @@ export default function Estimate() {
     setScenarios(prev =>
       prev.map(s => s.id === activeScenarioId ? { ...s, savedInputs: inputs } : s)
     );
-    const targetInputs = target.savedInputs ?? inputsForAddress(target.address);
+    const targetInputs = enforceFloodInsurancePolicy(
+      target.savedInputs ?? inputsForAddress(target.address),
+    );
     resetInsuranceQuestionnaire(targetInputs);
     setActive(targetId);
     skipNextAddressSyncRef.current = true;
@@ -1463,7 +1470,9 @@ export default function Estimate() {
     delete baselineByIdRef.current[id];
     if (id === activeScenarioId) {
       const next = remaining[Math.max(0, idx - 1)];
-      const nextInputs = next.savedInputs ?? inputsForAddress(next.address);
+      const nextInputs = enforceFloodInsurancePolicy(
+        next.savedInputs ?? inputsForAddress(next.address),
+      );
       resetInsuranceQuestionnaire(nextInputs);
       setActive(next.id);
       skipNextAddressSyncRef.current = true;
@@ -1479,11 +1488,6 @@ export default function Estimate() {
     }
     if (!isAuthenticated) {
       setLeadDialogForScenario(true);
-      setLeadScenarioDetails(
-        calc.taxComplete && calcRef.current.taxComplete
-          ? undefined
-          : "Property taxes unavailable — no financial estimate is being shared.",
-      );
       setLeadDialogOpen(true);
     } else {
       setShowAddressPrompt(true);
@@ -1512,8 +1516,9 @@ export default function Estimate() {
     const dup = scenarios.find(s => s.address.trim().toLowerCase() === dupKey);
     if (dup) {
       toast({ title: "Already added", description: "Switching to that property." });
-      const targetInputs =
-        dup.savedInputs ?? inputsForAddress(dup.address);
+      const targetInputs = enforceFloodInsurancePolicy(
+        dup.savedInputs ?? inputsForAddress(dup.address),
+      );
       resetInsuranceQuestionnaire(targetInputs);
       setInputs(targetInputs);
       setActive(dup.id);
@@ -1695,12 +1700,8 @@ export default function Estimate() {
   const [answersOpen, setAnswersOpen] = useState(false);
 
   function generateEstimatePDF() {
-    if (!calc.taxComplete || !calcRef.current.taxComplete) {
-      toast({
-        title: "Complete property taxes first",
-        description: "Enter the annual property-tax bill before exporting a financial estimate.",
-        variant: "destructive",
-      });
+    if (!calcRef.current.taxComplete) {
+      toast({ title: "Complete property taxes first", description: "Enter the annual bill before downloading a complete mortgage estimate.", variant: "destructive" });
       return;
     }
     const doc = new jsPDF({ unit: "pt", format: "letter" });
@@ -1861,13 +1862,19 @@ export default function Estimate() {
     checkPage(20);
     sectionHeader("Monthly Mortgage Breakdown");
     row("Principal & Interest", fmt(calc.pi), `${calc.finalRate.toFixed(3)}% / 30 yr`);
-    row(
-      "Property Taxes",
-      taxSource() === "unavailable" ? "Unavailable" : `${fmt(calc.monthlyTax)}/mo`,
-      taxSource() === "unavailable" ? "Enter annual bill manually" : `${fmt(inputs.annualTaxes)}/yr`,
-    );
+    row("Property Taxes", `${fmt(calc.monthlyTax)}/mo`, `${fmt(inputs.annualTaxes)}/yr (${taxSource()})`);
     row("Homeowners Insurance", `${fmt(calc.monthlyHOIns)}/mo`);
-    row("Flood Insurance", `${fmt(calc.monthlyFlood)}/mo`);
+    if (!suppressSeparateFloodInsurance(inputs.propertyType)) {
+      row("Flood Insurance", `${fmt(calc.monthlyFlood)}/mo`);
+    } else {
+      row(
+        "Flood Insurance",
+        fmt(0),
+        inputs.propertyType === "Land"
+          ? "No separate building flood premium; verify requirements"
+          : FLOOD_HOA_ASSUMPTION_NOTE,
+      );
+    }
     if (inputs.hoaMonthly > 0) row("HOA", fmt(inputs.hoaMonthly));
     if (inputs.cddAnnual > 0) row("CDD", `${fmt(calc.monthlyCDD)}/mo`);
     if (calc.mortgageInsurance > 0) {
@@ -2046,9 +2053,6 @@ export default function Estimate() {
     const { purchasePrice, loanType } = inputs;
     const c = calc;
     const money = (n: number) => "$" + Math.round(n).toLocaleString();
-    if (!c.taxComplete || !calcRef.current.taxComplete) {
-      return "Property taxes unavailable — annual bill required before financial totals or qualification can be shared.";
-    }
     const loanLabel = loanType === "conventional" ? "Conventional" : loanType === "jumbo" ? "Jumbo" : loanType === "fha" ? "FHA" : loanType === "va" ? "VA" : loanType === "usda" ? "USDA" : loanType === "dscr" ? "DSCR" : loanType === "bank_statement" ? "Bank Statement" : (loanType as string).toUpperCase();
     return [
       `Purchase Price: ${money(purchasePrice)}`,
@@ -2061,20 +2065,13 @@ export default function Estimate() {
         ? [`DPA: ${c.dpaPct}% (${money(c.dpaAmount)}) · ${c.dpaSecondType === "amortizing" ? `10-yr 2nd @ ${c.dpaSecondRate.toFixed(3)}% (${money(c.dpaSecondMonthly)}/mo)` : "silent 2nd (no payments)"}`]
         : []),
       `Monthly P&I: ${money(c.pi)}`,
-      `Total Monthly Housing: ${money(c.totalHousing)}`,
-      `Est. Cash to Close: ${money(c.cashToClose)}`,
+      `Property Taxes: ${c.taxComplete ? `${money(inputs.annualTaxes)}/yr (${taxSource()})` : "Unavailable — enter the annual bill manually"}`,
+      `Total Monthly Housing: ${c.taxComplete ? money(c.totalHousing) : "Incomplete — property taxes unavailable"}`,
+      `Est. Cash to Close: ${c.taxComplete ? money(c.cashToClose) : "Incomplete — property taxes unavailable"}`,
     ].join(" | ");
   }
 
   function openLeadDialog(action: "share" | "save") {
-    if (!calc.taxComplete || !calcRef.current.taxComplete) {
-      toast({
-        title: "Complete property taxes first",
-        description: "Enter the annual property-tax bill before sharing or saving financial details.",
-        variant: "destructive",
-      });
-      return;
-    }
     setLeadDialogForScenario(false);
     setLeadDialogAction(action);
     setLeadScenarioDetails(buildScenarioDetails());
@@ -2138,11 +2135,17 @@ export default function Estimate() {
   useEffect(() => {
     if (floodData && floodLoadedRef.current !== address) {
       floodLoadedRef.current = address;
-      if (!floodData.requiresFloodInsurance) {
+      if (suppressSeparateFloodInsurance(inputsRef.current.propertyType)) {
+        setInputs((p) => enforceFloodInsurancePolicy(p));
+      } else if (!floodData.requiresFloodInsurance) {
         setInputs((p) => ({ ...p, annualFloodIns: 0 }));
       } else {
         // Restore default flood insurance when switching to a high-risk zone
-        setInputs((p) => ({ ...p, annualFloodIns: p.annualFloodIns === 0 ? 2000 : p.annualFloodIns }));
+        setInputs((p) =>
+          suppressSeparateFloodInsurance(p.propertyType)
+            ? enforceFloodInsurancePolicy(p)
+            : { ...p, annualFloodIns: p.annualFloodIns === 0 ? 2000 : p.annualFloodIns },
+        );
       }
     }
   }, [floodData, address]);
@@ -2309,11 +2312,6 @@ export default function Estimate() {
       };
     }
     const price = saved.price ?? base.purchasePrice;
-    const savedTaxSource =
-      saved.userAnswerSources?.annual_taxes === "manual" ||
-      saved.userAnswerSources?.annual_taxes === "official"
-        ? saved.userAnswerSources.annual_taxes
-        : "unavailable";
     const validLoanTypes = ["conventional", "jumbo", "fha", "va", "usda", "dscr", "bank_statement"] as const;
     const loanType = validLoanTypes.includes(saved.loanType as any)
       ? (saved.loanType as Inputs["loanType"])
@@ -2342,7 +2340,8 @@ export default function Estimate() {
     } else if (savedMode === "percent") {
       dpAmt = Math.round(price * (dpPct / 100));
     }
-    return {
+    const restoredPropertyType = saved.propertyType ?? base.propertyType;
+    return enforceFloodInsurancePolicy({
       ...base,
       purchasePrice: price,
       purchasePriceSource:
@@ -2365,13 +2364,13 @@ export default function Estimate() {
         saved.occupancyType === "investment"
           ? saved.occupancyType
           : base.occupancy,
-      // Restore purchase taxes only when provenance explicitly says
-      // "manual" or "official". Legacy rows contain formula-derived
-      // numbers without provenance; those must hydrate as unavailable
-      // rather than being displayed as a verified tax bill.
+      // Restore saved annual taxes / HO insurance when present, else
+      // fall back to the price-derived defaults. The annualHOIns line-
+      // 2186 default-sync effect respects userAnswerSources to avoid
+      // clobbering a restored or simulator-set value (see guard below).
       annualTaxes:
-        (savedTaxSource === "manual" || savedTaxSource === "official") &&
-        typeof saved.annualTaxes === "number" && Number.isFinite(saved.annualTaxes)
+        saved.userAnswerSources?.annual_taxes === "manual" &&
+        typeof saved.annualTaxes === "number" && Number.isFinite(saved.annualTaxes) && saved.annualTaxes >= 0
           ? saved.annualTaxes
           : 0,
       annualHOIns:
@@ -2380,7 +2379,7 @@ export default function Estimate() {
           : calculateDefaultHomeownersInsurance(price).annualInsurance,
       // Restore saved Property Type + provenance so a "manual" pick
       // survives reload/login and Zillow refreshes can't overwrite it.
-      propertyType: saved.propertyType ?? base.propertyType,
+      propertyType: restoredPropertyType,
       propertyTypeSource:
         saved.propertyTypeSource === "manual" ||
         saved.propertyTypeSource === "zillow" ||
@@ -2469,8 +2468,12 @@ export default function Estimate() {
         saved.sellerConcessionsMode === "percent" || saved.sellerConcessionsMode === "amount"
           ? saved.sellerConcessionsMode : base.sellerConcessionsMode,
       annualFloodIns:
-        typeof saved.annualFloodIns === "number" && Number.isFinite(saved.annualFloodIns)
-          ? saved.annualFloodIns : base.annualFloodIns,
+        effectiveAnnualFloodInsurance(
+          restoredPropertyType,
+          typeof saved.annualFloodIns === "number" && Number.isFinite(saved.annualFloodIns)
+            ? saved.annualFloodIns
+            : base.annualFloodIns,
+        ),
       hoaMonthly:
         typeof saved.hoaMonthly === "number" && Number.isFinite(saved.hoaMonthly)
           ? saved.hoaMonthly : base.hoaMonthly,
@@ -2493,7 +2496,6 @@ export default function Estimate() {
         const base0 = (saved.userAnswerSources && typeof saved.userAnswerSources === "object")
           ? { ...saved.userAnswerSources }
           : { ...(base.userAnswerSources ?? {}) };
-        base0.annual_taxes = savedTaxSource;
         const savedHo = typeof saved.annualHOIns === "number" && Number.isFinite(saved.annualHOIns)
           ? saved.annualHOIns : null;
         if (savedHo != null && !base0.annual_ho_ins) {
@@ -2528,7 +2530,7 @@ export default function Estimate() {
               : base.dpaSecondType ?? null,
         };
       })(),
-    };
+    });
   }
 
   const [inputs, setInputs] = useState<Inputs>(() => inputsForAddress(address));
@@ -2552,13 +2554,23 @@ export default function Estimate() {
       /** Server is still scraping the parcel's CDD/assessment lines
        *  from the Tax Collector bill — keep polling. */
       navPending: boolean;
-       /** A configuration failure is shown while the borrower is prompted
-        * to enter the bill manually. */
+      /** A configuration failure never authorizes a formula fallback. */
       operationalError?: string;
       source?: string;
       sourceLabel?: string;
     } | null>(null);
-  const [taxNotice, setTaxNotice] = useState<string | null>(null);
+  const [taxRetry, setTaxRetry] = useState(0);
+  const [taxRequest, setTaxRequest] = useState<{
+    key: string; loading: boolean; breakdown?: OfficialTaxBreakdown; reason?: string;
+  } | null>(null);
+  const activeTaxAddress = scenarios.find(s => s.id === activeScenarioId)?.address || address;
+  // The navigation address is included too: URL edits can precede the
+  // scenario-address sync effect by one render.
+  const taxRequestKey = JSON.stringify([
+    officialTaxRequestKey(activeScenarioId, activeTaxAddress, inputs.purchasePrice, inputs.occupancy === "primary"),
+    address,
+  ]);
+  const currentTaxRequest = taxRequest?.key === taxRequestKey ? taxRequest : null;
 
   // Live HCPA property tax lookup
   // (Hillsborough County addresses only)
@@ -2569,26 +2581,11 @@ export default function Estimate() {
     const price = inputs.purchasePrice;
     const isPrimary = inputs.occupancy === "primary";
 
-    if (
-      !activeAddr ||
-      activeAddr === "Unknown Address" ||
-      price <= 0
-    ) return;
-
-    // Skip only when this exact request tuple is already resolved —
-    // a price or occupancy change on the same address must refetch.
-    // While the bill scrape is still pending, never skip: effect
-    // re-runs (e.g. scenario auto-saves) cancel the poll timer, so
-    // this refetch is what keeps polling alive until the CDD /
-    // assessment lines arrive.
-    if (
-      hcpaTax &&
-      hcpaTax.address === activeAddr &&
-      hcpaTax.purchasePrice === price &&
-      hcpaTax.isPrimary === isPrimary &&
-      !hcpaTax.navPending
-    ) return;
-
+    if (!activeAddr || activeAddr === "Unknown Address" || !Number.isFinite(price) || price <= 0) {
+      setHcpaTax(null);
+      setTaxRequest({ key: taxRequestKey, loading: false, reason: "Enter a property address and purchase price" });
+      return;
+    }
     // ZIP boundaries can cross county lines, so routing is ordered:
     // strict HCPA first, then a known neighboring county on rejection.
     const taxRoutePlan =
@@ -2596,49 +2593,18 @@ export default function Estimate() {
 
     if (!taxRoutePlan.length) {
       if (hcpaTax) setHcpaTax(null);
-      setInputs((current) => {
-        if (taxSource(current) === "manual") return current;
-        return {
-          ...current,
-          annualTaxes: 0,
-          userAnswerSources: {
-            ...(current.userAnswerSources ?? {}),
-            annual_taxes: "unavailable",
-          },
-        };
-      });
+      setTaxRequest({ key: taxRequestKey, loading: false, reason: "No official county adapter available for this address" });
       return;
     }
 
-    // A saved official value has no request tuple in the legacy schema. Do
-    // not display it while the current address/price/use tuple is being
-    // verified again; only the response below may restore "official".
-    setInputs((current) => {
-      if (taxSource(current) === "manual") return current;
-      if (
-        current.annualTaxes === 0 &&
-        current.userAnswerSources?.annual_taxes === "unavailable"
-      ) {
-        return current;
-      }
-      return {
-        ...current,
-        annualTaxes: 0,
-        userAnswerSources: {
-          ...(current.userAnswerSources ?? {}),
-          annual_taxes: "unavailable",
-        },
-      };
-    });
-
     let cancelled = false;
+    const controller = new AbortController();
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    setHcpaTax(null);
+    setTaxRequest({ key: taxRequestKey, loading: true });
 
-    // The server may still be fetching the parcel's CDD/assessment
-    // lines from the Tax Collector bill (a background scrape that
-    // takes a few minutes on first lookup). When it reports
-    // nonAdValoremPending we show the ad valorem figure now and
-    // re-poll until the full bill total is available.
+    // Partial official components may be disclosed, but they never constitute
+    // a complete annual bill. Keep the existing collector polling flow.
     const fetchTax = (attempt: number, routeIndex = 0) => {
       const route = taxRoutePlan[routeIndex];
       if (!route) {
@@ -2655,21 +2621,41 @@ export default function Estimate() {
       }
       fetch(route.url, {
         method: "POST",
+        credentials: "include",
+        signal: controller.signal,
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify(body),
       })
-        .then(r => r.json())
+        .then(r => {
+          if (!r.ok) throw new Error("Official county lookup failed");
+          return r.json();
+        })
         .then(data => {
           if (cancelled) return;
-           const parsed: OfficialPropertyTaxResolution =
-             parseOfficialPropertyTaxResponse(data);
-           if (parsed.status === "available") {
+          const parsed = parseOfficialPropertyTaxResponse(data);
+          // A rejected HCPA parcel on a shared ZIP still needs its neighboring
+          // county attempt. An actual AV result with missing collector data,
+          // on the other hand, belongs to this county and stays partial.
+          if (parsed.status === "unavailable" &&
+              parsed.breakdown?.adValorem.cents == null &&
+              routeIndex + 1 < taxRoutePlan.length) {
+            fetchTax(0, routeIndex + 1);
+            return;
+          }
+          // A complete cents breakdown, not a legacy annual number, is required
+          // for a trustworthy borrower-facing mortgage total.
+          if (parsed.breakdown || parsed.status === "available") {
+            setTaxRequest({
+              key: taxRequestKey, loading: false, breakdown: parsed.breakdown,
+              reason: parsed.status === "unavailable" ? parsed.reason : "Official tax breakdown not supplied",
+            });
+            if (parsed.status === "available" && parsed.breakdown?.total.cents != null) {
             setHcpaTax({
-               annualTax: parsed.annualTax,
-               municipality: parsed.municipality ?? "",
-               millageRate: parsed.millageRate ?? 0,
+              annualTax: parsed.annualTax,
+              municipality: parsed.municipality ?? "",
+              millageRate: parsed.millageRate ?? 0,
               address: activeAddr,
               purchasePrice: price,
               isPrimary,
@@ -2679,29 +2665,26 @@ export default function Estimate() {
                source: parsed.source,
                sourceLabel: typeof data?.sourceLabel === "string" ? data.sourceLabel : parsed.source,
             });
-            setTaxNotice(null);
-             if (parsed.nonAdValoremPending && attempt < 14) {
+            } else {
+              setHcpaTax(null);
+            }
+             if (data.nonAdValoremPending === true && attempt < 14) {
               retryTimer = setTimeout(
-                () => fetchTax(attempt + 1, routeIndex),
+                () => {
+                  setTaxRequest(current => current?.key === taxRequestKey ? { ...current, loading: true } : current);
+                  fetchTax(attempt + 1, routeIndex);
+                },
                 45000
               );
             }
           } else if (routeIndex + 1 < taxRoutePlan.length) {
-             // A cross-county ZIP was not an official parcel. Preserve the
-             // existing neighboring-county lookup, but never use a formula.
+            // A cross-county ZIP was not an HCPA parcel. Preserve the
+            // existing neighboring-county lookup, without any formula fallback.
             fetchTax(0, routeIndex + 1);
           } else {
-             // Explicitly unavailable: the UI asks for a manual tax value.
+            // Missing official data is unavailable, not zero.
             setHcpaTax(null);
-            const adValorem = typeof data?.adValoremTax === "number" ? data.adValoremTax : null;
-            const reason = typeof data?.operationalError === "string"
-              ? data.operationalError
-              : parsed.status === "unavailable" ? parsed.reason : undefined;
-            setTaxNotice(
-              adValorem != null && data?.nonAdValoremPending
-                ? (reason ?? `Official ad valorem is $${adValorem.toFixed(2)}. The yearly total stays blank until the tax collector bill is attached.`)
-                : (reason ?? null),
-            );
+            setTaxRequest({ key: taxRequestKey, loading: false, reason: parsed.reason || "Official county taxes unavailable" });
           }
         })
         .catch(() => {
@@ -2710,23 +2693,21 @@ export default function Estimate() {
             fetchTax(0, routeIndex + 1);
           } else {
             setHcpaTax(null);
+            setTaxRequest({ key: taxRequestKey, loading: false, reason: "Official county request failed. Try again or enter the annual bill manually." });
           }
         });
     };
     fetchTax(0);
     return () => {
       cancelled = true;
+      controller.abort();
       if (retryTimer) clearTimeout(retryTimer);
     };
   // Re-run when address, price, occupancy, or
   // the scenario list (address edits) change
   // eslint-disable-next-line
   }, [
-    activeScenarioId,
-    scenarios,
-    inputs.purchasePrice,
-    inputs.occupancy,
-    address,
+    taxRequestKey, taxRetry,
   ]);
 
   // Address strings can differ between the URL param and the saved
@@ -2738,10 +2719,9 @@ export default function Estimate() {
     return norm(a) === norm(b);
   }
 
-  // When the async official figure arrives, write it into inputs.annualTaxes.
-  // The displayed tax comes from stored state that is only recomputed on
-  // user actions (price/occupancy edits), so without this sync the official
-  // figure would not reach the calculation state.
+  // When the async HCPA figure arrives, write it into inputs.annualTaxes.
+  // Sync only a complete result for the current tuple. Manual bills remain
+  // independent of this background request.
   useEffect(() => {
     if (!hcpaTax) return;
     const activeAddr = scenarios.find(
@@ -2750,121 +2730,47 @@ export default function Estimate() {
     if (!sameHcpaAddr(hcpaTax.address, activeAddr)) return;
     if (hcpaTax.purchasePrice !== inputs.purchasePrice) return;
     if (hcpaTax.isPrimary !== (inputs.occupancy === "primary")) return;
-    setInputs((current) => {
-      if (taxSource(current) === "manual") return current;
-      if (current.annualTaxes === hcpaTax.annualTax &&
-          current.userAnswerSources?.annual_taxes === "official") {
-        return current;
-      }
-      return {
-        ...current,
-        annualTaxes: hcpaTax.annualTax,
-        userAnswerSources: {
-          ...(current.userAnswerSources ?? {}),
-          annual_taxes: "official",
-        },
-      };
+    if (!currentTaxRequest?.breakdown || currentTaxRequest.breakdown.total.cents === null) return;
+    setInputs(current => {
+      if (current.userAnswerSources?.annual_taxes === "manual") return current;
+      if (current.purchasePrice !== hcpaTax.purchasePrice || (current.occupancy === "primary") !== hcpaTax.isPrimary) return current;
+      if (current.annualTaxes === hcpaTax.annualTax && current.userAnswerSources?.annual_taxes === "official") return current;
+      return { ...current, annualTaxes: hcpaTax.annualTax,
+        userAnswerSources: { ...current.userAnswerSources, annual_taxes: "official" } };
     });
   // eslint-disable-next-line
-  }, [hcpaTax, inputs.purchasePrice, inputs.occupancy, inputs.vaDisabilityRating100]);
+  }, [hcpaTax, taxRequestKey, currentTaxRequest]);
 
-  /**
-   * Single source of truth for purchase property taxes. Only a matching
-   * official county result can provide a number. An unavailable result uses
-   * the internal zero sentinel required by the existing mortgage equations;
-   * all borrower-facing rows check provenance before rendering it.
+  /** Numeric compatibility for existing calculation writers. Missing official
+   * taxes use an internal sentinel; taxSource gates every dependent disclosure.
+   * VA eligibility never substitutes a zero for an unavailable county bill.
    */
   function computePropertyTax(
     address: string,
     purchasePrice: number,
     occupancy: "primary" | "secondary" | "investment",
     _vaDisabilityRating100: boolean | null,
+    current: Inputs = inputsRef.current,
   ): number {
-    // Use an official figure only when it was resolved for these exact inputs.
+    // Manual bills are never changed by price, address, or exemption toggles.
+    if (current.userAnswerSources?.annual_taxes === "manual") return current.annualTaxes;
+    // Use live HCPA figure only when it was resolved for these exact inputs
     if (
-      hcpaTax &&
+      currentTaxRequest?.breakdown?.total.cents != null && hcpaTax &&
       sameHcpaAddr(hcpaTax.address, address) &&
       hcpaTax.purchasePrice === purchasePrice &&
       hcpaTax.isPrimary === (occupancy === "primary")
     ) {
       return hcpaTax.annualTax;
     }
-    return 0;
+    return 0; // Internal sentinel only; all disclosures and totals gate on taxSource.
   }
 
-  function hasOfficialPropertyTax(
-    taxAddress: string,
-    purchasePrice: number,
-    occupancy: Inputs["occupancy"],
-  ): boolean {
-    return !!(
-      hcpaTax &&
-      sameHcpaAddr(hcpaTax.address, taxAddress) &&
-      hcpaTax.purchasePrice === purchasePrice &&
-      hcpaTax.isPrimary === (occupancy === "primary")
+  function taxSource(value: Inputs = inputs): "manual" | "official" | "unavailable" {
+    return resolvePurchasePropertyTaxSource(
+      value.annualTaxes, value.userAnswerSources?.annual_taxes,
+      taxRequestKey, currentTaxRequest,
     );
-  }
-
-  function currentOfficialTaxMatches(inputsValue: Inputs = inputs): boolean {
-    if (inputsValue.userAnswerSources?.annual_taxes !== "official") return false;
-    const activeTaxAddress =
-      scenarios.find((scenario) => scenario.id === activeScenarioId)?.address || address;
-    return !!(
-      hcpaTax &&
-      sameHcpaAddr(hcpaTax.address, activeTaxAddress) &&
-      hcpaTax.purchasePrice === inputsValue.purchasePrice &&
-      hcpaTax.isPrimary === (inputsValue.occupancy === "primary") &&
-      hasMatchingOfficialAnnualTax(hcpaTax.annualTax, inputsValue.annualTaxes)
-    );
-  }
-
-  function taxSource(inputsValue: Inputs = inputs): "manual" | "official" | "unavailable" {
-    if (!hasUsablePurchaseTax(inputsValue)) return "unavailable";
-    if (inputsValue.userAnswerSources?.annual_taxes === "official" &&
-        !currentOfficialTaxMatches(inputsValue)) {
-      return "unavailable";
-    }
-    return inputsValue.userAnswerSources?.annual_taxes === "manual"
-      ? "manual"
-      : "official";
-  }
-
-  /** Apply an automatic tax refresh without overwriting a manual bill. */
-  function applyAutomaticPropertyTax(
-    current: Inputs,
-    taxAddress: string,
-    purchasePrice: number,
-    occupancy: Inputs["occupancy"],
-    vaDisabilityRating100: boolean | null,
-  ): Inputs {
-    if (taxSource(current) === "manual") return current;
-    const nextTax = computePropertyTax(
-      taxAddress,
-      purchasePrice,
-      occupancy,
-      vaDisabilityRating100,
-    );
-    return {
-      ...current,
-      annualTaxes: nextTax,
-      userAnswerSources: {
-        ...(current.userAnswerSources ?? {}),
-        annual_taxes: hasOfficialPropertyTax(taxAddress, purchasePrice, occupancy)
-          ? "official"
-          : "unavailable",
-      },
-    };
-  }
-
-  function setManualPropertyTax(value: number) {
-    setInputs((current) => ({
-      ...current,
-      annualTaxes: value,
-      userAnswerSources: {
-        ...(current.userAnswerSources ?? {}),
-        annual_taxes: "manual",
-      },
-    }));
   }
 
   // ── Insurance panel state ───────────────────────────────────────────────────
@@ -3101,21 +3007,15 @@ export default function Estimate() {
     });
   }, [inputs.propertyType]);
 
-  // Refresh the official property-tax provenance whenever the address changes;
-  // manual bills remain untouched.
+  // Auto-recalculate property taxes whenever the address changes
   const taxAddressRef = useRef<string>("");
   useEffect(() => {
     if (address && address !== taxAddressRef.current) {
       taxAddressRef.current = address;
-      setInputs((p) =>
-        applyAutomaticPropertyTax(
-          p,
-          address,
-          p.purchasePrice,
-          p.occupancy,
-          p.vaDisabilityRating100,
-        ),
-      );
+      setInputs((p) => ({
+        ...p,
+        annualTaxes: computePropertyTax(address, p.purchasePrice, p.occupancy, p.vaDisabilityRating100, p),
+      }));
     }
   }, [address]);
 
@@ -3191,20 +3091,13 @@ export default function Estimate() {
       console.debug("[loan-options] allowed loan types", occ === "investment" ? ["conventional", "dscr"] : occ === "secondary" ? ["conventional"] : ["conventional", "fha", "va", "usda"]);
       console.debug("[loan-options] selected loan type after", forcedLoan);
       return {
-        ...applyAutomaticPropertyTax(
-          {
-            ...p,
-            occupancy: occ,
-            loanType: forcedLoan,
-            interestRate: fullRate(baseRate, p.creditScore, occ, newDown, forcedLoan, p.monthlyIncome, amiData?.annualAMI, p.propertyType, p.purchasePrice * (1 - (newDown ?? 0) / 100)),
-            downPaymentPct: newDown,
-            rentalType: occ === "investment" ? p.rentalType : null,
-          },
-          address,
-          p.purchasePrice,
-          occ,
-          p.vaDisabilityRating100,
-        ),
+        ...p,
+        occupancy: occ,
+        loanType: forcedLoan,
+        interestRate: fullRate(baseRate, p.creditScore, occ, newDown, forcedLoan, p.monthlyIncome, amiData?.annualAMI, p.propertyType, p.purchasePrice * (1 - (newDown ?? 0) / 100)),
+        downPaymentPct: newDown,
+        rentalType: occ === "investment" ? p.rentalType : null,
+        annualTaxes: computePropertyTax(address, p.purchasePrice, occ, p.vaDisabilityRating100, p),
       };
     });
   }
@@ -3391,19 +3284,20 @@ export default function Estimate() {
         previousPrice > 0 && p.annualHOIns > 0
           ? Math.round(p.annualHOIns * (value / previousPrice))
           : calculateDefaultHomeownersInsurance(value).annualInsurance;
-      return applyAutomaticPropertyTax(
-        {
-          ...p,
-          purchasePrice: value,
-          purchasePriceSource: "user",
-          downPaymentAmount: Math.round(value * (p.downPaymentPct / 100)),
-          annualHOIns,
-        },
-        address,
-        value,
-        p.occupancy,
-        p.vaDisabilityRating100,
-      );
+      return {
+        ...p,
+        purchasePrice: value,
+        purchasePriceSource: "user",
+        downPaymentAmount: Math.round(value * (p.downPaymentPct / 100)),
+        annualTaxes: computePropertyTax(
+          address,
+          value,
+          p.occupancy,
+          p.vaDisabilityRating100,
+          p,
+        ),
+        annualHOIns,
+      };
     });
   }
 
@@ -3726,11 +3620,11 @@ export default function Estimate() {
   // ─── Calculations ──────────────────────────────────────────────────────────
 
   const calcBasis = useMemo(() => {
+    const taxComplete = taxSource() !== "unavailable";
     const { purchasePrice, downPaymentPct, loanType, creditScore, interestRate,
       annualTaxes, hoaMonthly, cddAnnual, annualHOIns, annualFloodIns,
       monthlyDebts, monthlyIncome, monthlyRentalIncome, reserves, impactWindows, roofAttachment, swr,
       vaDisability, vaLoanUse, hasDeferredStudentLoans, deferredStudentLoanBalance } = inputs;
-    const taxComplete = taxSource(inputs) !== "unavailable";
 
     // Deferred-student-loan DTI add-on. Computed every time loanType
     // or balance changes so flipping conventional <-> FHA/VA/USDA
@@ -3825,9 +3719,15 @@ export default function Estimate() {
     const dpaSecondMonthly = dpaActive && dpaSecondType === "amortizing"
       ? calcPI(dpaAmount, dpaSecondRate / 100, 120)
       : 0;
-    const monthlyTax = annualTaxes / 12;
+    const monthlyTax = taxComplete ? annualTaxes / 12 : 0;
     const monthlyHOIns = annualHOIns / 12;
-    const monthlyFlood = annualFloodIns / 12;
+    // Synchronous policy guard: calculations never trust a possibly stale raw
+    // scenario value (for example, during hydration or a late Zillow result).
+    const effectiveAnnualFloodIns = effectiveAnnualFloodInsurance(
+      inputs.propertyType,
+      annualFloodIns,
+    );
+    const monthlyFlood = effectiveAnnualFloodIns / 12;
     const monthlyCDD = cddAnnual / 12;
 
     const pmi = (loanType === "conventional" || loanType === "jumbo") ? calcConventionalPMI(baseLoanAmount, purchasePrice, creditScore) : 0;
@@ -3912,7 +3812,7 @@ export default function Estimate() {
       const ltPMI = lt === "conventional" ? calcConventionalPMI(ltBaseLoan, purchasePrice, creditScore) : 0;
       const ltMIP = lt === "fha" ? calcFHAMIP(ltLoan) : 0;
       const ltMI = ltPMI + ltMIP;
-      const ltTotal = ltPI + monthlyTax + monthlyHOIns + hoaMonthly + monthlyCDD + ltMI;
+      const ltTotal = ltPI + monthlyTax + monthlyHOIns + monthlyFlood + hoaMonthly + monthlyCDD + ltMI;
       return { lt, rate: ltRate * 100, downPct: ltDown, pi: ltPI, mi: ltMI, total: ltTotal };
     });
 
@@ -3964,7 +3864,7 @@ export default function Estimate() {
       baseMonthlyDebts: monthlyDebts,
       totalMonthlyDebts: effectiveMonthlyDebts,
     };
-  }, [activeScenarioId, address, hcpaTax, inputs, scenarios]);
+  }, [inputs, taxRequest, taxRequestKey, hcpaTax]);
 
   // ── Initial Fees Worksheet + APR ─────────────────────────────────
   // Built from the same upstream loan/payment outputs the payment card
@@ -3977,7 +3877,7 @@ export default function Estimate() {
   // monthly MI stream, solved on the actual payment.
   const [feeWorksheetEscrowsEnabled, setFeeWorksheetEscrowsEnabled] = useState(true);
   const feeWorksheet = useMemo(() => {
-    if (inputs.purchasePrice <= 0 || calcBasis.loanAmount <= 0 || calcBasis.pi <= 0) return null;
+    if (!calcBasis.taxComplete || inputs.purchasePrice <= 0 || calcBasis.loanAmount <= 0 || calcBasis.pi <= 0) return null;
     return buildFeeWorksheet({
       purchasePrice: inputs.purchasePrice,
       baseLoanAmount: calcBasis.baseLoanAmount,
@@ -3986,7 +3886,6 @@ export default function Estimate() {
       loanType: inputs.loanType,
       monthlyPI: calcBasis.pi,
       monthlyTax: calcBasis.monthlyTax,
-      monthlyTaxAvailable: taxSource() !== "unavailable",
       monthlyHOIns: calcBasis.monthlyHOIns,
       monthlyFlood: calcBasis.monthlyFlood,
       monthlyMI: calcBasis.mortgageInsurance,
@@ -4044,15 +3943,13 @@ export default function Estimate() {
     : inputs.loanType === "dscr" ? "DSCR"
     : "Bank Statement";
   const housingRatioWithinMax =
-    calc.taxComplete &&
-    (calc.maxHousingDti === Infinity || calc.housingDTI <= calc.maxHousingDti);
+    calc.taxComplete && (calc.maxHousingDti === Infinity || calc.housingDTI <= calc.maxHousingDti);
   const totalRatioWithinMax =
-    calc.taxComplete &&
-    (calc.maxTotalDti === Infinity || calc.dti <= calc.maxTotalDti);
+    calc.taxComplete && (calc.maxTotalDti === Infinity || calc.dti <= calc.maxTotalDti);
   const withinLoanRatioLimits = housingRatioWithinMax && totalRatioWithinMax;
   const aprPct = feeWorksheet?.aprPct ?? null;
   const feeWorksheetMeta = useMemo<InitialFeesWorksheetPdfMeta | null>(() => {
-    if (!feeWorksheet || !calc.taxComplete) return null;
+    if (!feeWorksheet) return null;
     return {
       address: address && address !== "Unknown Address" ? address : undefined,
       purchasePrice: inputs.purchasePrice,
@@ -4073,7 +3970,7 @@ export default function Estimate() {
         : inputs.occupancy === "investment" ? "Investment"
         : undefined,
     };
-  }, [address, calc.finalRate, calc.loanAmount, calc.taxComplete, feeWorksheet, inputs.loanType, inputs.occupancy, inputs.purchasePrice]);
+  }, [address, calc.finalRate, calc.loanAmount, feeWorksheet, inputs.loanType, inputs.occupancy, inputs.purchasePrice]);
   const currentPurchaseScenarioSnapshot = useMemo(() => ({
     address,
     price: inputs.purchasePrice,
@@ -4083,9 +3980,6 @@ export default function Estimate() {
         : inputs.purchasePriceSource?.startsWith("zillow")
           ? "zillow" as const
           : "default" as const,
-    // Do not persist financial outputs computed with the internal $0 tax
-    // sentinel. Borrower-entered zero remains valid because taxComplete is
-    // true for a manual source even when annualTaxes is 0.
     monthlyPayment: calc.taxComplete ? Math.round(calc.totalHousing) : undefined,
     cashToClose: calc.taxComplete ? Math.round(calc.cashToClose * 100) / 100 : undefined,
     dti: calc.taxComplete ? calc.dti : undefined,
@@ -4118,7 +4012,10 @@ export default function Estimate() {
     sellerConcessionsMode: inputs.sellerConcessionsMode ?? "percent",
     annualTaxes: inputs.annualTaxes,
     annualHOIns: inputs.annualHOIns,
-    annualFloodIns: inputs.annualFloodIns,
+    annualFloodIns: effectiveAnnualFloodInsurance(
+      inputs.propertyType,
+      inputs.annualFloodIns,
+    ),
     hoaMonthly: inputs.hoaMonthly,
     cddAnnual: inputs.cddAnnual,
     impactWindows: inputs.impactWindows,
@@ -4140,7 +4037,8 @@ export default function Estimate() {
   }, [calc.taxComplete]);
 
   function createIfwPdfFile(lenderInfo: PurchaseLenderInfo): File | null {
-    if (!calc.taxComplete || !calcRef.current.taxComplete || !feeWorksheet || !feeWorksheetMeta?.address) return null;
+    if (!calcRef.current.taxComplete) return null;
+    if (!feeWorksheet || !feeWorksheetMeta?.address) return null;
     const blob = createInitialFeesWorksheetPdfBlob({
       worksheet: feeWorksheet,
       meta: feeWorksheetMeta,
@@ -4154,9 +4052,7 @@ export default function Estimate() {
   }
 
   function saveCurrentIfwScenario(): void {
-    if (!calc.taxComplete || !calcRef.current.taxComplete) {
-      throw new Error("Enter the annual property-tax bill before saving this worksheet.");
-    }
+    if (!calcRef.current.taxComplete) throw new Error("Enter the annual property-tax bill before saving this worksheet.");
     if (!getSession()) throw new Error("Please sign in before saving this worksheet.");
     if (!address || address === "Unknown Address") throw new Error("Add a property address before saving this worksheet.");
     const existing = getPurchaseScenarios();
@@ -4185,7 +4081,8 @@ export default function Estimate() {
   }
 
   function notifyIfwActivity(action: "save" | "download" | "share"): void {
-    if (!calc.taxComplete || !calcRef.current.taxComplete || !feeWorksheet || !feeWorksheetMeta?.address) return;
+    if (!calcRef.current.taxComplete) return;
+    if (!feeWorksheet || !feeWorksheetMeta?.address) return;
     void authedFetch("/api/ifw/activity", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -4707,14 +4604,10 @@ export default function Estimate() {
                     className="gap-1.5"
                     title="Debug: manually save current scenario"
                     onClick={() => {
-                       if (!calc.taxComplete || !calcRef.current.taxComplete) {
-                         toast({
-                           title: "Complete property taxes first",
-                           description: "Enter the annual property-tax bill before saving this estimate.",
-                           variant: "destructive",
-                         });
-                         return;
-                       }
+                      if (!calcRef.current.taxComplete) {
+                        toast({ title: "Complete property taxes first", description: "Enter the annual bill before saving this estimate.", variant: "destructive" });
+                        return;
+                      }
                       const existing = getPurchaseScenarios();
                       const alreadySaved = existing.some(
                         s => s.address.trim().toLowerCase() === address.trim().toLowerCase()
@@ -4751,9 +4644,7 @@ export default function Estimate() {
                 scenarioType="purchase"
                 onDownloadPdf={generateEstimatePDF}
                 onSave={() => {
-                  if (!calc.taxComplete || !calcRef.current.taxComplete) {
-                    throw new Error("Enter the annual property-tax bill before saving this financial estimate.");
-                  }
+                  if (!calcRef.current.taxComplete) throw new Error("Enter the annual bill before saving this financial estimate.");
                 }}
               />
             </div>
@@ -5191,16 +5082,16 @@ export default function Estimate() {
                       <div className="flex gap-2">
                         <button
                           onClick={() => setInputs((p) => ({
-                            ...applyAutomaticPropertyTax({
-                              ...p,
-                              isVeteran: true,
-                              loanType: "va",
-                              downPaymentPct: 0,
-                              vaDisability: null,
-                              vaDisabilityRating100: null,
-                              vaLoanUse: null,
-                              interestRate: fullRate(rates.va, p.creditScore, p.occupancy, 0, "va", undefined, undefined, undefined, p.purchasePrice * 1),
-                            }, address, p.purchasePrice, p.occupancy, null),
+                            ...p,
+                            isVeteran: true,
+                            loanType: "va",
+                            downPaymentPct: 0,
+                            vaDisability: null,
+                            vaDisabilityRating100: null,
+                            vaLoanUse: null,
+                            interestRate: fullRate(rates.va, p.creditScore, p.occupancy, 0, "va", undefined, undefined, undefined, p.purchasePrice * 1),
+                            // Clear any prior exemption since the rating-100 answer is being reset
+                            annualTaxes: computePropertyTax(address, p.purchasePrice, p.occupancy, null, p),
                           }))}
                           className={`flex-1 py-1.5 rounded-md text-xs font-semibold border transition-colors ${inputs.isVeteran === true ? "bg-primary text-white border-primary" : "border-border text-muted-foreground hover:border-primary"}`}
                         >
@@ -5208,15 +5099,14 @@ export default function Estimate() {
                         </button>
                         <button
                           onClick={() => setInputs((p) => ({
-                            ...applyAutomaticPropertyTax({
-                              ...p,
-                              isVeteran: false,
-                              loanType: "conventional",
-                              vaDisability: null,
-                              vaDisabilityRating100: null,
-                              vaLoanUse: null,
-                              interestRate: fullRate(rates.conventional, p.creditScore, p.occupancy, p.downPaymentPct, "conventional", p.monthlyIncome, amiData?.annualAMI, p.propertyType, p.purchasePrice * (1 - (p.downPaymentPct ?? 0) / 100)),
-                            }, address, p.purchasePrice, p.occupancy, null),
+                            ...p,
+                            isVeteran: false,
+                            loanType: "conventional",
+                            vaDisability: null,
+                            vaDisabilityRating100: null,
+                            vaLoanUse: null,
+                            interestRate: fullRate(rates.conventional, p.creditScore, p.occupancy, p.downPaymentPct, "conventional", p.monthlyIncome, amiData?.annualAMI, p.propertyType, p.purchasePrice * (1 - (p.downPaymentPct ?? 0) / 100)),
+                            annualTaxes: computePropertyTax(address, p.purchasePrice, p.occupancy, null, p),
                           }))}
                           className={`flex-1 py-1.5 rounded-md text-xs font-semibold border transition-colors ${inputs.isVeteran === false ? "bg-primary text-white border-primary" : "border-border text-muted-foreground hover:border-primary"}`}
                         >
@@ -5243,12 +5133,13 @@ export default function Estimate() {
                               </button>
                               <button
                                 onClick={() => setInputs((p) => ({
-                                  ...applyAutomaticPropertyTax({
-                                    ...p,
-                                    vaDisability: false,
-                                    vaLoanUse: null,
-                                    vaDisabilityRating100: null,
-                                  }, address, p.purchasePrice, p.occupancy, null),
+                                  ...p,
+                                  vaDisability: false,
+                                  vaLoanUse: null,
+                                  // User no longer receives VA disability → reset the
+                                  // rating-100 answer and drop any homestead exemption.
+                                  vaDisabilityRating100: null,
+                                  annualTaxes: computePropertyTax(address, p.purchasePrice, p.occupancy, null, p),
                                 }))}
                                 className={`flex-1 py-1.5 rounded-md text-xs font-semibold border transition-colors ${inputs.vaDisability === false ? "bg-primary text-white border-primary" : "border-border text-muted-foreground hover:border-primary"}`}
                               >
@@ -5263,18 +5154,19 @@ export default function Estimate() {
                           {/* Follow-up: rating 100%? Only when they've said
                               they receive VA disability. Strictly Yes/No —
                               no "Not sure" option, per product spec, so the
-                              eligibility is informational only; tax amounts
-                              still come from the official result or manual bill. */}
+                              homestead-exemption estimate is only applied
+                              when the user has explicitly confirmed both
+                              100% rating AND primary residence. */}
                           {inputs.vaDisability === true && (
                             <div className="animate-in fade-in slide-in-from-top-2 duration-200">
                               <p className="text-xs text-muted-foreground mb-2">Is your VA disability rating 100%?</p>
                               <div className="flex gap-2">
                                 <button
                                   onClick={() => setInputs((p) => ({
-                                    ...applyAutomaticPropertyTax({
-                                      ...p,
-                                      vaDisabilityRating100: true,
-                                    }, address, p.purchasePrice, p.occupancy, true),
+                                    ...p,
+                                    vaDisabilityRating100: true,
+                                    // Apply (or clear) exemption based on current occupancy.
+                                    annualTaxes: computePropertyTax(address, p.purchasePrice, p.occupancy, true, p),
                                   }))}
                                   className={`flex-1 py-1.5 rounded-md text-xs font-semibold border transition-colors ${inputs.vaDisabilityRating100 === true ? "bg-primary text-white border-primary" : "border-border text-muted-foreground hover:border-primary"}`}
                                   data-testid="btn-va-rating-100-yes"
@@ -5283,10 +5175,10 @@ export default function Estimate() {
                                 </button>
                                 <button
                                   onClick={() => setInputs((p) => ({
-                                    ...applyAutomaticPropertyTax({
-                                      ...p,
-                                      vaDisabilityRating100: false,
-                                    }, address, p.purchasePrice, p.occupancy, false),
+                                    ...p,
+                                    vaDisabilityRating100: false,
+                                    // Drop any exemption — normal estimate applies.
+                                    annualTaxes: computePropertyTax(address, p.purchasePrice, p.occupancy, false, p),
                                   }))}
                                   className={`flex-1 py-1.5 rounded-md text-xs font-semibold border transition-colors ${inputs.vaDisabilityRating100 === false ? "bg-primary text-white border-primary" : "border-border text-muted-foreground hover:border-primary"}`}
                                   data-testid="btn-va-rating-100-no"
@@ -5296,7 +5188,7 @@ export default function Estimate() {
                               </div>
                               {inputs.vaDisabilityRating100 === false && (
                                 <p className="text-[11px] text-muted-foreground mt-1.5">
-                                  VA disability may qualify for a smaller exemption, but this estimate only applies a full property-tax exemption when 100% VA disability and primary residence are selected.
+                                  VA disability may qualify for an exemption. Confirm eligibility with the county property appraiser; the amount still requires official data or a manual bill.
                                 </p>
                               )}
                             </div>
@@ -5479,6 +5371,11 @@ export default function Estimate() {
                           ...p,
                           propertyType: v,
                           propertyTypeSource: "manual",
+                          annualFloodIns: suppressSeparateFloodInsurance(v)
+                            ? 0
+                            : floodData?.requiresFloodInsurance === true && p.annualFloodIns === 0
+                              ? 2000
+                              : p.annualFloodIns,
                         }))
                       }
                     >
@@ -5778,51 +5675,36 @@ export default function Estimate() {
                   {renderSellerConcessions()}
 
                   <div className="space-y-1.5 rounded-md border border-border p-3" data-testid="purchase-property-tax-input">
-                    <div className="flex items-center justify-between gap-2">
-                      <Label htmlFor="purchase-annual-property-tax" className="text-xs text-muted-foreground">
-                        Annual Property Taxes
-                      </Label>
-                      {taxSource() === "official" && (
-                        <span className="text-[10px] font-semibold text-emerald-700">OFFICIAL COUNTY DATA</span>
-                      )}
-                      {taxSource() === "unavailable" && (
-                        <span className="text-[10px] font-semibold text-amber-700">UNAVAILABLE</span>
-                      )}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <Label htmlFor="purchase-annual-property-tax" className="text-xs text-muted-foreground">Annual Property Taxes</Label>
+                      <span className="text-[10px] font-semibold text-muted-foreground">
+                        {taxSource() === "manual" ? "MANUALLY ENTERED" : taxSource() === "official" ? "OFFICIAL COUNTY DATA" : "UNAVAILABLE"}
+                      </span>
                     </div>
-                    <Input
-                      id="purchase-annual-property-tax"
-                      data-testid="input-purchase-annual-property-tax"
-                      type="number"
-                      min={0}
-                      step={50}
+                    <Input id="purchase-annual-property-tax" data-testid="input-purchase-annual-property-tax"
+                      type="number" min={0} step="0.01"
                       value={taxSource() === "unavailable" ? "" : inputs.annualTaxes}
                       placeholder="Enter annual tax bill"
-                      onChange={(event) => {
+                      onChange={event => {
                         const raw = event.target.value.trim();
-                        if (!raw) {
-                          setInputs((current) => ({
-                            ...current,
-                            annualTaxes: 0,
-                            userAnswerSources: {
-                              ...(current.userAnswerSources ?? {}),
-                              annual_taxes: "unavailable",
-                            },
-                          }));
-                          return;
-                        }
-                        const next = Number(raw);
-                        if (Number.isFinite(next) && next >= 0) {
-                          setManualPropertyTax(Math.round(next));
-                        }
+                        const amount = Number(raw);
+                        if (raw && (!Number.isFinite(amount) || amount < 0)) return;
+                        setInputs(current => ({
+                          ...current, annualTaxes: raw ? Math.round(amount * 100) / 100 : 0,
+                          userAnswerSources: { ...current.userAnswerSources, annual_taxes: raw ? "manual" : "unavailable" },
+                        }));
                       }}
                     />
-                    <p className="text-[11px] leading-tight text-muted-foreground">
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
                       {taxSource() === "manual"
-                        ? "Manually entered. Price, address, and property-use changes will not overwrite this bill."
-                        : taxSource() === "official"
-                          ? "Matched to an official county parcel/tax result. Edit to use the bill you provide."
-                          : "Official county data is unavailable for this property. Enter the annual bill manually; no formula estimate is shown."}
+                        ? "Manually entered, not county verified. Price, address, and property-use changes will not overwrite this bill."
+                        : "Only complete official county data or an explicitly entered manual bill is used. No county-rate guess is shown."}
                     </p>
+                    <OfficialTaxDisclosure breakdown={currentTaxRequest?.breakdown}
+                      loading={currentTaxRequest?.loading ?? (!!activeTaxAddress && activeTaxAddress !== "Unknown Address")}
+                      reason={currentTaxRequest?.reason} />
+                    <Button type="button" size="sm" variant="outline" disabled={currentTaxRequest?.loading}
+                      onClick={() => setTaxRetry(value => value + 1)}>Refresh official county data</Button>
                   </div>
 
                   <div className="space-y-1" data-testid="editable-rate-disclosure">
@@ -6126,19 +6008,18 @@ export default function Estimate() {
                             }
                             onEdit={() => setEditingPage(3)}
                           />
-                           <SummaryRow
-                             label="Estimated Closing Costs"
-                             value={calc.taxComplete ? fmt(calc.closingCosts) : "Incomplete — enter taxes"}
-                             onEdit={() => setEditingPage(3)}
-                           />
-                          <SummaryRow
-                            label="Annual Property Taxes"
-                            value={taxSource() === "unavailable" ? "Unavailable — enter manually" : `${fmt(inputs.annualTaxes)}/yr`}
-                            onEdit={() => setEditingPage(3)}
-                          />
+                          <SummaryRow label="Estimated Closing Costs" value={calc.taxComplete ? fmt(calc.closingCosts) : "Incomplete — enter taxes"} onEdit={() => setEditingPage(3)} />
+                          <SummaryRow label="Annual Property Taxes" value={calc.taxComplete ? `${fmt(inputs.annualTaxes)}/yr (${taxSource()})` : "Unavailable — enter manually"} onEdit={() => setEditingPage(3)} />
                           <SummaryRow label="Homeowners Insurance" value={`${fmt(inputs.annualHOIns)}/yr`} onEdit={() => setEditingPage(3)} />
-                          {inputs.annualFloodIns > 0 && (
-                            <SummaryRow label="Flood Insurance" value={`${fmt(inputs.annualFloodIns)}/yr`} onEdit={() => setEditingPage(3)} />
+                          {calc.monthlyFlood > 0 && (
+                            <SummaryRow label="Flood Insurance" value={`${fmt(calc.monthlyFlood * 12)}/yr`} onEdit={() => setEditingPage(3)} />
+                          )}
+                          {suppressSeparateFloodInsurance(inputs.propertyType) && (
+                            <p className="mb-1 text-[11px] leading-relaxed text-muted-foreground" data-testid="note-flood-insurance-property-type">
+                              {inputs.propertyType === "Land"
+                                ? "No separate building flood premium is included for land. Confirm any required coverage with your lender and insurance professional."
+                                : FLOOD_HOA_ASSUMPTION_NOTE}
+                            </p>
                           )}
                           <SummaryRow label="HOA / Condo Fees" value={inputs.hoaMonthly > 0 ? `${fmt(inputs.hoaMonthly)}/mo` : "None"} onEdit={() => setEditingPage(3)} />
                           {inputs.cddAnnual > 0 && (
@@ -6166,21 +6047,17 @@ export default function Estimate() {
               {/* Summary Banner */}
               <div className="overflow-hidden rounded-xl border-2 border-primary/20">
                 {/* Qualification header bar */}
-                <div className={`w-full py-2 px-4 text-center text-sm font-semibold tracking-wide ${calc.qualifies ? "bg-green-600 text-white" : calc.taxComplete ? "bg-red-600 text-white" : "bg-amber-500 text-white"}`}>
+                <div className={`w-full py-2 px-4 text-center text-sm font-semibold tracking-wide ${!calc.taxComplete ? "bg-muted text-muted-foreground" : calc.qualifies ? "bg-green-600 text-white" : "bg-red-600 text-white"}`}>
                   {calc.qualifies
-                    ? "✓ Likely Qualifies"
-                    : calc.taxComplete
-                      ? "⚠ Needs Review — DTI exceeds guidelines"
-                      : "⚠ Incomplete — enter annual property taxes"}
+                    ? "Likely Qualifies"
+                    : calc.taxComplete ? "Needs Review — DTI exceeds guidelines" : "Incomplete — enter annual property taxes"}
                 </div>
                 {/* Metrics row */}
                 <div className="bg-primary/5 px-5 py-4">
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
                     <div className="text-center">
                       <p className="text-xs text-muted-foreground mb-1">New Monthly Mortgage Payment</p>
-                      <p className="text-2xl font-bold text-primary">
-                        {calc.taxComplete ? fmt(calc.totalHousing) : "Incomplete"}
-                      </p>
+                      <p className="text-2xl font-bold text-primary">{calc.taxComplete ? fmt(calc.totalHousing) : "Incomplete"}</p>
                     </div>
                     <div className="text-center">
                       <p className="text-xs text-muted-foreground mb-1">Assumed Debts</p>
@@ -6193,27 +6070,23 @@ export default function Estimate() {
                     </div>
                     <div className="text-center">
                       <p className="text-xs text-muted-foreground mb-1">Monthly Income Needed</p>
-                      <p className="text-2xl font-bold text-primary">
-                        {calc.taxComplete ? fmt(calc.requiredIncome) : "Incomplete"}
-                      </p>
+                      <p className="text-2xl font-bold text-primary">{calc.taxComplete ? fmt(calc.requiredIncome) : "Unavailable"}</p>
                     </div>
                     <div className="text-center">
                       <p className="text-xs text-muted-foreground mb-1">Housing DTI</p>
-                      <p className={`text-2xl font-bold ${!calc.taxComplete ? "text-amber-600" : calc.housingGreen !== Infinity && calc.housingDTI >= calc.housingGreen ? "text-red-600" : "text-green-600"}`}>
+                      <p className={`text-2xl font-bold ${!calc.taxComplete ? "text-muted-foreground" : calc.housingGreen !== Infinity && calc.housingDTI >= calc.housingGreen ? "text-red-600" : "text-green-600"}`}>
                         {calc.taxComplete ? fmtPct(calc.housingDTI) : "Unavailable"}
                       </p>
                     </div>
                     <div className="text-center">
                       <p className="text-xs text-muted-foreground mb-1">Total DTI</p>
-                      <p className={`text-2xl font-bold ${!calc.taxComplete ? "text-amber-600" : calc.totalGreen !== Infinity && calc.dti >= calc.totalGreen ? "text-red-600" : "text-green-600"}`}>
+                      <p className={`text-2xl font-bold ${!calc.taxComplete ? "text-muted-foreground" : calc.totalGreen !== Infinity && calc.dti >= calc.totalGreen ? "text-red-600" : "text-green-600"}`}>
                         {calc.taxComplete ? fmtPct(calc.dti) : "Unavailable"}
                       </p>
                     </div>
                     <div className="text-center">
                       <p className="text-xs text-muted-foreground mb-1">Cash to Close</p>
-                      <p className="text-2xl font-bold text-primary">
-                        {calc.taxComplete ? fmt(calc.cashToClose) : "Incomplete"}
-                      </p>
+                      <p className="text-2xl font-bold text-primary">{calc.taxComplete ? fmt(calc.cashToClose) : "Incomplete"}</p>
                     </div>
                   </div>
                 </div>
@@ -6408,14 +6281,20 @@ export default function Estimate() {
                       above. */}
                   <Row
                     label="Property Taxes"
-                    value={taxSource() === "unavailable" ? "Unavailable" : `${fmt(calc.monthlyTax)}/mo`}
-                    sub={taxSource() === "unavailable" ? "Enter annual bill manually" : `${fmt(inputs.annualTaxes)}/yr`}
+                    value={calc.taxComplete ? `${fmt(calc.monthlyTax)}/mo` : "Unavailable"}
+                    sub={calc.taxComplete ? `${fmt(inputs.annualTaxes)}/yr (${taxSource()})` : "Enter annual bill manually"}
                     link={address && address !== "Unknown Address" ? getCountyTaxLink(address) ?? undefined : undefined}
                   />
+                  <OfficialTaxDisclosure breakdown={currentTaxRequest?.breakdown}
+                    loading={currentTaxRequest?.loading ?? (!!activeTaxAddress && activeTaxAddress !== "Unknown Address")}
+                    reason={currentTaxRequest?.reason} />
+                  {!currentTaxRequest?.loading && <Button type="button" size="sm" variant="outline"
+                    onClick={() => setTaxRetry(value => value + 1)}>Refresh official county data</Button>}
+                  {taxSource() === "manual" && <p className="px-1 text-[11px] text-muted-foreground">The payment uses your manually entered bill, not the official breakdown above.</p>}
                   {/* CDD / non-ad valorem disclosure: when the scraped
                       bill shows special assessments, tell the user
                       they're already inside the tax figure above. */}
-                  {hcpaTax && hcpaTax.nonAdValoremTax > 0 && (
+                  {taxSource() === "official" && hcpaTax && hcpaTax.nonAdValoremTax > 0 && (
                     <p
                       className="text-[10px] text-muted-foreground -mt-1 mb-1 px-1"
                       data-testid="note-nav-included"
@@ -6427,7 +6306,7 @@ export default function Estimate() {
                       runs in the background for a few minutes, so tell
                       the user the figure will still grow to include
                       CDD / assessments. */}
-                  {hcpaTax?.navPending && (
+                  {taxSource() === "official" && hcpaTax?.navPending && (
                     <p
                       className="flex items-center gap-1.5 text-[11px] text-slate-500 -mt-1 mb-1 px-1"
                       data-testid="note-nav-pending"
@@ -6436,7 +6315,7 @@ export default function Estimate() {
                       Checking the county tax bill for CDD &amp; special assessments — this figure may update in a few minutes…
                     </p>
                   )}
-                  {hcpaTax?.sourceLabel && (
+                  {taxSource() === "official" && hcpaTax?.sourceLabel && (
                     <p
                       className="text-[10px] text-muted-foreground -mt-1 mb-1 px-1"
                       data-testid="note-tax-source"
@@ -6445,22 +6324,21 @@ export default function Estimate() {
                       {hcpaTax.isPrimary ? " Homestead: yes." : " Homestead: no."}
                     </p>
                   )}
-                  {taxNotice && !hcpaTax && (
+                  {currentTaxRequest?.reason && !currentTaxRequest.breakdown && (
                     <p
                       className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 -mt-1 mb-1"
                       data-testid="note-tax-manual"
                     >
-                      {taxNotice}
+                      {currentTaxRequest.reason}
                     </p>
                   )}
-                  {hcpaTax?.operationalError && (
+                  {taxSource() === "official" && hcpaTax?.operationalError && (
                     <p
                       className="flex items-start gap-1.5 text-[11px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5 -mt-1 mb-1"
                       data-testid="note-property-tax-operational-error"
                     >
                       <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                       {hcpaTax.operationalError} No formula estimate is shown;
-                       enter the annual bill manually if needed.
+                      {hcpaTax.operationalError} No formula estimate is shown. Enter the annual bill manually if needed.
                     </p>
                   )}
                   {/* Homestead-exemption disclosure. Only shown when the
@@ -6473,7 +6351,7 @@ export default function Estimate() {
                       className="text-[11px] text-emerald-700 -mt-1 mb-1 px-1"
                       data-testid="note-va-property-tax-exemption"
                     >
-                       A 100% VA disability rating may qualify for a full homestead property-tax exemption. The county property appraiser must confirm eligibility; this estimate does not silently replace an unavailable official bill with $0.
+                      A 100% VA disability rating may qualify for a homestead property-tax exemption. The county property appraiser must confirm eligibility; taxes are not automatically set to $0.
                     </p>
                   )}
                   {/* Inverse-case disclosure: user answered VA 100% = Yes,
@@ -6488,7 +6366,7 @@ export default function Estimate() {
                       className="text-[11px] text-amber-700 -mt-1 mb-1 px-1"
                       data-testid="note-va-exemption-non-primary"
                     >
-                       Full property-tax exemption only applies when this property is your primary residence. Currently set to {inputs.occupancy}; verify the official county bill or enter it manually.
+                      Full property-tax exemption only applies when this property is your primary residence. Currently set to {inputs.occupancy}; verify the official bill or enter it manually.
                     </p>
                   )}
                   <Row
@@ -6497,7 +6375,16 @@ export default function Estimate() {
                     sub={`${fmt(inputs.annualHOIns)}/yr`}
                     onClick={() => insuranceSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
                   />
-                  <Row label="Flood Insurance" value={`${fmt(calc.monthlyFlood)}/mo`} />
+                  {!suppressSeparateFloodInsurance(inputs.propertyType) && (
+                    <Row label="Flood Insurance" value={`${fmt(calc.monthlyFlood)}/mo`} />
+                  )}
+                  {suppressSeparateFloodInsurance(inputs.propertyType) && (
+                    <p className="text-[11px] leading-relaxed text-muted-foreground -mt-1 mb-1 px-1" data-testid="note-flood-insurance-assumption">
+                      {inputs.propertyType === "Land"
+                        ? "No separate building flood premium is included for land. Confirm any required coverage with your lender and insurance professional."
+                        : FLOOD_HOA_ASSUMPTION_NOTE}
+                    </p>
+                  )}
                   {inputs.hoaMonthly > 0 && <Row label="HOA" value={fmt(inputs.hoaMonthly)} />}
                   {inputs.cddAnnual > 0 && <Row label="CDD" value={`${fmt(calc.monthlyCDD)}/mo`} />}
                   {calc.mortgageInsurance > 0 && (
@@ -6551,18 +6438,14 @@ export default function Estimate() {
                   <Separator />
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-semibold">Total Monthly Payment</span>
-                    <span className="text-base font-bold text-primary">
-                      {calc.taxComplete ? fmtCents(calc.totalHousing) : "Incomplete"}
-                    </span>
+                    <span className="text-base font-bold text-primary">{calc.taxComplete ? fmtCents(calc.totalHousing) : "Incomplete"}</span>
                   </div>
                   <Separator />
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-semibold">Estimated Cash to Close</span>
-                    <span className="text-base font-bold text-primary">
-                      {calc.taxComplete ? fmtCents(calc.cashToClose) : "Incomplete"}
-                    </span>
+                    <span className="text-base font-bold text-primary">{calc.taxComplete ? fmtCents(calc.cashToClose) : "Incomplete"}</span>
                   </div>
-                  {feeWorksheet && calc.taxComplete && (
+                  {feeWorksheet && (
                     <>
                       <Separator />
                       <div className="flex justify-end px-2 py-2">
@@ -6571,17 +6454,7 @@ export default function Estimate() {
                           variant="outline"
                           size="sm"
                           className="h-8 gap-1.5 px-3 text-xs font-medium"
-                           onClick={() => {
-                             if (!calc.taxComplete) {
-                               toast({
-                                 title: "Complete property taxes first",
-                                 description: "Enter the annual property-tax bill before opening the worksheet.",
-                                 variant: "destructive",
-                               });
-                               return;
-                             }
-                             setFeeWorksheetOpen(true);
-                           }}
+                          onClick={() => setFeeWorksheetOpen(true)}
                           data-testid="button-fee-worksheet"
                         >
                           <FileDown className="h-3.5 w-3.5" />
@@ -6590,28 +6463,18 @@ export default function Estimate() {
                       </div>
                     </>
                   )}
-                  {feeWorksheet && !calc.taxComplete && (
-                    <>
-                      <Separator />
-                      <p className="px-2 py-2 text-xs text-amber-800">
-                        Initial Fees Worksheet withheld until annual property taxes are entered; escrow totals and cash to close are incomplete.
-                      </p>
-                    </>
-                  )}
                   </div>
                 </CardContent>
               </Card>
 
               {/* Qualification Section */}
-              <Card className={`border-2 ${!calc.taxComplete ? "border-amber-200" : withinLoanRatioLimits ? "border-green-200" : "border-red-200"}`}>
+              <Card className={`border-2 ${!calc.taxComplete ? "border-border" : withinLoanRatioLimits ? "border-green-200" : "border-red-200"}`}>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base flex items-center gap-2">
                     <UserCheck className="h-4 w-4 text-primary" />
                     Can I Afford This Home?
                     {!calc.taxComplete ? (
-                      <Badge className="ml-auto bg-amber-100 text-amber-700 border border-amber-300">
-                        <AlertCircle className="h-3 w-3 mr-1" /> Incomplete
-                      </Badge>
+                      <Badge className="ml-auto border border-border bg-muted text-muted-foreground">Incomplete</Badge>
                     ) : withinLoanRatioLimits ? (
                       <Badge className="ml-auto bg-green-100 text-green-700 border border-green-300">
                         <CheckCircle2 className="h-3 w-3 mr-1" /> Within Loan Limits
@@ -6628,8 +6491,13 @@ export default function Estimate() {
                     These two ratios show how the new home payment and your other debts compare with the income entered.
                   </p>
 
-                  {calc.taxComplete ? (
-                  <>
+                  {!calc.taxComplete ? (
+                    <div className="rounded-xl border border-border bg-muted/20 p-4 text-muted-foreground">
+                      <p className="text-sm font-semibold">Qualification incomplete</p>
+                      <p className="mt-1 text-xs leading-relaxed">Annual property taxes are unavailable. Enter the annual bill to calculate the payment, DTI, required income, reserves, and qualification status.</p>
+                      <Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setEditingPage(3)}>Enter annual property taxes</Button>
+                    </div>
+                  ) : (<>
                   <div className={`rounded-xl border p-4 ${housingRatioWithinMax ? "border-green-200 bg-green-50" : "border-red-200 bg-red-50"}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -6713,19 +6581,11 @@ export default function Estimate() {
                       }
                     />
                   </div>
-                  </>
-                  ) : (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-                      <p className="text-sm font-semibold text-amber-900">Qualification incomplete</p>
-                      <p className="mt-1 text-xs leading-relaxed text-amber-800">
-                        Annual property taxes are unavailable. Enter the annual bill manually to calculate the exact payment, DTI, required income, reserves, and qualification status.
-                      </p>
-                    </div>
-                  )}
 
                   <p className="text-[11px] leading-relaxed text-muted-foreground">
                     This is an estimate, not a loan approval. A lender will review your full application, credit, income, and debts.
                   </p>
+                  </>)}
                 </CardContent>
               </Card>
 
