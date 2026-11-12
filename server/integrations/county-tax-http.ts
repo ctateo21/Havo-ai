@@ -2,11 +2,17 @@ import { load } from "cheerio";
 const UA = "Mozilla/5.0 (compatible; HavoPropertyTax/1.0; +https://havofl.com)";
 /** Per-lookup cookie jar; hidden WebForms controls are copied verbatim. */
 export class CountySession {
+  finalUrl = "";
+  status = 0;
   private cookies = new Map<string, string>();
   private previousUrl?: string;
-  constructor(private readonly sendReferer = false) {}
+  private lastRequestAt=0;
+  constructor(private readonly sendReferer = false, private readonly minimumDelayMs=0) {}
   async request(url: string, body?: URLSearchParams | string, json = false): Promise<string> {
     for (let redirects = 0; redirects < 8; redirects++) {
+      const wait=this.minimumDelayMs-(Date.now()-this.lastRequestAt);
+      if(wait>0) await new Promise(resolve=>setTimeout(resolve,wait));
+      this.lastRequestAt=Date.now();
       const r = await fetch(url, {
         method: body === undefined ? "GET" : "POST", redirect: "manual",
         headers: { "User-Agent": UA, Cookie: [...this.cookies].map(([k,v]) => `${k}=${v}`).join("; "),
@@ -15,6 +21,8 @@ export class CountySession {
         ...(body === undefined ? {} : { body }), signal: AbortSignal.timeout(30_000),
       });
       this.previousUrl=url;
+      this.finalUrl=url;
+      this.status=r.status;
       for (const c of r.headers.getSetCookie()) {
         const [pair] = c.split(";"); const p = pair.indexOf("=");
         if (p > 0) this.cookies.set(pair.slice(0,p), pair.slice(p+1));

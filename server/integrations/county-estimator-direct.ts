@@ -56,6 +56,8 @@ export function parseEstimatorPage(county: CountySlug, html: string): Pick<Estim
     adValoremCents = amountAfter(text, /(?:Total\s+Estimated\s+Ad\s+Valorem(?:\s+Tax(?:es)?)?|Total\s+Ad\s+Valorem(?:\s+Tax(?:es)?)?)\s*[:]?/i);
     try { estimatorNavCents = amountAfter(text, /Total\s+(?:Estimated\s+)?Non[- ]Ad\s+Valorem(?:\s+(?:Taxes|Assessments))?\s*[:]?/i); }
     catch { /* Some estimators explicitly exclude NAV; the bill remains mandatory. */ }
+    if(county==="sarasota" && /Non-Ad Valorem Assessments\s*:/i.test(text))
+      estimatorNavCents=amountAfter(text,/Non-Ad Valorem Assessments\s*:/i);
   }
   return {adValoremCents,estimatorNavCents,snapshot:text.slice(0,12000)};
 }
@@ -80,7 +82,7 @@ export async function resolveLeeFolio(strap: string, session = new CountySession
 }
 export async function directEstimator(input: EstimatorInput): Promise<EstimatorOutput> {
   const {county,parcelId,purchasePrice:price,homestead:hx,taxYear:year,address} = input;
-  const s = new CountySession(county==="sarasota");
+  const s = new CountySession(county==="sarasota",county==="sarasota"?1000:0);
   let url: string, html: string;
   if (county === "hillsborough") {
     const folio = parcelId.replace(/^A/i,"").replace(/\D/g,"");
@@ -127,23 +129,11 @@ export async function directEstimator(input: EstimatorInput): Promise<EstimatorO
       form.set("__EVENTTARGET",postback[1]); form.set("__EVENTARGUMENT",postback[2]);
     }
     html = await s.request(agreement,form);
-    // The current county form initializes parcel context on its strap postback.
-    // Agreement alone redirects to the empty form without creating that context.
-    const parcelForm = webForm(html,{PurchasePropertyStrapTb:parcelId});
-    const parcelControl=load(html)('[name$="$PurchasePropertyStrapTb"]').attr("name");
-    if(!parcelControl) throw new Error("Sarasota parcel lookup form unavailable");
-    parcelForm.set("__EVENTTARGET",parcelControl);
-    html=await s.request("https://www.sarasotapropertyappraiser.gov/TaxEstimator/TaxEst.aspx",parcelForm);
     url = "https://www.sarasotapropertyappraiser.gov/TaxEstimator/TaxEstOut.aspx?"+new URLSearchParams({input_address:"",address_from_strap:address,year_acquired:String(year),strap_from_address:"",input_strap:parcelId,address_street:address,mill_code:"",jurisdiction:"",price:String(price),transfer_port:"False",will_homestead:hx?"True":"False",port_address:"",year_sold:String(year),port_strap:"",port_address_street:"",just:"0",assessed:"0"});
-    const populated=load(html);
-    const submitForm=webForm(html,{PurchasePropertyStrapTb:parcelId,YearOfPurchaseDdl:String(year),PurchasePriceTb:"$"+price.toLocaleString("en-US"),PortabilityRbg:"PortabilityNoRb",HomesteadExemptionRbg:hx?"HomesteadExemptionRb":"NoHomesteadExemptionRb"});
-    const district=populated('[name$="$CityMuniDdl"]');
-    if(district.attr("name")) submitForm.set(district.attr("name")!,String(district.val()??""));
-    const submitControl=populated("button").filter((_,e)=>populated(e).text().trim()==="Submit").attr("onclick");
-    const event=/__doPostBack\('([^']+)'/.exec(submitControl??"")?.[1];
-    if(!event) throw new Error("Sarasota submit control unavailable");
-    submitForm.set("__EVENTTARGET",event);
-    html=await s.request("https://www.sarasotapropertyappraiser.gov/TaxEstimator/TaxEst.aspx",submitForm);
+    html=await s.request(url);
+    if(new URL(s.finalUrl).pathname!=="/TaxEstimator/TaxEstOut.aspx" || !/Total\s+Estimated\s+Ad\s+Valorem/i.test(pageText(html))) {
+      throw new Error(`Sarasota unavailable: HTTP ${s.status}, final URL ${s.finalUrl}, body ${/PurchasePriceTb|Tax Estimator Step 1/i.test(html)?"TaxEst.aspx input form":"missing TaxEstOut results"}`);
+    }
   } else if (county === "lee") {
     const folio = input.folioId || await resolveLeeFolio(parcelId,s);
     url = "https://www.leepa.org/taxestimator/default.aspx?FolioId="+encodeURIComponent(folio);

@@ -14,6 +14,7 @@ import {
 } from "./property-tax-service";
 import { calcAdValorem } from "./hillsborough-tax";
 import { PURCHASE_TAX_LOW_ASSESSMENT_RATIO } from "@shared/property-tax-policy";
+import { isCountyEstimatorVerified } from "../../shared/county-estimator-policy";
 
 const NOW = new Date("2026-08-21T12:00:00.000Z");
 const BILL_MILLS = [
@@ -34,6 +35,8 @@ test("purchase routes fail closed when no official county estimator is verified"
   ] as const;
 
   for (const county of counties) {
+    // Verified providers belong in the opt-in live matrix, not this gate test.
+    if(isCountyEstimatorVerified(county)) continue;
     const result = await getCountyPurchaseTax({
       county,
       address: "112 Palmetto Dunes Cir, Naples, FL 34113",
@@ -179,15 +182,15 @@ test("a cached Hillsborough millage is recomputed and the CDD stays flat", async
   assert.match(result.sourceLabel ?? "", /2026-08-01/);
 });
 
-test("unverified counties name why the official estimator is not shown", async () => {
+test("Manatee explains why purchase estimates remain unavailable", async () => {
   const polk = await getCountyPurchaseTax({
-    county: "sarasota",
-    address: "45098 Hwy 54, Lakeland, FL 33809",
+    county: "manatee",
+    address: "Bradenton, FL",
     purchasePrice: 400_000,
     isPrimaryResidence: true,
   });
   assert.equal(polk.annualTax, null);
-  assert.match(polk.operationalError ?? "", /not passed verification/);
+  assert.match(polk.operationalError ?? "", /no purchase-price input/);
   assert.equal(polk.breakdown?.total.cents, null);
 });
 

@@ -18,7 +18,7 @@ The purchase total always adds estimator AV (low end) to **bill** NAV.
 | Collier | Public-page browser, $750k HX / no HX | $6,370 / $6,714 | $269.77 | $6,639.77 / $6,983.77 |
 | Collier | Same parcel, $400k HX / no HX | $3,236 / $3,580 | $269.77 | $3,505.77 / $3,849.77 |
 | Hernando | Browser, $400k CWES HX / no HX | $5,110.14 / $5,661.16 | $159.17 | $5,269.31 / $5,820.33 |
-| Sarasota | HTTP session/form flow unresolved | **Unavailable**; expected $4,601 / $5,180 | $963.66 verified | **Unavailable** |
+| Sarasota | Same-session agreement POST then TaxEstOut GET, $400k HX / no HX | $4,601 / $5,180 | $963.66 | $5,564.66 / $6,143.66 |
 | Manatee | No purchase-price estimator | **Unavailable by design** | $1,743.56 verified | **Unavailable** |
 
 Polk's captured ranges were $5,696–$6,416 and $6,483–$7,203. Only the low end
@@ -60,16 +60,21 @@ variable `ENABLE_OFFICIAL_TAX_NIGHTLY=true` is set. Firecrawl cases require
 GitHub secrets. Browser live checks require both estimator flags set to `on`.
 The workflow supplies those flags, without changing application defaults.
 
-HCPA estimator checks are omitted from scheduled runs under the supplied
+HCPA and Sarasota estimator checks are omitted from scheduled runs under the supplied
 on-demand-only access guidance. They remain available for manual live checks.
 No workflow has been activated by merging or publishing.
 
-## Still unresolved
+## Sarasota correction
 
-Sarasota's agreement, parcel postback and populated form submission have not
-produced a tax-result response. It is not in the verified registry. Do not
-replace it with the sample amounts, current bills or a county-wide calculation.
-The complete live matrix therefore must not be reported as passing.
+Sarasota is now in the verified registry after live results matched both cases.
+The adapter posts the real I Agree event target with hidden fields, follows the
+redirect, then GETs TaxEstOut on the same session with a bare integer price.
+It never submits the TaxEst.aspx input form. Requests in that session are paced
+at least one second apart. Input-form bounces are unavailable, with HTTP status
+and final URL in the reason; missing results never become zero.
+
+Captured result-page fixtures verify assessed value $356,000, AV $4,601 / $5,180,
+tool NAV $1,141, tool totals $5,742 / $6,321, and composition with bill NAV $963.66.
 
 Signed-in refinance UI still needs authenticated visual verification; helper,
 rendered-markup and persistence-mapping tests do not replace that check.

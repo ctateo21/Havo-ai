@@ -28,8 +28,8 @@ for(const [county,purchasePrice,homestead,expected] of cases){
   const browser=["collier","hernando"].includes(county);
   test(`${county}: $${purchasePrice}, homestead ${homestead}`,{
     timeout:180000,
-    skip:county==="hillsborough"&&process.env.COUNTY_TAX_NIGHTLY==="1"
-      ? "HCPA on-demand only per supplied access guidance"
+    skip:["hillsborough","sarasota"].includes(county)&&process.env.COUNTY_TAX_NIGHTLY==="1"
+      ? "On-demand only per supplied county access guidance"
       : browser&&!process.env.FIRECRAWL_API_KEY ? "FIRECRAWL_API_KEY required" : false,
   },async()=>{
     const input={county,parcelId:parcels[county],purchasePrice,homestead,taxYear:2026,
