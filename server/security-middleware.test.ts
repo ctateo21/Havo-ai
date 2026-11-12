@@ -12,6 +12,7 @@ test("API security rejects foreign origins, applies headers and limits callers",
     assert.equal(bad.status,403);
     const good=await fetch(url,{method:"POST",headers:{Origin:"https://havofl.com"}});
     assert.equal(good.status,200);assert.equal(good.headers.get("x-content-type-options"),"nosniff");
+    assert.equal(good.headers.get("referrer-policy"),"strict-origin-when-cross-origin");
     assert.equal(good.headers.get("access-control-allow-origin"),"https://havofl.com");
     let status=200;for(let i=0;i<30;i++)status=(await fetch(url,{method:"POST"})).status;
     assert.equal(status,429);

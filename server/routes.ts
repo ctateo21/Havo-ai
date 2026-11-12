@@ -2581,8 +2581,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.json({ ok: true, smsEnabled: false, phoneVerified:false });
       }
     } catch (err: any) {
-      console.error("send-code error:", err);
-      res.status(500).json({ error: err.message || "Failed to send code" });
+      console.error("SMS verification delivery failed");
+      res.status(500).json({ error: "Unable to send a verification code. Please try again." });
     }
   });
 
@@ -2634,8 +2634,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ ok: true, phoneVerified:smsConfigured });
     } catch (err: any) {
-      console.error("verify error:", err);
-      res.status(400).json({ error: err.message || "Verification failed" });
+      console.error("Lead verification or persistence failed");
+      res.status(400).json({ error: "Unable to save this submission. Check your information and try again." });
     }
   });
 

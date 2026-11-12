@@ -6,6 +6,7 @@ export function installSecurity(app:Express) {
   app.disable("x-powered-by");
   app.set("trust proxy",1);
   app.use(helmet({contentSecurityPolicy:false,crossOriginEmbedderPolicy:false,
+    referrerPolicy:{policy:"strict-origin-when-cross-origin"},
     xFrameOptions:process.env.NODE_ENV==="production"?{action:"sameorigin"}:false}));
   // Same-origin API only; public GET resources remain usable without credentials.
   app.use("/api",(req,res,next)=>{
