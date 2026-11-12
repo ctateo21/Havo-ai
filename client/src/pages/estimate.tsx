@@ -5871,7 +5871,6 @@ export default function Estimate() {
               <div className="space-y-4">
                 <p className="text-xs">Based on debt-to-income only. Not a prequalification or approval. Confirm your income, debts, credit score and down payment before relying on the qualification indicator.</p>
                 <MortgageCompliance/>
-                <p className="text-xs">PMI is an adjustable planning estimate by credit and LTV, not a mortgage-insurance quote.</p>
 
                 {/* Property photo carousel — at the very top of the
                     detail/numbers page per spec. Photos come from the
