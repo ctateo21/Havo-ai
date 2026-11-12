@@ -7,7 +7,7 @@ CREATE TABLE public.insurance_quote_import_jobs (
  claimed_at timestamptz, created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE public.insurance_quote_import_jobs ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.insurance_quote_import_jobs FROM anon,authenticated;
+REVOKE ALL ON public.insurance_quote_import_jobs FROM PUBLIC,anon,authenticated;
 GRANT ALL ON public.insurance_quote_import_jobs TO service_role;
 COMMENT ON TABLE public.insurance_quote_import_jobs IS 'Private durable import outbox. Never expose, log or mirror to browsers. DOB is loaded from private profile at execution, never persisted here. Ambiguous imports require manual reconciliation, never reimport.';
 COMMIT;

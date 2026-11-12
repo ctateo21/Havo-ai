@@ -46,7 +46,7 @@ CREATE TRIGGER rebuild_rate_audit BEFORE UPDATE ON public.rebuild_cost_rates
 FOR EACH ROW EXECUTE FUNCTION public.audit_rebuild_rate_change();
 ALTER TABLE public.rebuild_cost_rates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.rebuild_cost_rate_audit ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.rebuild_cost_rates,public.rebuild_cost_rate_audit FROM anon,authenticated;
+REVOKE ALL ON public.rebuild_cost_rates,public.rebuild_cost_rate_audit FROM PUBLIC,anon,authenticated;
 GRANT ALL ON public.rebuild_cost_rates,public.rebuild_cost_rate_audit TO service_role;
 GRANT USAGE,SELECT ON SEQUENCE public.rebuild_cost_rate_audit_id_seq TO service_role;
 ALTER TABLE public.property_characteristics_cache ADD COLUMN field_sources jsonb NOT NULL DEFAULT '{}',

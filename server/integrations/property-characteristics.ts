@@ -1,5 +1,7 @@
 import { supabaseAdmin } from "../supabase";
 import { geocodeAddress } from "./geocode";
+import {queryFloodSources,type FloodResult} from "./fema-sources";
+import {getFloodState} from "./flood-rechecks";
 import {lookupDorBuilding,lookupHcpaBuilding,type FieldEvidence,type RoofPermit} from "./insurance-building-sources";
 import {
   normalizeParcelAddress,
@@ -301,54 +303,8 @@ export async function lookupFemaNfhl(
   latitude: number,
   longitude: number,
   fetchImpl: FetchImplementation = fetch,
-): Promise<{
-  floodZone: string | null;
-  floodZoneSubtype: string | null;
-  staticBfe: number | null;
-  sfha: boolean | null;
-  source: "fema-nfhl-layer-28";
-  dfirmId: string | null;
-}> {
-  if (
-    !Number.isFinite(latitude) || latitude < -90 || latitude > 90 ||
-    !Number.isFinite(longitude) || longitude < -180 || longitude > 180
-  ) {
-    throw new Error("Invalid coordinates for FEMA NFHL lookup");
-  }
-  const query = new URLSearchParams({
-    geometry: `${longitude},${latitude}`,
-    geometryType: "esriGeometryPoint",
-    inSR: "4326",
-    spatialRel: "esriSpatialRelIntersects",
-    outFields: "FLD_ZONE,ZONE_SUBTY,STATIC_BFE,SFHA_TF,DFIRM_ID",
-    returnGeometry: "false",
-    f: "json",
-  });
-  const response = await fetchImpl(`${FEMA_LAYER}/query?${query}`, {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; TateoApp/1.0)" },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
-  if (!response.ok) {
-    throw new Error(`FEMA NFHL request failed (${response.status})`);
-  }
-  const json = (await response.json()) as {
-    error?: { message?: string };
-    features?: Array<{ attributes?: Attributes }>;
-  };
-  if (json.error) throw new Error(json.error.message ?? "FEMA NFHL error");
-  const attributes = json.features?.[0]?.attributes;
-  const rawZone = text(attributes?.FLD_ZONE)?.toUpperCase() ?? null;
-  const floodZone =
-    rawZone && /^[A-Z0-9][A-Z0-9 .-]{0,31}$/.test(rawZone) ? rawZone : null;
-  const sfhaCode = text(attributes?.SFHA_TF)?.toUpperCase();
-  return {
-    floodZone,
-    floodZoneSubtype: text(attributes?.ZONE_SUBTY)?.toUpperCase() ?? null,
-    staticBfe: finiteNumber(attributes?.STATIC_BFE) != null && Number(attributes?.STATIC_BFE) > -9000 ? Number(attributes?.STATIC_BFE) : null,
-    dfirmId: text(attributes?.DFIRM_ID),
-    sfha: sfhaCode === "T" ? true : sfhaCode === "F" ? false : null,
-    source: "fema-nfhl-layer-28",
-  };
+): Promise<FloodResult> {
+  return queryFloodSources(latitude,longitude,{fetchImpl});
 }
 
 type ArcGisGeometry = { paths?: number[][][]; rings?: number[][][] };
@@ -768,7 +724,7 @@ export async function resolvePropertyCharacteristics(
     const cached = await cache.read(addressNormalized, now);
     if (
       cached &&
-      cached.fieldSources && Object.keys(cached.fieldSources).length
+      cached.buildingDataSource && cached.fieldSources && Object.keys(cached.fieldSources).length
     ) return { ...cached, fromCache: true };
   }
 
@@ -792,7 +748,8 @@ export async function resolvePropertyCharacteristics(
   let coast: Awaited<ReturnType<typeof lookupMilesToCoast>> | null = null;
   if (coordinates) {
     const [floodResult, coastResult] = await Promise.allSettled([
-      lookupFemaNfhl(coordinates.latitude, coordinates.longitude, fetchImpl),
+      options.fetchImpl?lookupFemaNfhl(coordinates.latitude,coordinates.longitude,fetchImpl):
+        getFloodState(address,{lat:coordinates.latitude,lng:coordinates.longitude,countyName:county}).then(state=>state.result),
       lookupMilesToCoast(coordinates.latitude, coordinates.longitude, fetchImpl),
     ]);
     if (floodResult.status === "fulfilled") flood = floodResult.value;
@@ -837,7 +794,7 @@ export async function resolvePropertyCharacteristics(
       }
     }catch{errors.push("Florida Dept. of Revenue tax roll unavailable");}
   }
-  if(flood?.floodZone)fieldSources.floodZone={value:flood.floodZone,source:"FEMA NFHL",sourceUrl:FEMA_LAYER,fetchedAt:now.toISOString()};
+  if(flood?.floodZone)fieldSources.floodZone={value:flood.floodZone,source:flood.sourceLabel,sourceUrl:flood.source,fetchedAt:flood.queriedAt};
 
   const expiresAt = new Date(now);
   const expiryDay = expiresAt.getUTCDate();

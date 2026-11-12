@@ -1014,6 +1014,7 @@ export default function InsuranceDashboard() {
     const addr = (address ?? "").trim();
     if (!addr) { setFloodZone(""); setFloodZoneSource(""); return; }
     let cancelled = false;
+    let floodPoll:ReturnType<typeof setTimeout>|undefined;
     const saved = getInsuranceScenarios().find(
       s => (s.address ?? "").trim().toLowerCase() === addr.toLowerCase(),
     );
@@ -1036,17 +1037,26 @@ export default function InsuranceDashboard() {
         const response = await authedFetch(`/api/flood-zone?address=${encodeURIComponent(addr)}`, { credentials: "include" });
         if (!response.ok) throw new Error("FEMA lookup failed");
         const result = await response.json();
+        if(cancelled||propertyCharacteristicLocksRef.current.floodZone)return;
+        if(result.status==="checking"){
+          setFloodZone("");setFloodZoneSource("Checking FEMA flood map…");
+          floodPoll=setTimeout(()=>void fallbackFlood(),20000);return;
+        }
+        if(result.status==="unavailable"){
+          setFloodZone("");setFloodZoneSource("Unavailable — select your zone or ask your agent");return;
+        }
         if (!result.zone && !result.floodZone) throw new Error("Missing zone");
         if (cancelled || propertyCharacteristicLocksRef.current.floodZone) return;
         const zone = String(result.zone || result.floodZone);
         const queriedAt = result.queriedAt || new Date().toISOString();
         setFloodZone(zone);
-        setFloodZoneSource(`FEMA National Flood Hazard Layer · Queried ${queriedAt}`);
+        setFloodZoneSource(`${result.source||"FEMA National Flood Hazard Layer"} · Queried ${queriedAt}`);
         setFieldSources(previous => ({ ...previous, floodZone: { value: zone, source: "FEMA National Flood Hazard Layer", sourceUrl: result.sourceUrl, fetchedAt: queriedAt } }));
       } catch {
         if (!cancelled && !propertyCharacteristicLocksRef.current.floodZone) {
           setFloodZone("");
-          setFloodZoneSource("Unavailable — FEMA lookup failed; select your zone or ask your agent");
+          setFloodZoneSource("Checking FEMA flood map…");
+          floodPoll=setTimeout(()=>void fallbackFlood(),20000);
         }
       }
     }
@@ -1061,7 +1071,7 @@ export default function InsuranceDashboard() {
         const zone = profile.fieldSources?.floodZone?.value ?? profile.floodZone;
         if (!locks.floodZone && typeof zone === "string" && zone) {
           setFloodZone(zone);
-          setFloodZoneSource(`FEMA National Flood Hazard Layer · Queried ${profile.queriedAt || profile.fieldSources?.floodZone?.fetchedAt || new Date().toISOString()}`);
+          setFloodZoneSource(`${profile.fieldSources?.floodZone?.source||"FEMA National Flood Hazard Layer"} · Queried ${profile.fieldSources?.floodZone?.fetchedAt || profile.queriedAt || new Date().toISOString()}`);
         }
         const built = profile.fieldSources?.yearBuilt?.value ?? profile.yearBuilt;
         if (!locks.yearBuilt && Number.isInteger(built) && built >= 1800) {
@@ -1094,7 +1104,7 @@ export default function InsuranceDashboard() {
         if (!zone) await fallbackFlood();
       })
       .catch(fallbackFlood);
-    return () => { cancelled = true; };
+    return () => { cancelled = true; if(floodPoll)clearTimeout(floodPoll); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address, user?.id]);
 
@@ -1725,7 +1735,6 @@ export default function InsuranceDashboard() {
     ...(!sqFtConfirmed || !Number.isFinite(squareFeet) || squareFeet <= 0 ? ["Confirm the living area square footage."] : []),
     ...(!constructionKnown ? ["Select or confirm a known construction type; the default is only assumed."] : []),
     ...(!Number.isFinite(rebuild) || rebuild <= 0 ? ["Enter Coverage A or confirm square footage and a configured rebuild rate."] : []),
-    ...(!floodZone.trim() && !floodZoneUnknown ? ["Select your flood zone or explicitly choose I don't know."] : []),
   ];
   useEffect(() => {
     if (qrPollRef.current) clearInterval(qrPollRef.current);
@@ -2055,7 +2064,7 @@ export default function InsuranceDashboard() {
               : {}),
             aopDeductible,
             floodZone,
-            floodZoneUnknown,
+            floodZoneUnknown:floodZoneUnknown||!floodZone.trim(),
             sqFt: squareFeet,
             sqFtConfirmed: true,
             assumedCredit: "Excellent (no credit check performed)",
@@ -2616,7 +2625,7 @@ export default function InsuranceDashboard() {
                   onFloodZoneUnknownChange={unknown => {
                     propertyCharacteristicLocksRef.current.floodZone = true;
                     setFloodZoneUnknown(unknown);
-                    if (unknown) { setFloodZone(""); setFloodZoneSource("Unknown — ask your agent to verify."); }
+                    if (unknown) { setFloodZone(""); setFloodZoneSource("Zone omitted — ask your agent to verify."); }
                   }}
                   roofYear={roofYear}
                   onRoofYearChange={value => { manualRoofYear.current = true; setRoofYear(value); }}
@@ -2772,6 +2781,7 @@ export default function InsuranceDashboard() {
                 </CardHeader>
                 <CardContent className="pt-0">
                   <p className="mb-3 text-xs text-muted-foreground">Assumed credit: {assumedCreditScore} (no credit check performed).</p>
+                  {user&&<a className="text-xs underline" href="/admin/rebuild-cost-rates">Rebuild rates (admin only)</a>}
                   {quoteValidationMessages.length > 0 && <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950" aria-label="Required quote information"><strong>Before sending to carriers</strong><ul className="mt-2 list-disc space-y-1 pl-4">{quoteValidationMessages.map(message => <li key={message}>{message}</li>)}</ul></div>}
                   <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50/60 p-3 text-xs leading-relaxed text-blue-950">
                     {qrSharedContext && qrResultsEpoch === quoteEpochRef.current ? (

@@ -142,7 +142,7 @@ test("only confirmed living area computes Coverage A; manual value stays locked"
 
 test("HTTP profile failure falls back to FEMA; failed FEMA permits explicit unknown", async ({ page }) => {
   const calls = await fixture(page, { profileFailure: true, floodFailure: true });
-  await expect(page.getByText("Unavailable — FEMA lookup failed; select your zone or ask your agent")).toBeVisible();
+  await expect(page.getByText("Checking FEMA flood map…")).toBeVisible();
   await expect(page.getByTestId("input-year-built")).toHaveValue("");
   await expect(page.getByTestId("input-roof-year")).toHaveValue("");
   await page.getByLabel("I don't know my flood zone — ask my agent to verify.").check();

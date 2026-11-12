@@ -46,12 +46,15 @@ test("FEMA lookup uses validated NFHL layer 28 fields and parses attributes", as
       }],
     }));
   };
-  assert.deepEqual(await lookupFemaNfhl(25.94, -81.73, fetchImpl), {
+  const {queriedAt,...result}=await lookupFemaNfhl(25.94,-81.73,fetchImpl);
+  assert.ok(Number.isFinite(Date.parse(queriedAt)));
+  assert.deepEqual(result, {
     floodZone: "AE",
     floodZoneSubtype: "COASTAL FLOODPLAIN",
     staticBfe: 9,
     sfha: true,
-    source: "fema-nfhl-layer-28",
+    source: "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28",
+    sourceLabel:"FEMA National Flood Hazard Layer",
     dfirmId:null,
   });
 });

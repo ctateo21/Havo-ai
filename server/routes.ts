@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { geocodeAddress } from "./integrations/geocode";
+import {getFloodState,startFloodRechecks} from "./integrations/flood-rechecks";
 import {registerRebuildCostRoutes} from "./rebuild-cost-routes";
 import {quoteAnswerIdentity,canReuseAnsweredQuote,issueQuoteAccess,verifyQuoteAccess} from "./integrations/quote-answer-identity";
 import {enqueueInsuranceImport,registerQuoteCallbackAndImports} from "./integrations/quoterush-import-jobs";
@@ -131,6 +132,7 @@ import {
 export async function registerRoutes(app: Express): Promise<Server> {
   registerInterestRoutes(app);
   registerRebuildCostRoutes(app);
+  startFloodRechecks();
   app.get("/api/insurance/quote-assumptions",(_req,res)=>res.json({assumedCreditScore:process.env.QUOTERUSH_ASSUMED_CREDIT_SCORE||"Excellent"}));
   registerQuoteCallbackAndImports(app,async(row,params,reason)=>createFollowUpBossContact({
     firstName:params.firstName??"",lastName:params.lastName??"",email:row.emailRecipient??"",
@@ -401,8 +403,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const geo = await geocodeAddress(address);
       if (!geo) return res.status(404).json({ error: "Unavailable — address could not be verified" });
       const { lat, lng } = geo;
-      const flood = await lookupFemaNfhl(lat,lng);
-      if (!flood.floodZone) return res.status(404).json({ error: "Unavailable — FEMA lookup failed; select your zone or ask your agent" });
+      const state=await getFloodState(address,geo);
+      if(!state.result)return res.json({status:state.status,zone:null,message:state.status==="checking"?"Checking FEMA flood map…":"Unavailable — select your zone or ask your agent"});
+      const flood = state.result;
       const zone = flood.floodZone;
       const subtype = flood.floodZoneSubtype ?? "";
 
@@ -414,7 +417,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         subtype.includes("MINIMAL");
 
       const data = { zone, subtype, requiresFloodInsurance: !isLowRisk, lat, lng,
-        source: "FEMA NFHL", queriedAt: new Date().toISOString(), sfha: flood.sfha,
+        status:"available",source: flood.sourceLabel,sourceUrl:flood.source, queriedAt: flood.queriedAt, sfha: flood.sfha,
         staticBfe: flood.staticBfe, dfirmId: flood.dfirmId };
       _floodCache.set(cacheKey, { data, ts: Date.now() });
       return res.json(data);
