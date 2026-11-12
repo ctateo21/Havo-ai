@@ -131,6 +131,7 @@ import {
 export async function registerRoutes(app: Express): Promise<Server> {
   registerInterestRoutes(app);
   registerRebuildCostRoutes(app);
+  app.get("/api/insurance/quote-assumptions",(_req,res)=>res.json({assumedCreditScore:process.env.QUOTERUSH_ASSUMED_CREDIT_SCORE||"Excellent"}));
   registerQuoteCallbackAndImports(app,async(row,params,reason)=>createFollowUpBossContact({
     firstName:params.firstName??"",lastName:params.lastName??"",email:row.emailRecipient??"",
     phone:params.phone??"",address:row.addressDisplay,source:"havofl.com - INSURANCE LIVE QUOTE",
@@ -1489,7 +1490,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               leadId: row.leadId,
               quoteAccessToken:issueQuoteAccess(row,user.id),
               fromCache: true,
-              quotes: topThreePositiveQuotes(row.quotes),
+              quotes: topThreePositiveQuotes(row.quotes).map(q=>({...q,quoteUrl:row.ownerUserId===user.id?q.quoteUrl:null})),
               quoteCounter: row.quoteCounter,
               expiresAt: row.expiresAt,
               propertyDataSnapshot: row.propertyDataSnapshot ?? {},
@@ -2038,7 +2039,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           status: cacheLead.status === "failed" || cacheLead.status === "error"
             ? "error"
             : cacheLead.status,
-          quotes: topThreePositiveQuotes(cacheLead.quotes as any),
+          quotes: topThreePositiveQuotes(cacheLead.quotes as any).map(q=>({...q,quoteUrl:cacheLead.ownerUserId===user.id?q.quoteUrl:null})),
           leadId: cacheLead.leadId ?? leadId,
           quoteCounter: cacheLead.quoteCounter ?? 0,
           respondedCarriers:cacheLead.quoteCounter??0,
@@ -2112,7 +2113,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         res.json({
           ...result,
-          quotes: topThreePositiveQuotes(result.quotes as any),
+          quotes: topThreePositiveQuotes(result.quotes as any).map(q=>({...q,quoteUrl:cacheLead.ownerUserId===user.id?q.quoteUrl:null})),
         });
       } catch (err: any) {
         console.error("[qr-refresh] error:", err);

@@ -151,7 +151,7 @@ export function registerInsuranceCacheRoutes(
         expired: row.expiresAt < new Date(),
         status: row.status === "failed" ? "error" : row.status,
         leadId: row.leadId,
-        quotes: topThreePositiveQuotes(row.quotes),
+        quotes: topThreePositiveQuotes(row.quotes).map(q=>({...q,quoteUrl:row.ownerUserId===user.id?q.quoteUrl:null})),
         quoteCounter: row.quoteCounter ?? 0,
         coverageA: row.coverageA ?? 0,
         propertyDataSnapshot: row.propertyDataSnapshot ?? {},

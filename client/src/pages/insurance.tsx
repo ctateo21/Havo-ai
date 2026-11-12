@@ -1112,6 +1112,15 @@ export default function InsuranceDashboard() {
       .catch(error => { if (!cancelled) setRateError(error.message); });
     return () => { cancelled = true; };
   }, [address, user?.id, rateRetry]);
+  const [assumedCreditScore,setAssumedCreditScore]=useState("Excellent");
+  useEffect(()=>{
+    let active=true;
+    fetch("/api/insurance/quote-assumptions").then(async r=>{
+      if(!r.ok)throw Error("Assumptions unavailable");
+      const data=await r.json();if(active)setAssumedCreditScore(data.assumedCreditScore||"Excellent");
+    }).catch(()=>{if(active)setAssumedCreditScore("Unavailable");});
+    return()=>{active=false;};
+  },[]);
   const costPerSqFt = constIdx === 2 ? rebuildRate?.frame_cost_per_sqft
     : constIdx === 0 || constIdx === 1 ? rebuildRate?.masonry_cost_per_sqft : null;
   const constructionKnown = [0, 1, 2].includes(constIdx) &&
@@ -2762,7 +2771,7 @@ export default function InsuranceDashboard() {
                   </div>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  <p className="mb-3 text-xs text-muted-foreground">Assumed credit: Excellent (no credit check performed).</p>
+                  <p className="mb-3 text-xs text-muted-foreground">Assumed credit: {assumedCreditScore} (no credit check performed).</p>
                   {quoteValidationMessages.length > 0 && <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950" aria-label="Required quote information"><strong>Before sending to carriers</strong><ul className="mt-2 list-disc space-y-1 pl-4">{quoteValidationMessages.map(message => <li key={message}>{message}</li>)}</ul></div>}
                   <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50/60 p-3 text-xs leading-relaxed text-blue-950">
                     {qrSharedContext && qrResultsEpoch === quoteEpochRef.current ? (
@@ -2819,7 +2828,7 @@ export default function InsuranceDashboard() {
                     ) : (
                       <>
                     <strong>New live quote requests use:</strong>{" "}
-                    roof installed {roofYear}, home built {yearBuilt},{" "}
+                    roof installed {roofYear > 0 ? roofYear : "Unavailable — please enter"}, home built {yearBuilt > 0 ? yearBuilt : "Unavailable — please enter"},{" "}
                     {openingProtectionIdx === 1
                       ? "impact protection"
                       : "no impact protection"}
