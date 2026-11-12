@@ -9,7 +9,9 @@ test("private endpoints reject guests and OTP never exposes a code",async({reque
 });
 test("registration consent is optional and unchecked; zoom and address labels remain accessible",async({page})=>{
   await page.goto("/");
-  await expect(page.getByRole("combobox",{name:"Florida property address"})).toBeVisible();
+  // The native labeled input is accessible before the optional Maps library
+  // upgrades it to a combobox; CI intentionally has no real provider key.
+  await expect(page.getByLabel("Florida property address")).toBeVisible();
   expect(await page.locator('meta[name="viewport"]').getAttribute("content")).not.toContain("maximum-scale");
   await page.getByRole("button",{name:/Log In/i}).first().click();
   await page.getByRole("tab",{name:"Create Account"}).click();

@@ -77,3 +77,19 @@ Documented importer aliases are sent alongside old keys; actual provider
 acceptance of both aliases and the real callback payload shape still require an
 authorized carrier integration test. A callback missing the matching LeadId or
 token is rejected, not guessed.
+
+## CI blocker found on the unchanged base branch
+GitHub includes nine cash-buy browser tests that are absent from this workspace.
+They expect an official-estimator cash-buy UI, including `cash-buy-property-taxes`,
+that the unchanged PR #9 cash-buy page does not implement. The remote base also
+contains an unused cash-buy tax helper and its tests. These were retained, not
+deleted or excluded to make CI green. Resolving that mismatch requires separate
+property-tax work, outside this insurance request's explicit scope.
+
+The additional CI-only accessibility failure was a test setup issue: without a
+real Google Maps key, the labeled homepage input is not upgraded to a combobox.
+Its test now checks the accessible label rather than requiring the optional
+third-party upgrade. No address-input behavior was changed.
+
+The migration that changes quote-cache uniqueness must be coordinated with the
+application rollout; do not apply it independently to a running older version.
