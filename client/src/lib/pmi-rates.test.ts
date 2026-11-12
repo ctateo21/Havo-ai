@@ -1,11 +1,24 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {conventionalPmiMonthly,PMI_RATE_TABLE} from "../../../shared/pmi-rates";
+import {readFileSync} from "node:fs";
 import {calculateRefinance,calculateMonthlyPayment} from "./refi-calculations";
-for(const row of PMI_RATE_TABLE)test(`PMI decreases with 3/5/10/15/20% down at credit ${row.minCredit}`,()=>{
-  const values=[.03,.05,.10,.15,.20].map(d=>conventionalPmiMonthly(400000*(1-d),400000,row.minCredit));
-  for(let i=1;i<values.length;i++)assert.ok(values[i]<values[i-1]);
-  assert.equal(values[4],0);
+const source=readFileSync(new URL("../pages/estimate.tsx",import.meta.url),"utf8");
+const body=source.match(/function calcConventionalPMI\([^]*?\n\}/)![0]
+  .replace(/: number/g,"");
+const conventionalPmiMonthly=new Function("CONVENTIONAL_MIN_FICO",`return (${body});`)(620);
+for(const [credit,factor] of [[760,.0019],[740,.0029],[720,.0036],[700,.0045],[680,.0061],[660,.0098],[640,.0104],[620,.0117]])
+test(`original credit-only PMI factor at score ${credit}`,()=>{
+  for(const down of [.03,.05,.10,.15]){
+    const loan=400000*(1-down);
+    assert.equal(conventionalPmiMonthly(loan,400000,credit),loan*factor/12);
+    assert.equal(conventionalPmiMonthly(loan,400000,credit+19),loan*factor/12);
+  }
+  assert.equal(conventionalPmiMonthly(320000,400000,credit),0);
+});
+test("PMI eligibility and 80% cutoff remain unchanged",()=>{
+  assert.equal(conventionalPmiMonthly(380000,400000,619),0);
+  assert.equal(conventionalPmiMonthly(300000,400000,780),0);
+  assert.equal(conventionalPmiMonthly(320001,400000,780),320001*.0019/12);
 });
 test("refinance exposes a matched remaining-term comparison",()=>{
   const r=calculateRefinance({appraisedValue:500000,loanBalance:300000,currentInterestRate:7,newInterestRate:6,currentTermRemainingYears:18,newLoanTermYears:30,closingCostsPercent:0,closingCostsFixed:0,includeClosingCostsInLoan:false,refinanceType:"rate_and_term"});

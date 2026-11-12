@@ -2,7 +2,6 @@ import { useMemo, useState, useRef, useEffect, useCallback, type ReactNode } fro
 import ScenarioActions from "@/components/scenario-actions";
 import { officialTaxRequestKey, parseOfficialPropertyTaxResponse, resolvePurchasePropertyTaxSource } from "@/lib/official-property-tax";
 import { purchaseHomestead } from "@shared/purchase-homestead";
-import {conventionalPmiMonthly} from "@shared/pmi-rates";
 import {MortgageCompliance} from "@/components/mortgage-compliance";
 import type { OfficialTaxBreakdown } from "@shared/official-tax";
 import { OfficialTaxDisclosure } from "@/components/official-tax-disclosure";
@@ -156,7 +155,19 @@ function clampDownPaymentPct(pct: number, min: number): number {
  *  dollars; $0 when LTV ≤ 80% or when the score is below the program
  *  minimum (in which case Conventional shouldn't be selectable anyway). */
 function calcConventionalPMI(loanAmount: number, purchasePrice: number, creditScore: number): number {
-  return conventionalPmiMonthly(loanAmount,purchasePrice,creditScore);
+  const ltv = loanAmount / purchasePrice;
+  if (ltv <= 0.8) return 0;
+  if (creditScore < CONVENTIONAL_MIN_FICO) return 0;
+  let annualFactor: number;
+  if      (creditScore >= 760) annualFactor = 0.0019;
+  else if (creditScore >= 740) annualFactor = 0.0029;
+  else if (creditScore >= 720) annualFactor = 0.0036;
+  else if (creditScore >= 700) annualFactor = 0.0045;
+  else if (creditScore >= 680) annualFactor = 0.0061;
+  else if (creditScore >= 660) annualFactor = 0.0098;
+  else if (creditScore >= 640) annualFactor = 0.0104;
+  else                         annualFactor = 0.0117; // 620–639
+  return (loanAmount * annualFactor) / 12;
 }
 
 function calcFHAMIP(loanAmount: number): number {

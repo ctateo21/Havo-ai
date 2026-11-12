@@ -23,7 +23,8 @@ premium or flood calculation changes. Do not publish without approval.
   https://www.hud.gov/sites/dfiles/FHEO/images/fheo100.gif
   (converted to PNG), lender disclosures in result/worksheet and PDF footer.
 - DTI-only badge disclaimer; qualification requires confirmed inputs.
-- Adjustable LTV/credit PMI table and matched-remaining-term refi comparison.
+- Original credit-score-only PMI factors restored unchanged at the user's request;
+  the illustrative LTV table was removed. Matched-remaining-term refi comparison retained.
 - Cost-tool Open Graph graphic, zoom, homepage input label, sitemap/404 and
   eight-character password validation in application forms.
 
@@ -45,12 +46,9 @@ premium or flood calculation changes. Do not publish without approval.
 ## External settings / limitations
 - Google Maps HTTP-referrer restrictions must be verified/applied in Google
   Cloud; no authorized Google Cloud configuration connection is available.
-- Supabase Auth's own minimum-password setting must also be set to eight.
-  Application forms enforce eight, but provider API policy is separate.
-- PMI rates are explicitly illustrative planning assumptions, preserving the
-  prior 95% LTV credit factors and increasing with LTV. They are NOT represented
-  as a verified 2026 insurer rate card. Agency-approved card values are needed
-  before describing them as carrier-specific pricing.
+- Supabase Auth provider-level password policy is explicitly out of scope at
+  the user's request; no provider change is needed. Application form validation
+  remains unchanged.
 - OTP/rate-limit stores are per process. A restart invalidates outstanding
   OTPs safely, and multi-instance limits are not globally coordinated.
 - Consent controls new application CRM dispatches; existing FUB campaigns
