@@ -62,15 +62,38 @@ async function taxSysBill(county: CountySlug, parcel: string, year: number, cach
       const account = ${JSON.stringify(query)};
       const normalize = s => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
       const buttons = page.getByRole('button', {name:'View',exact:true});
-      let selected = null;
+      await buttons.first().waitFor({state:'visible',timeout:30000});
+      const matches = [];
       for (const button of await buttons.all()) {
-        const card = button.locator('xpath=..');
-        const text = await card.innerText();
-        if (normalize(text).includes(normalize(account))) { selected = button; break; }
+        let card = button;
+        for(let depth=0;depth<8;depth++){
+          card = card.locator('xpath=..');
+          const count=await card.getByRole('button',{name:'View',exact:true}).count();
+          if(count>1) break;
+          const text = await card.innerText();
+          if (normalize(text).includes(normalize(account)) && !/tangible/i.test(text)) { matches.push(button); break; }
+        }
       }
-      if (!selected) throw new Error('Matching real-estate account not found');
-      await Promise.all([page.waitForURL('**/property-tax/*'), selected.click()]);
-      console.log(JSON.stringify({url:page.url()}));
+      if(matches.length===0) {
+        const exact=page.getByText(account,{exact:true});
+        if(await exact.count()===1) {
+          const following=exact.locator('xpath=following::button[normalize-space(.)="View"][1]');
+          if(await following.count()===1) matches.push(following);
+        }
+      }
+      if (matches.length!==1) throw new Error('Exactly one matching real-estate account is required');
+      const selected=matches[0];
+      // County notification overlays can cover a correctly matched result.
+      // Activate that exact button, then independently validate its account URL.
+      const popup=page.waitForEvent('popup',{timeout:30000}).then(async p=>{await p.waitForLoadState('domcontentloaded');return p.url();}).catch(()=>null);
+      const navigation=page.waitForURL('**/property-tax/*',{waitUntil:'domcontentloaded',timeout:30000}).then(()=>page.url()).catch(()=>null);
+      const notifications=page.getByRole('button',{name:/^Notifications/});
+      if(await page.locator('[data-test^="notification-id-"]:visible').count()>0 && await notifications.count()===1) await notifications.dispatchEvent('click');
+      await selected.click();
+      const targets=await Promise.all([popup,navigation]);
+      const target=targets.find(Boolean);
+      if(!target) throw new Error('Collector View button did not open an account');
+      console.log(JSON.stringify({url:target}));
     `);
     url = browserOutput(result).url;
     assertRealEstateAccount(url, county);
@@ -188,5 +211,6 @@ async function directBill(county: CountySlug, parcel: string, year: number, addr
   return {...parseCollectorHtml(html,year),url,fetchedAt:new Date().toISOString(),situsAddress};
 }
 export function fetchOfficialBill(county: CountySlug, parcel: string, year: number, cachedUrl?: string,address?:string): Promise<OfficialBill> {
+  if(county==="lee" && /^\d{17}$/.test(parcel)) parcel=parcel.replace(/^(\d{2})(\d{2})(\d{2})(\d{2})(\d{5})(\d{4})$/,"$1-$2-$3-$4-$5.$6");
   return ["pinellas","polk","manatee"].includes(county) ? directBill(county,parcel,year,address) : taxSysBill(county,parcel,year,cachedUrl);
 }

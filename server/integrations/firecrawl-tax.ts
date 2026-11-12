@@ -1,4 +1,5 @@
 /** One shared queue covers scrapes and complete browser sessions, including cleanup. */
+import { Script } from "node:vm";
 let active = 0;
 const waiters: (() => void)[] = [];
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -42,6 +43,8 @@ async function scrape(url: string) {
 }
 export const scrapeTaxPage = (url: string) => limited(() => scrape(url));
 export async function interactTaxPage(url: string, code: string): Promise<any> {
+  // Fail before spending credits if a generated browser script is malformed.
+  new Script(`(async () => { ${code}\n })()`);
   return limited(async () => {
     const start = await scrape(url);
     const id = start.metadata.scrapeId;

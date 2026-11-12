@@ -18,6 +18,11 @@ export interface EstimatorOutput {
   exemptionSchedule?: Record<string, number>;
 }
 const now = () => new Date().toISOString();
+export function parseLeeTaxResponse(data:any,homestead:boolean):number {
+  const value=data?.[homestead?"TaxesWithHomestead":"EstimatedTaxes"];
+  if(value===null || value===undefined) throw new Error("Lee estimator tax missing");
+  return moneyCents(String(value));
+}
 export function pinellasEstimatorStrap(parcel: string): string {
   const parts = parcel.split("-");
   if (parts.length !== 6) throw new Error("Pinellas parcel format unavailable");
@@ -119,9 +124,24 @@ export async function directEstimator(input: EstimatorInput): Promise<EstimatorO
       if (!postback) throw new Error("Sarasota agreement control unavailable");
       form.set("__EVENTTARGET",postback[1]); form.set("__EVENTARGUMENT",postback[2]);
     }
-    await s.request(agreement,form);
+    html = await s.request(agreement,form);
+    // The current county form initializes parcel context on its strap postback.
+    // Agreement alone redirects to the empty form without creating that context.
+    const parcelForm = webForm(html,{PurchasePropertyStrapTb:parcelId});
+    const parcelControl=load(html)('[name$="$PurchasePropertyStrapTb"]').attr("name");
+    if(!parcelControl) throw new Error("Sarasota parcel lookup form unavailable");
+    parcelForm.set("__EVENTTARGET",parcelControl);
+    html=await s.request("https://www.sarasotapropertyappraiser.gov/TaxEstimator/TaxEst.aspx",parcelForm);
     url = "https://www.sarasotapropertyappraiser.gov/TaxEstimator/TaxEstOut.aspx?"+new URLSearchParams({input_address:"",address_from_strap:address,year_acquired:String(year),strap_from_address:"",input_strap:parcelId,address_street:address,mill_code:"",jurisdiction:"",price:String(price),transfer_port:"False",will_homestead:hx?"True":"False",port_address:"",year_sold:String(year),port_strap:"",port_address_street:"",just:"0",assessed:"0"});
-    html = await s.request(url);
+    const populated=load(html);
+    const submitForm=webForm(html,{PurchasePropertyStrapTb:parcelId,YearOfPurchaseDdl:String(year),PurchasePriceTb:"$"+price.toLocaleString("en-US"),PortabilityRbg:"PortabilityNoRb",HomesteadExemptionRbg:hx?"HomesteadExemptionRb":"NoHomesteadExemptionRb"});
+    const district=populated('[name$="$CityMuniDdl"]');
+    if(district.attr("name")) submitForm.set(district.attr("name")!,String(district.val()??""));
+    const submitControl=populated("button").filter((_,e)=>populated(e).text().trim()==="Submit").attr("onclick");
+    const event=/__doPostBack\('([^']+)'/.exec(submitControl??"")?.[1];
+    if(!event) throw new Error("Sarasota submit control unavailable");
+    submitForm.set("__EVENTTARGET",event);
+    html=await s.request("https://www.sarasotapropertyappraiser.gov/TaxEstimator/TaxEst.aspx",submitForm);
   } else if (county === "lee") {
     const folio = input.folioId || await resolveLeeFolio(parcelId,s);
     url = "https://www.leepa.org/taxestimator/default.aspx?FolioId="+encodeURIComponent(folio);
@@ -137,9 +157,7 @@ export async function directEstimator(input: EstimatorInput): Promise<EstimatorO
     if (price < read("minSalePrice") || price > read("maxSalePrice")) throw new Error("Purchase price outside Lee estimator range");
     const result = JSON.parse(await s.request("https://www.leepa.org/taxestimator/TaxEstimationService.asmx/CalculateTaxes",JSON.stringify({salePrice:String(price),oldAssessed:"0",oldMarket:"0",actualMillage:String(actual),schoolMillage:String(school)}),true)).d;
     const data = typeof result==="string" ? JSON.parse(result) : result;
-    const value = data?.[hx?"TaxesWithHomestead":"EstimatedTaxes"];
-    if (value===null || value===undefined) throw new Error("Lee estimator tax missing");
-    return {adValoremCents:moneyCents(String(value)),estimatorNavCents:null,url,fetchedAt:now(),snapshot:JSON.stringify(data),schoolMills:school,nonSchoolMills:actual-school,assessmentRatio:.9,exemptionSchedule:{homestead_school:25000,homestead_non_school:50000}};
+    return {adValoremCents:parseLeeTaxResponse(data,hx),estimatorNavCents:null,url,fetchedAt:now(),snapshot:JSON.stringify(data),schoolMills:school,nonSchoolMills:actual-school,assessmentRatio:.9,exemptionSchedule:{homestead_school:25000,homestead_non_school:50000}};
   } else throw new Error("Manatee PAO estimator has no purchase-price input (current-roll only)");
   return {...parseEstimatorPage(county,html),url,fetchedAt:now()};
 }

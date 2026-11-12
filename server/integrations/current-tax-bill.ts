@@ -249,7 +249,7 @@ export async function resolveCurrentTaxBill(
   if (!options.resolveParcelFn && !options.getBillFn) {
     const { officialParcelTax } = await import("./official-tax-pipeline");
     const { currentBillYear } = await import("./official-tax-cache");
-    const collectorParcel = county === "hillsborough" ? identity.folio : parcelId;
+    const collectorParcel = ["hillsborough","hernando"].includes(county) ? identity.folio : parcelId;
     if (!collectorParcel) return {state:"unavailable",manualEntryRequired:true,county,reason:"Collector parcel identifier missing"};
     const breakdown = await officialParcelTax({county,parcelId:collectorParcel,address,purchasePrice:0,homestead:false,taxYear:currentBillYear(now)},true);
     if (breakdown.total.cents === null) return {state:"unavailable",manualEntryRequired:true,county,reason:breakdown.total.reason || "Current official bill unavailable",breakdown};

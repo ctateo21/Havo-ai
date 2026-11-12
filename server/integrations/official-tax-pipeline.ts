@@ -57,7 +57,7 @@ export async function officialPurchaseTax(params: {county:CountySlug;address:str
     return {adValoremTax:null,nonAdValoremTax:null,annualTax:null,monthlyTax:null,source:`${params.county}-county-estimator-unavailable`,fromGeneralCache:false,breakdown,operationalError:reason,nonAdValoremPending:false,nonAdValoremLines:[]};
   }
   const identity=await resolveParcel(params.county,params.address);
-  const parcelId=params.county==="hillsborough" ? identity.folio : identity.parcelId;
+  const parcelId=["hillsborough","hernando"].includes(params.county) ? identity.folio : identity.parcelId;
   const breakdown=identity.status==="found" && parcelId
     ? await officialParcelTax({county:params.county,parcelId,address:params.address,purchasePrice:params.purchasePrice,homestead:params.isPrimaryResidence,taxYear:currentBillYear(),taxDistrict:identity.taxDistrict||undefined,folioId:params.county==="lee"?identity.folio||undefined:undefined})
     : composeOfficialTax({cents:null,reason:"County parcel identity could not be verified"},{cents:null,reason:"Collector parcel identity could not be verified"});

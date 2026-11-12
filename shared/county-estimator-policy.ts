@@ -4,7 +4,7 @@
  * its live runner has matched that answer.
  */
 export const ESTIMATOR_VERIFIED_COUNTIES = Object.freeze(
-  ["hillsborough","pinellas","pasco","polk"] as string[],
+  ["hillsborough","pinellas","pasco","polk","lee"] as string[],
 );
 
 /**

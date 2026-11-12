@@ -23,7 +23,7 @@ export interface OfficialTaxBreakdown {
 export const COUNTY_TAX_WARNINGS: Record<string, string> = {
   pasco: "Pasco's estimator applies a $150,000 non-school homestead exemption (likely the 2027 Amendment 3 amount); the 2026 bill uses $51,411 ($25,000 + $26,411).",
   lee: "Lee's estimator uses a flat $50,000 homestead exemption and prior-year millage; it excludes non-ad valorem.",
-  hernando: "Hernando's estimator excludes special assessments; its county-portion breakdown has an internal inconsistency.",
+  hernando: "Hernando's estimator excludes special assessments. Its county-portion breakdown is inconsistent: at $400,000 with homestead, the county line shows 6.697 mills / $2,343.95 while the breakdown sums to 7.369 mills / $2,579.15. The county-published overall total is retained, not recomputed.",
 };
 export function composeOfficialTax(adValorem: TaxPart, nonAdValorem: TaxPart, warnings: string[] = []): OfficialTaxBreakdown {
   const valid = (n: number | null) => n !== null && Number.isSafeInteger(n) && n >= 0;
