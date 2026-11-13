@@ -49,6 +49,13 @@ test("each quote type gets one address-bound run; signed-in requests bypass the 
         assert.equal((await fetch(base+"/api/ami?address="+encodeURIComponent(formatted),{headers})).status,200);
         assert.equal((await fetch(base+"/api/ami?address="+encodeURIComponent(formatted))).status,401);
         assert.equal((await post("/api/property-tax/hillsborough",{address:"999 Other Street, Tampa FL 33607",addressOrUrl:formatted,location:formatted})).status,401,"extraneous fields cannot bypass the address check");
+        for(const [path,field] of [
+          ["/api/properties/search/","location"],["/API/PROPERTIES/SEARCH","location"],
+          ["/api/zillow-property-lookup/","addressOrUrl"],["/API/zillow-property-lookup","addressOrUrl"],
+        ]){
+          assert.equal((await post(path,{address:formatted,[field]:"999 Other Street, Tampa FL 33607"})).status,401,path);
+          assert.equal((await post(path,{address:"999 Other Street, Tampa FL 33607",[field]:formatted})).status,200,path);
+        }
         assert.equal((await post("/api/fub/showing-request",{})).status,401);
         assert.equal((await fetch(base+"/api/fub/showing-request",{method:"POST",headers:{...headers,Authorization:"Bearer valid-test-session"},body:"{}"})).status,200);
       }

@@ -85,19 +85,21 @@ export function registerAnonymousQuoteRoutes(app:Express,authenticate=authentica
     return res.json({allowed:true,...parsed.data});
   });
   // Lookups remain address-bound. A client-side localStorage flag is never auth.
-  app.use([
-    "/api/property-tax/quick","/api/property-tax/county",
-    "/api/refinance/property-tax/current","/api/flood-zone",
-    "/api/property-tax/hillsborough","/api/zillow-property-lookup",
-    "/api/ami","/api/properties/lookup-by-address","/api/properties/zestimate",
-    "/api/properties/search",
-  ],rateLimit({windowMs:60_000,limit:40,standardHeaders:"draft-7",legacyHeaders:false}),async(req,res,next)=>{
+  const lookupLimiter=rateLimit({windowMs:60_000,limit:40,standardHeaders:"draft-7",legacyHeaders:false});
+  const guardedLookups: Array<[string,(req:Request)=>unknown]> = [
+    ...["/api/property-tax/quick","/api/property-tax/county","/api/refinance/property-tax/current",
+      "/api/property-tax/hillsborough","/api/properties/lookup-by-address","/api/properties/zestimate"]
+      .map(path=>[path,(req:Request)=>req.body?.address] as [string,(req:Request)=>unknown]),
+    ["/api/flood-zone",req=>req.query.address],
+    ["/api/ami",req=>req.query.address],
+    ["/api/zillow-property-lookup",req=>req.body?.addressOrUrl],
+    ["/api/properties/search",req=>req.body?.location],
+  ];
+  // Express owns case/trailing-slash matching. Each matched route closes over
+  // its handler's actual field; never infer the field from a raw URL string.
+  for(const [path,addressFor] of guardedLookups)app.use(path,lookupLimiter,async(req,res,next)=>{
     if(await authenticate(req))return next();
-    const path=req.originalUrl.split("?")[0];
-    const address=path.startsWith("/api/zillow-property-lookup")?req.body?.addressOrUrl
-      :path==="/api/properties/search"?req.body?.location
-      :req.method==="GET"?req.query.address:req.body?.address;
-    if(hasAnonymousQuoteFor(req,address))return next();
+    if(hasAnonymousQuoteFor(req,addressFor(req)))return next();
     return signup(res);
   });
   app.get("/api/properties/:id",async(req,res,next)=>{
