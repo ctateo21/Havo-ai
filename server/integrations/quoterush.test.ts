@@ -65,6 +65,11 @@ test("historical payload contract retains enums with documented single keys and 
   assert.equal(current.Client.DateOfBirth,old.Client.DOB);
   assert.equal(current.Client.PhoneNumber,old.Client.Phone);
   assert.equal(current.HO.MonthsOwnerOccupied,old.HO.MonthsOccupied);
+  for(const [historical,documented] of old.currentAliasPairs) {
+    const section=historical==="MonthsOccupied"?current.HO:current.Client;
+    assert.equal(section[historical],section[documented]);
+    assert.ok(section[historical]);
+  }
   for(const key of ["FormType","ConstructionType","Construction","MasonryConstruction","UsageType","AllOtherPerilsDeductible","HurricaneDeductible","WindHailDeductible"])
     assert.equal(current.HO[key],old.HO[key]);
   assert.equal(current.HO.PurchaseDate,"12/01/2026");
