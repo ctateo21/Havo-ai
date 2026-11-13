@@ -48,6 +48,10 @@ test("Pinellas USA ZIP survives quicksearch 403 and district is retained",async(
  assert.equal(p?.account,"06-31-16-92862-080-0010");assert.equal(p?.taxDistrict,"SP");
 });
 test("quick HTTP returns an estimate under two seconds while official work is pending",async(t)=>{
+ const {signGuestClaim}=await import("./anonymous-quote");
+ const previousSecret=process.env.SESSION_SECRET;process.env.SESSION_SECRET="poll-test-secret";
+ t.after(()=>{if(previousSecret===undefined)delete process.env.SESSION_SECRET;else process.env.SESSION_SECRET=previousSecret;});
+ const cookie=(address:string)=>({Cookie:`havo_first_quote=${signGuestClaim({id:"poll",quoteType:"purchase",address,expires:Date.now()+60000},"poll-test-secret")}`});
  const app=express();app.use(express.json());
  let finish!:(v:any)=>void;
  const official=new Promise<any>(r=>finish=r);
@@ -64,7 +68,10 @@ test("quick HTTP returns an estimate under two seconds while official work is pe
  const body=await response.json();assert.ok(Date.now()-started<2000);assert.equal(body.status,"estimate");assert.equal(body.adValorem,4274.09);assert.equal(body.navPending,true);assert.equal(body.officialState,"pending");
  finish({adValorem:{cents:null},nonAdValorem:{cents:null},total:{cents:null,reason:"Mock official unavailable"},warnings:[]});
  await new Promise(r=>setTimeout(r,20));
- const final=await (await fetch(`http://127.0.0.1:${address.port}/api/property-tax/official-status?key=${body.key}`)).json();
+ const pollUrl=`http://127.0.0.1:${address.port}/api/property-tax/official-status?key=${body.key}`;
+ assert.equal((await fetch(pollUrl)).status,401);
+ assert.equal((await fetch(pollUrl,{headers:cookie("200 Other St, FL 33901")})).status,401);
+ const final=await (await fetch(pollUrl,{headers:cookie("100 Fixture Street, Florida 33901")})).json();
  assert.equal(final.annualTax,4274.09);assert.equal(final.status,"estimate");assert.equal(final.officialState,"failed");
 });
 test("official current-roll refresh never relabels a 2027 scenario as official",async(t)=>{
@@ -82,5 +89,5 @@ test("official current-roll refresh never relabels a 2027 scenario as official",
  assert.equal(result.annualTax,calculateQuickTax(400000,true,rate(6.273,13.5615),{...params(.85,26411),amendment3_2027:true})+100);
  invalidateQuickTaxJobs();
  const expired=await fetch(`http://127.0.0.1:${a.port}/api/property-tax/official-status?key=${result.key}`);
- assert.equal(expired.status,404);
+ assert.equal(expired.status,401,"a guessed/expired key grants no anonymous access");
 });

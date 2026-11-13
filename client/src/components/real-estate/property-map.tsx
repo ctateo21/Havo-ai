@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { authedFetch } from "@/lib/authed-fetch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -65,7 +66,7 @@ export default function PropertyMap({ apiKey }: PropertyMapProps) {
       // This triggers a search with the Zillow API using the searchQuery
       
       // Make API call to our backend, which will call Zillow API
-      const response = await fetch('/api/properties/search', {
+      const response = await authedFetch('/api/properties/search', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

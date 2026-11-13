@@ -1,4 +1,5 @@
 import type {Express} from "express";
+import {authenticatedQuoteUser,hasAnonymousQuoteFor} from "./anonymous-quote";
 import {randomUUID} from "node:crypto";
 import {z} from "zod";
 import {geocodeAddress} from "./integrations/geocode";
@@ -13,7 +14,7 @@ import {supabaseAdmin} from "./supabase";
 import {COUNTY_TAX_WARNINGS} from "../shared/official-tax";
 import {researchParams,planningLabel,planningStatus} from "./integrations/fl-millage-research";
 
-const jobs=new Map<string,{signature:string;value:any;expires:number}>();
+const jobs=new Map<string,{signature:string;address:string;value:any;expires:number}>();
 export function invalidateQuickTaxJobs(){jobs.clear();}
 const dependencies={resolveParcel,geocodeAddress,readOfficialCache,readQuickRates,officialParcelTax};
 export function within<T>(work:Promise<T>,ms:number):Promise<T>{
@@ -29,7 +30,7 @@ export function registerFastPropertyTaxRoutes(app:Express,deps=dependencies){
   for(const [key,j] of jobs)if(j.expires<Date.now())jobs.delete(key);
   if(!input.refresh){for(const j of jobs.values())if(j.signature===signature&&j.value.officialState!=="failed")return res.json(j.value);}
   if(jobs.size>=2000)return res.status(503).json({error:"Property-tax queue busy"});
-  const key=randomUUID(),entry={signature,created:Date.now(),expires:Date.now()+3600000,value:{key,status:"unavailable",annualTax:null,reason:"Checking county…",officialState:"pending"} as any};
+  const key=randomUUID(),entry={signature,address:input.address,created:Date.now(),expires:Date.now()+3600000,value:{key,status:"unavailable",annualTax:null,reason:"Checking county…",officialState:"pending"} as any};
   jobs.set(key,entry);
   const work=(async()=>{
    try{
@@ -104,8 +105,9 @@ export function registerFastPropertyTaxRoutes(app:Express,deps=dependencies){
   await Promise.race([work,new Promise(resolve=>setTimeout(resolve,1400))]);
   return res.json(entry.value);
  });
- app.get("/api/property-tax/official-status",(req,res)=>{
+ app.get("/api/property-tax/official-status",async(req,res)=>{
   const job=jobs.get(String(req.query.key??""));
+  if(!await authenticatedQuoteUser(req)&&(!job||!hasAnonymousQuoteFor(req,job.address)))return res.status(401).json({code:"SIGN_UP_REQUIRED"});
   if(!job||job.expires<Date.now())return res.status(404).json({status:"unavailable",reason:"Lookup expired; refresh county data",officialState:"failed",annualTax:null});
   res.json(job.value);
  });

@@ -13,7 +13,8 @@ const inputSchema = z.object({
 });
 type Claim = {id:string; quoteType:string; address:string; expires:number};
 export function normalizeGuestAddress(address:string) {
-  return address.toLowerCase().replace(/,\s*(usa|united states)\s*$/,"").replace(/[.,]/g,"").replace(/\s+/g," ").trim();
+  const aliases:Record<string,string>={street:"st",avenue:"ave",road:"rd",boulevard:"blvd",drive:"dr",court:"ct",lane:"ln",place:"pl",terrace:"ter",circle:"cir",parkway:"pkwy",highway:"hwy",north:"n",south:"s",east:"e",west:"w",florida:"fl",saint:"st",apartment:"unit",apt:"unit",suite:"unit"};
+  return address.toLowerCase().replace(/,?\s*(usa|united states)\s*$/,"").replace(/[.,]/g,"").replace(/#\s*/g,"unit ").replace(/\b\d{5}-\d{4}\b/g,x=>x.slice(0,5)).replace(/\b[a-z]+\b/g,x=>aliases[x]??x).replace(/\s+/g," ").trim();
 }
 function digest(value:string,secret:string) {
   return createHmac("sha256",secret).update(value).digest("base64url");
@@ -42,7 +43,7 @@ function claimFor(req:Request) {
 }
 export function hasAnonymousQuoteFor(req:Request,address:unknown) {
   const claim=claimFor(req);
-  return !!claim&&typeof address==="string"&&claim.address===normalizeGuestAddress(address);
+  return !!claim&&typeof address==="string"&&normalizeGuestAddress(claim.address)===normalizeGuestAddress(address);
 }
 export async function authenticatedQuoteUser(req:Request):Promise<boolean> {
   const token=/^Bearer\s+(.+)$/i.exec(req.headers.authorization??"")?.[1];
@@ -69,7 +70,7 @@ export function registerAnonymousQuoteRoutes(app:Express,authenticate=authentica
     const now=Date.now(),address=normalizeGuestAddress(parsed.data.address);
     const existing=claimFor(req);
     if(existing){
-      if(existing.address!==address||existing.quoteType!==parsed.data.quoteType)return signup(res);
+      if(normalizeGuestAddress(existing.address)!==address||existing.quoteType!==parsed.data.quoteType)return signup(res);
       return res.json({allowed:true,...parsed.data});
     }
     for(const [key,value] of devices)if(value.reset<now)devices.delete(key);
@@ -87,12 +88,23 @@ export function registerAnonymousQuoteRoutes(app:Express,authenticate=authentica
   app.use([
     "/api/property-tax/quick","/api/property-tax/county",
     "/api/refinance/property-tax/current","/api/flood-zone",
+    "/api/property-tax/hillsborough","/api/zillow-property-lookup",
+    "/api/ami","/api/properties/lookup-by-address","/api/properties/zestimate",
+    "/api/properties/search",
   ],rateLimit({windowMs:60_000,limit:40,standardHeaders:"draft-7",legacyHeaders:false}),async(req,res,next)=>{
     if(await authenticate(req))return next();
-    if(hasAnonymousQuoteFor(req,req.body?.address??req.query.address))return next();
+    const path=req.originalUrl.split("?")[0];
+    const address=path.startsWith("/api/zillow-property-lookup")?req.body?.addressOrUrl
+      :path==="/api/properties/search"?req.body?.location
+      :req.method==="GET"?req.query.address:req.body?.address;
+    if(hasAnonymousQuoteFor(req,address))return next();
     return signup(res);
   });
-  app.use("/api/leads/notify-new-scenario",async(req,res,next)=>{
+  app.get("/api/properties/:id",async(req,res,next)=>{
+    if(await authenticate(req))return next();
+    return signup(res);
+  });
+  app.use(["/api/leads/notify-new-scenario","/api/fub/showing-request","/api/properties/zipcode-average"],async(req,res,next)=>{
     if(await authenticate(req))return next();
     return signup(res);
   });
