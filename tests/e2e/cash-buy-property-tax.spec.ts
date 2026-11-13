@@ -33,6 +33,14 @@ type PendingRoute = {
 };
 
 async function fulfillJson(route: Route, body: unknown): Promise<void> {
+  // Match the current official AV + collector NAV contract, not legacy
+  // annualTax-only responses that have no auditable components.
+  const b=body as any;
+  if(typeof b?.annualTax==="number"&&!b.breakdown){
+    const source={name:"Collier County Property Appraiser Tax Estimator",url:"https://www.collierappraiser.com/",fetchedAt:"2026-11-12T12:00:00Z",taxYear:2026,parcelId:b.parcelId??"COL-TEST"};
+    body={...b,breakdown:{adValorem:{cents:b.annualTax*100,source},nonAdValorem:{cents:0,source:{...source,name:"Collier County Tax Collector",url:"https://county-taxes.net/fl-collier/property-tax"}},
+      total:{cents:b.annualTax*100},warnings:[]}};
+  }
   await route.fulfill({
     status: 200,
     contentType: "application/json",
@@ -131,6 +139,8 @@ async function installCashBuyMocks(
 async function openCashBuy(page: Page, address = COLLier_ADDRESS): Promise<void> {
   await page.goto(`/cash-buy?address=${encodeURIComponent(address)}`);
   await expect(page.getByTestId("cash-buy-property-taxes")).toBeVisible();
+  await page.getByTestId("select-cash-occupancy").click();
+  await page.getByRole("option",{name:"Primary Residence",exact:true}).click();
 }
 
 function taxRow(page: Page) {
@@ -140,6 +150,28 @@ function taxRow(page: Page) {
 function taxInput(page: Page) {
   return taxRow(page).locator("input");
 }
+
+test("blank use is unavailable and only primary sends homestead",async({page})=>{
+  const state=await installCashBuyMocks(page,{taxReplies:Array.from({length:3},()=>({annualTax:4321,source:"county-estimator"}))});
+  const flags:boolean[]=[];
+  page.on("request",req=>{if(req.url().endsWith("/api/property-tax/county"))flags.push(req.postDataJSON().isPrimaryResidence);});
+  await page.goto(`/cash-buy?address=${encodeURIComponent(COLLier_ADDRESS)}`);
+  await expect(taxRow(page)).toContainText("Select Property Use");
+  await expect(taxInput(page)).toHaveValue("");
+  expect(state.getTaxRequests()).toBe(0);
+  for(const label of ["Investment","Primary Residence","Secondary Home"]){
+    await page.getByTestId("select-cash-occupancy").click();
+    await page.getByRole("option",{name:label,exact:true}).click();
+    await expect.poll(()=>flags.length).toBe(["Investment","Primary Residence","Secondary Home"].indexOf(label)+1);
+  }
+  expect(flags).toEqual([false,true,false]);
+});
+
+test("unavailable components do not produce a numeric monthly total",async({page})=>{
+  await installCashBuyMocks(page,{taxReplies:[{useFallback:true}]});await openCashBuy(page);
+  await expect(page.getByText("Unavailable — property tax missing",{exact:true})).toBeVisible();
+  await expect(taxInput(page)).toHaveValue("");
+});
 
 test("shows an official Collier purchase-estimator result and badge", async ({ page }) => {
   const state = await installCashBuyMocks(page, {
@@ -312,6 +344,7 @@ test("preserves a saved manual tax after reload and skips late hydration lookups
     purchase_price: 500_000,
     purchase_price_source: "user",
     occupancy_type: "primary",
+    occupancy_type_source: "manual",
     property_taxes: 12_000,
     property_taxes_source: "manual",
     homeowners_insurance: 4_000,

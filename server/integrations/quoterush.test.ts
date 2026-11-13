@@ -10,11 +10,16 @@ import {
 import { resolveQuoteRushPropertyInputs } from "./quoterush-inputs";
 import { claimQuoteRushAddress } from "./quoterush-cache-claim";
 import {
-  prepareQuoteRushStartRequest,
+  prepareQuoteRushStartRequest as prepareRawQuoteRushStartRequest,
   toQuoteCachePolicyEffectiveDate,
 } from "./quoterush-start-request";
 import { resolveQuoteRushPropertyDefaults } from "@shared/quoterush-property-defaults";
 import { resolvePurchasePriceProvenance } from "@shared/purchase-price-provenance";
+// Explicitly answered property fixture shared by the legacy contract tests.
+const prepareQuoteRushStartRequest=(body:any,...rest:any[])=>prepareRawQuoteRushStartRequest({
+  policyType:"HO3",yearBuilt:1958,roofYear:2020,sqFt:1166,sqFtConfirmed:true,
+  floodZone:"X",hasClaims:false,purchasePriceSource:"user-confirmed-property-value",...body,
+},...rest as [any,any]);
 
 const params: QuoteRushParams = {
   streetAddress: "123 Palm Way",
@@ -155,19 +160,24 @@ test("six zero-cost policy payload sanity cases stay normalized", () => {
 });
 
 test("importer always sends the agency-confirmed credit permission value", () => {
+  const payload=buildImporterPayload(params,"agent@example.com");
+  assert.equal(payload.Client.DateOfBirth,payload.Client.DOB);
+  assert.equal(payload.Client.PhoneNumber,payload.Client.Phone);
+  assert.equal(payload.HO.MonthsOwnerOccupied,payload.HO.MonthsOccupied);
+  assert.equal(payload.Client.AssumedCreditScore,process.env.QUOTERUSH_ASSUMED_CREDIT_SCORE||"Excellent");
   assert.equal(
     buildImporterPayload(
       { ...params, creditPermissionGranted: true },
       "agent@example.com",
     ).Client.CreditPermission,
-    "Yes",
+    "No",
   );
   assert.equal(
     buildImporterPayload(
       { ...params, creditPermissionGranted: false },
       "agent@example.com",
     ).Client.CreditPermission,
-    "Yes",
+    "No",
   );
 });
 
@@ -203,7 +213,7 @@ test("prior insurance uses only documented new-purchase assumptions and private 
 
 test("year-built wind assumptions are conservative and manual wind answers win", () => {
   const resolve = (yearBuilt: number) => resolveQuoteRushPropertyInputs({
-    yearBuilt, constIdx: 0, windIdx: 1,
+    yearBuilt, roofYear:2020, constIdx: 0, windIdx: 1,
     windMitigationLocks: {},
     openingProtection: true,
     secondaryWaterResistance: "Yes",
@@ -221,7 +231,7 @@ test("year-built wind assumptions are conservative and manual wind answers win",
     { opening: "Hurricane Protection", swr: "Yes" },
   );
   const manual = resolveQuoteRushPropertyInputs({
-    yearBuilt: 2022, constIdx: 0, windIdx: 0,
+    yearBuilt: 2022, roofYear:2020, constIdx: 0, windIdx: 0,
     windMitigationLocks: { openingProtection: true, secondaryWaterResistance: true },
     openingProtection: false, secondaryWaterResistance: "No",
   });
@@ -643,7 +653,7 @@ test("policy effective values are stripped from the shared quote snapshot", () =
   assert.equal("value" in ordinaryEffectiveDate, false);
 });
 
-test("private expiration never changes the shared paid-cache identity", () => {
+test("effective date and other answers participate in paid-cache identity", () => {
   const routesSource = readFileSync(
     new URL("../routes.ts", import.meta.url),
     "utf8",
@@ -655,7 +665,8 @@ test("private expiration never changes the shared paid-cache identity", () => {
 
   assert.match(quoteStart, /addressNormalized:\s*norm/);
   assert.match(quoteStart, /policyType:\s*cacheRequest\.policyType/);
-  assert.doesNotMatch(quoteStart, /cacheScope|quoteCacheScope/);
+  assert.match(quoteStart, /cacheScope:answerIdentity.cacheScope/);
+  assert.match(quoteStart, /policyEffectiveDate:propertyDefaults.policyEffectiveDate.value/);
 });
 
 test("changing a private expiration does not rotate quote identity", () => {
@@ -672,22 +683,13 @@ test("changing a private expiration does not rotate quote identity", () => {
   assert.doesNotMatch(privatePropertyPut, /randomUUID|cacheScope/);
 });
 
-test("insurance hydration always reuses shared quotes despite private expiration", () => {
+test("insurance never hydrates anonymous address-only paid quotes", () => {
   const insuranceSource = readFileSync(
     new URL("../../client/src/pages/insurance.tsx", import.meta.url),
     "utf8",
   );
-  const hydration = insuranceSource.slice(
-    insuranceSource.indexOf("// Auto-trigger / cache-hydrate QuoteRUSH"),
-    insuranceSource.indexOf("// ── QuoteRUSH quoting"),
-  );
-
-  assert.match(hydration, /const local = getQRCache\(address, quotePolicyType\)/);
-  assert.match(hydration, /const quoteIdentity = `\$\{address\}\|\$\{quotePolicyType\}`/);
-  assert.doesNotMatch(
-    hydration,
-    /currentPolicyExpirationLoading|currentPolicyExpirationSaving|private:\$\{/,
-  );
+  assert.doesNotMatch(insuranceSource,/const local = getQRCache\(address, quotePolicyType\)/);
+  assert.match(insuranceSource,/X-Quote-Access/);
 });
 
 test("new-purchase quote cannot fall back when its closing date is missing", () => {
@@ -732,7 +734,7 @@ test("insurance quote state auto-fills residence use from matching source occupa
   );
 });
 
-test("quote-start returns a valid shared cache before private preparation and gates", () => {
+test("quote-start validates answers before cache reuse and queues paid work after gates", () => {
   const routesSource = readFileSync(
     new URL("../routes.ts", import.meta.url),
     "utf8",
@@ -747,7 +749,7 @@ test("quote-start returns a valid shared cache before private preparation and ga
   const cacheClaim = routeSource.indexOf("claimQuoteRushAddress");
   const cacheLookup = routeSource.indexOf("readQuoteCache");
   const paidSubmission = routeSource.indexOf(
-    "const result = await importAndSubmit",
+    "await enqueueInsuranceImport",
   );
   const cachedQuoteReturn = routeSource.indexOf(
     "cache hit (success)",
@@ -766,24 +768,16 @@ test("quote-start returns a valid shared cache before private preparation and ga
   assert.notEqual(staleReclaim, -1);
   assert.ok(cachedQuoteReturn < dobGate);
   assert.ok(cacheLookup < cachedQuoteReturn);
-  assert.ok(cachedQuoteReturn < preparation);
+  assert.ok(preparation < cacheLookup);
   assert.ok(preparation < cacheClaim);
   assert.ok(dobGate < staleReclaim);
   assert.ok(cacheClaim < paidSubmission);
   assert.equal(routeSource.indexOf("CREDIT_PERMISSION_REQUIRED"), -1);
   assert.equal(routeSource.indexOf("const submissionConsentProfile"), -1);
-  const preserveLead = routeSource.indexOf(
-    "updateClaimedCache({\n            leadId: result.leadId",
-  );
-  const ambiguousSubmit = routeSource.indexOf(
-    "if (!result.submitted)",
-  );
-  assert.ok(preserveLead > paidSubmission);
-  assert.ok(ambiguousSubmit > preserveLead);
-  assert.match(
-    routeSource.slice(ambiguousSubmit),
-    /status\(202\)[\s\S]*existing lead/,
-  );
+  const worker=readFileSync(new URL("./quoterush-import-jobs.ts",import.meta.url),"utf8");
+  assert.match(worker,/onLeadCreated/);
+  assert.match(worker,/manual-review/);
+  assert.match(worker,/status:"queued"/);
 });
 
 test("quote polling requires authenticated, address-and-policy-bound cache access", () => {
@@ -1237,7 +1231,7 @@ test("public QuoteRUSH cache routes never serialize stored raw property data", (
   assert.match(publicCacheSource, /"\/api\/insurance\/qr-cache"/);
   assert.doesNotMatch(publicCacheSource, /rawQuoterushPropertyData/);
   assert.doesNotMatch(publicCacheSource, /raw_quoterush_property_data/);
-  assert.match(routesSource, /rawQuoterushPropertyData: result\.rawPropertyData/);
+  assert.match(readFileSync(new URL("./quoterush-import-jobs.ts",import.meta.url),"utf8"), /rawQuoterushPropertyData:result\.rawPropertyData/);
   assert.match(routesSource, /rawQuoterushPropertyDataExpiresAt/);
 });
 
@@ -1376,16 +1370,12 @@ test("legacy index callers retain year/roof buckets while wind follows the corre
   assert.equal(exact.constructionType, "Mixed");
   assert.equal(exact.frameConstruction, "");
 
-  const legacy = resolveQuoteRushPropertyInputs({
+  assert.throws(()=>resolveQuoteRushPropertyInputs({
     yearIdx: 2,
     roofIdx: 0,
     constIdx: 0,
     windIdx: 2,
-  }, 2026);
-  assert.equal(legacy.yearBuilt, 1980);
-  assert.equal(legacy.roofYear, 2024);
-  assert.equal(legacy.openingProtection, "None");
-  assert.equal(legacy.secondaryWaterResistance, "No");
+  }, 2026),/Year built is required/);
 });
 
 test("concurrent address claims allow only one paid submission", async () => {

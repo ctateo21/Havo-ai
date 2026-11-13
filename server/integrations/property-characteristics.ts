@@ -1,4 +1,8 @@
 import { supabaseAdmin } from "../supabase";
+import { geocodeAddress } from "./geocode";
+import {queryFloodSources,type FloodResult} from "./fema-sources";
+import {getFloodState} from "./flood-rechecks";
+import {lookupDorBuilding,lookupHcpaBuilding,type FieldEvidence,type RoofPermit} from "./insurance-building-sources";
 import {
   normalizeParcelAddress,
   resolveParcel,
@@ -16,10 +20,6 @@ const GSHHS_COASTLINE_LAYER =
   "https://services7.arcgis.com/WSiUmUhlFx4CtMBB/arcgis/rest/services/GSHHS_GlobalCoastlines_HighResolution/FeatureServer/0";
 const MANATEE_LAYER =
   "https://gis.manateepao.com/arcgis/rest/services/Website/WebLayers/MapServer/0";
-const PINELLAS_SEARCH_LAYER =
-  "https://egis.pinellas.gov/pcpagis/rest/services/Pcpao_gov/PropertySearch_A/MapServer/0";
-const PINELLAS_POPUP_LAYER =
-  "https://egis.pinellas.gov/pcpagis/rest/services/Pcpao_gov/PropertyPopup_A/MapServer/0";
 const LEE_LAYER =
   "https://services2.arcgis.com/LvWGAAhHwbCJ2GMP/ArcGIS/rest/services/Lee_County_Parcels/FeatureServer/0";
 const SWFWMD_BASE =
@@ -32,6 +32,8 @@ const SWFWMD_LAYERS: Partial<Record<CountySlug, number>> = {
 };
 
 export interface PropertyCharacteristics {
+  fieldSources?: Record<string,FieldEvidence>;
+  roofPermits?: RoofPermit[];
   addressNormalized: string;
   addressDisplay: string;
   county: CountySlug;
@@ -243,36 +245,7 @@ async function lookupBuilding(
     };
   }
 
-  if (county === "pinellas") {
-    const search = await arcGisQuery(
-      PINELLAS_SEARCH_LAYER,
-      `DISPLAY_STRAP_NOHYPHEN='${escapeSql(identity.parcelId)}'`,
-      "INTERNAL_STRAP",
-      fetchImpl,
-    );
-    const internal = text(search[0]?.INTERNAL_STRAP);
-    if (!internal) {
-      return { values: emptyBuilding(), source: "pinellas-pa-arcgis" };
-    }
-    const attributes = (
-      await arcGisQuery(
-        PINELLAS_POPUP_LAYER,
-        `INTERNAL_STRAP='${escapeSql(internal)}'`,
-        "YEAR_BUILT,TOTAL_LIVING_SQFT,TOTAL_LIVING_UNITS,TOTAL_GROSS_SQFT",
-        fetchImpl,
-      )
-    )[0];
-    return {
-      values: {
-        ...emptyBuilding(),
-        yearBuilt: positiveInteger(attributes?.YEAR_BUILT),
-        squareFeetLiving: positiveInteger(attributes?.TOTAL_LIVING_SQFT),
-        squareFeetTotal: positiveInteger(attributes?.TOTAL_GROSS_SQFT),
-        livingUnits: positiveInteger(attributes?.TOTAL_LIVING_UNITS),
-      },
-      source: "pinellas-pa-arcgis",
-    };
-  }
+  if (county === "pinellas") return {values:emptyBuilding(),source:"Unavailable"};
 
   if (county === "lee") {
     const attributes = (
@@ -330,52 +303,8 @@ export async function lookupFemaNfhl(
   latitude: number,
   longitude: number,
   fetchImpl: FetchImplementation = fetch,
-): Promise<{
-  floodZone: string | null;
-  floodZoneSubtype: string | null;
-  staticBfe: number | null;
-  sfha: boolean | null;
-  source: "fema-nfhl-layer-28";
-}> {
-  if (
-    !Number.isFinite(latitude) || latitude < -90 || latitude > 90 ||
-    !Number.isFinite(longitude) || longitude < -180 || longitude > 180
-  ) {
-    throw new Error("Invalid coordinates for FEMA NFHL lookup");
-  }
-  const query = new URLSearchParams({
-    geometry: `${longitude},${latitude}`,
-    geometryType: "esriGeometryPoint",
-    inSR: "4326",
-    spatialRel: "esriSpatialRelIntersects",
-    outFields: "FLD_ZONE,ZONE_SUBTY,STATIC_BFE,SFHA_TF",
-    returnGeometry: "false",
-    f: "json",
-  });
-  const response = await fetchImpl(`${FEMA_LAYER}/query?${query}`, {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; TateoApp/1.0)" },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
-  if (!response.ok) {
-    throw new Error(`FEMA NFHL request failed (${response.status})`);
-  }
-  const json = (await response.json()) as {
-    error?: { message?: string };
-    features?: Array<{ attributes?: Attributes }>;
-  };
-  if (json.error) throw new Error(json.error.message ?? "FEMA NFHL error");
-  const attributes = json.features?.[0]?.attributes;
-  const rawZone = text(attributes?.FLD_ZONE)?.toUpperCase() ?? null;
-  const floodZone =
-    rawZone && /^[A-Z0-9][A-Z0-9 .-]{0,31}$/.test(rawZone) ? rawZone : null;
-  const sfhaCode = text(attributes?.SFHA_TF)?.toUpperCase();
-  return {
-    floodZone,
-    floodZoneSubtype: text(attributes?.ZONE_SUBTY)?.toUpperCase() ?? null,
-    staticBfe: finiteNumber(attributes?.STATIC_BFE),
-    sfha: sfhaCode === "T" ? true : sfhaCode === "F" ? false : null,
-    source: "fema-nfhl-layer-28",
-  };
+): Promise<FloodResult> {
+  return queryFloodSources(latitude,longitude,{fetchImpl});
 }
 
 type ArcGisGeometry = { paths?: number[][][]; rings?: number[][][] };
@@ -516,31 +445,15 @@ async function geocode(
   address: string,
   fetchImpl: FetchImplementation,
 ): Promise<{ latitude: number; longitude: number }> {
-  const key = process.env.GOOGLE_MAPS_API_KEY;
-  if (!key) throw new Error("GOOGLE_MAPS_API_KEY is not configured");
-  const query = new URLSearchParams({ address, key });
-  const response = await fetchImpl(
-    `https://maps.googleapis.com/maps/api/geocode/json?${query}`,
-    { signal: AbortSignal.timeout(TIMEOUT_MS) },
-  );
-  if (!response.ok) throw new Error(`Geocoding request failed (${response.status})`);
-  const json = (await response.json()) as {
-    status?: string;
-    results?: Array<{ geometry?: { location?: { lat?: unknown; lng?: unknown } } }>;
-  };
-  const latitude = finiteNumber(json.results?.[0]?.geometry?.location?.lat);
-  const longitude = finiteNumber(json.results?.[0]?.geometry?.location?.lng);
-  if (
-    json.status !== "OK" || latitude == null || longitude == null ||
-    latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180
-  ) {
-    throw new Error(`Address geocoding failed (${json.status ?? "invalid response"})`);
-  }
-  return { latitude, longitude };
+  const result=await geocodeAddress(address,{fetchImpl});
+  if(!result)throw new Error("Unavailable — address could not be verified");
+  return {latitude:result.lat,longitude:result.lng};
 }
 
 function rowFromSupabase(row: Record<string, unknown>): PropertyCharacteristics {
   return {
+    fieldSources: (row.field_sources??{}) as Record<string,FieldEvidence>,
+    roofPermits: (row.roof_permits??[]) as RoofPermit[],
     addressNormalized: String(row.address_normalized ?? ""),
     addressDisplay: String(row.address_display ?? ""),
     county: String(row.county ?? "") as CountySlug,
@@ -603,6 +516,8 @@ export const propertyCharacteristicsCache: PropertyCharacteristicsCache = {
   async write(profile) {
     if (!supabaseAdmin) return;
     const row = {
+      field_sources: profile.fieldSources??{},
+      roof_permits: profile.roofPermits??[],
       address_normalized: profile.addressNormalized,
       address_display: profile.addressDisplay,
       county: profile.county,
@@ -687,6 +602,12 @@ export function mergeConfirmedCharacteristics(
       windDataSource: existing.windDataSource ?? null,
     };
   }
+  for(const [field,proof] of Object.entries(existing.fieldSources??{})){
+    if(isConfirmedSource(proof.source)&&field in result){
+      (result as any)[field]=proof.value;
+      result.fieldSources={...result.fieldSources,[field]:proof};
+    }
+  }
   return result;
 }
 
@@ -705,6 +626,9 @@ export interface ResolvePropertyCharacteristicsOptions {
 /** Deliberately excludes coordinates, parcel identifiers, and cache timings. */
 export function toPublicPropertyCharacteristics(profile: PropertyCharacteristics) {
   return {
+    fieldSources:profile.fieldSources??{},
+    roofPermits:profile.roofPermits??[],
+    queriedAt:profile.queriedAt.toISOString(),
     county: profile.county,
     floodZone: profile.floodZone,
     floodZoneSubtype: profile.floodZoneSubtype,
@@ -800,15 +724,16 @@ export async function resolvePropertyCharacteristics(
     const cached = await cache.read(addressNormalized, now);
     if (
       cached &&
-      cached.milesToCoast != null &&
-      cached.coastDataSource
+      cached.buildingDataSource && cached.fieldSources && Object.keys(cached.fieldSources).length
     ) return { ...cached, fromCache: true };
   }
 
   const existing = await cache.read(addressNormalized, now, true);
   const identity = options.resolveParcelImpl
     ? await options.resolveParcelImpl(county, address)
-    : await resolveParcel(county, address, { fetchImpl });
+    : ["pinellas","collier","hillsborough"].includes(county)
+      ? {status:"not-found",parcelId:null} as unknown as ParcelIdentity
+      : await resolveParcel(county, address, { fetchImpl });
   const errors: string[] = [];
   let coordinates = options.coordinates;
   if (!coordinates) {
@@ -823,7 +748,8 @@ export async function resolvePropertyCharacteristics(
   let coast: Awaited<ReturnType<typeof lookupMilesToCoast>> | null = null;
   if (coordinates) {
     const [floodResult, coastResult] = await Promise.allSettled([
-      lookupFemaNfhl(coordinates.latitude, coordinates.longitude, fetchImpl),
+      options.fetchImpl?lookupFemaNfhl(coordinates.latitude,coordinates.longitude,fetchImpl):
+        getFloodState(address,{lat:coordinates.latitude,lng:coordinates.longitude,countyName:county}).then(state=>state.result),
       lookupMilesToCoast(coordinates.latitude, coordinates.longitude, fetchImpl),
     ]);
     if (floodResult.status === "fulfilled") flood = floodResult.value;
@@ -842,6 +768,33 @@ export async function resolvePropertyCharacteristics(
   } catch (error: any) {
     errors.push(error?.message ?? `${county} building lookup failed`);
   }
+  let fieldSources:Record<string,FieldEvidence>={};
+  let roofPermits:RoofPermit[]=[];
+  // Existing county fields retain their own provenance; DOR fills holes only.
+  for(const [key,value] of Object.entries(building.values))if(value!=null)fieldSources[key]={
+    value,source:building.source,sourceUrl:county==="manatee"?MANATEE_LAYER:county==="lee"?LEE_LAYER:`${SWFWMD_BASE}/${SWFWMD_LAYERS[county]}`,
+    fetchedAt:now.toISOString(),
+  };
+  if(county==="hillsborough"){
+    try{const hcpa=await lookupHcpaBuilding(address,fetchImpl);if(hcpa){
+      building={values:{...emptyBuilding(),...hcpa.values},source:hcpa.source};
+      fieldSources=hcpa.fieldSources;roofPermits=hcpa.roofPermits??[];
+    }}catch{errors.push("Hillsborough County Property Appraiser unavailable");}
+  }
+  if(coordinates && (!building.values.yearBuilt||!building.values.squareFeetLiving)){
+    try{
+      const dor=await lookupDorBuilding(address,address.match(/\b\d{5}(?:-\d{4})?\b/)?.[0]?.slice(0,5)??"",coordinates.latitude,coordinates.longitude,identity.parcelId??undefined,fetchImpl);
+      if(dor){
+        for(const [key,value] of Object.entries(dor.values)){
+          if(value!=null && (building.values as any)[key]==null){
+            (building.values as any)[key]=value;fieldSources[key]=dor.fieldSources[key];
+          }
+        }
+        if(building.source==="no-county-source"||building.source==="Unavailable"||Object.keys(fieldSources).every(k=>fieldSources[k].source.includes("Dept. of Revenue")))building.source=dor.source;
+      }
+    }catch{errors.push("Florida Dept. of Revenue tax roll unavailable");}
+  }
+  if(flood?.floodZone)fieldSources.floodZone={value:flood.floodZone,source:flood.sourceLabel,sourceUrl:flood.source,fetchedAt:flood.queriedAt};
 
   const expiresAt = new Date(now);
   const expiryDay = expiresAt.getUTCDate();
@@ -854,6 +807,7 @@ export async function resolvePropertyCharacteristics(
   )).getUTCDate();
   expiresAt.setUTCDate(Math.min(expiryDay, lastDayOfExpiryMonth));
   let profile: PropertyCharacteristics = {
+    fieldSources,roofPermits,
     addressNormalized,
     addressDisplay: address.trim(),
     county,

@@ -1,4 +1,9 @@
 import type { Express } from "express";
+import { geocodeAddress } from "./integrations/geocode";
+import {getFloodState,startFloodRechecks} from "./integrations/flood-rechecks";
+import {registerRebuildCostRoutes} from "./rebuild-cost-routes";
+import {quoteAnswerIdentity,canReuseAnsweredQuote,issueQuoteAccess,verifyQuoteAccess} from "./integrations/quote-answer-identity";
+import {enqueueInsuranceImport,registerQuoteCallbackAndImports} from "./integrations/quoterush-import-jobs";
 import { createServer, type Server } from "http";
 import multer from "multer";
 import { createRequire } from "module";
@@ -43,12 +48,15 @@ import {
 import {
   SUPPORTED_COUNTY_SLUGS,
   identifyCountyCandidatesFromAddress,
+  normalizeParcelAddress,
   type CountySlug,
 } from "./integrations/parcel-resolver";
 import {
   resolvePropertyCharacteristics,
   resolveQuoteRushCharacteristicValues,
   toPublicPropertyCharacteristics,
+  lookupFemaNfhl,
+  propertyCharacteristicsCache,
 } from "./integrations/property-characteristics";
 import { currentTaxBillRequestSchema } from "./integrations/current-tax-contract";
 import { fetchGoogleReviews, getMockReviews } from "./integrations/google-reviews";
@@ -123,6 +131,14 @@ import {
 
 export async function registerRoutes(app: Express): Promise<Server> {
   registerInterestRoutes(app);
+  registerRebuildCostRoutes(app);
+  startFloodRechecks();
+  app.get("/api/insurance/quote-assumptions",(_req,res)=>res.json({assumedCreditScore:process.env.QUOTERUSH_ASSUMED_CREDIT_SCORE||"Excellent"}));
+  registerQuoteCallbackAndImports(app,async(row,params,reason)=>createFollowUpBossContact({
+    firstName:params.firstName??"",lastName:params.lastName??"",email:row.emailRecipient??"",
+    phone:params.phone??"",address:row.addressDisplay,source:"havofl.com - INSURANCE LIVE QUOTE",
+    scenarioDetails:`Requested insurance quote: ${reason}. Marketing follow-up requires stored consent.`,
+  }));
   // API routes
   
   // Get service categories
@@ -295,21 +311,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     try {
-      const apiKey = process.env.GOOGLE_MAPS_API_KEY || "";
-
-      // 1. Geocode address → lat/lng + address components via Google Maps
-      const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${apiKey}`;
-      const geoRes = await fetch(geoUrl);
-      const geoJson = await geoRes.json();
-      if (!geoJson.results?.length) return res.status(404).json({ error: "Address not found" });
-
-      const { lat, lng } = geoJson.results[0].geometry.location;
-      const components: Array<{ long_name: string; short_name: string; types: string[] }> =
-        geoJson.results[0].address_components || [];
-      const stateComp = components.find((c) => c.types.includes("administrative_area_level_1"));
-      const countyComp = components.find((c) => c.types.includes("administrative_area_level_2"));
-      const stateName = stateComp?.short_name ?? "";
-      const countyName = countyComp?.long_name.replace(" County", "").replace(" Parish", "").trim() ?? "";
+      const geo = await geocodeAddress(address);
+      if (!geo) return res.status(404).json({ error: "Unavailable — address could not be verified" });
+      const { lat, lng, countyName } = geo;
+      const stateName = geo.countyFips.startsWith("12") ? "FL" : "";
 
       // 2. Census Geocoder: lat/lng → FIPS state + county codes
       const censusUrl = `https://geocoding.geo.census.gov/geocoder/geographies/coordinates?x=${lng}&y=${lat}&benchmark=Public_AR_Current&vintage=Current_Current&layers=Counties&format=json`;
@@ -395,26 +400,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     try {
-      const apiKey = process.env.GOOGLE_MAPS_API_KEY || "";
-
-      // 1. Geocode address → lat/lng
-      const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${apiKey}`;
-      const geoRes = await fetch(geoUrl);
-      const geoJson = await geoRes.json();
-      if (!geoJson.results?.length) return res.status(404).json({ error: "Address not found" });
-
-      const { lat, lng } = geoJson.results[0].geometry.location;
-
-      // 2. Query FEMA NFHL ArcGIS – Flood Hazard Areas (layer 28)
-      const femaUrl = `https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query?geometry=${lng},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&outFields=FLD_ZONE,ZONE_SUBTY&returnGeometry=false&f=json&inSR=4326`;
-      const femaRes = await fetch(femaUrl, {
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; TateoApp/1.0)" },
-      });
-      const femaJson = await femaRes.json();
-
-      const feature = femaJson?.features?.[0]?.attributes;
-      const zone: string = (feature?.FLD_ZONE ?? "UNKNOWN").trim().toUpperCase();
-      const subtype: string = (feature?.ZONE_SUBTY ?? "").trim().toUpperCase();
+      const geo = await geocodeAddress(address);
+      if (!geo) return res.status(404).json({ error: "Unavailable — address could not be verified" });
+      const { lat, lng } = geo;
+      const state=await getFloodState(address,geo);
+      if(!state.result)return res.json({status:state.status,zone:null,message:state.status==="checking"?"Checking FEMA flood map…":"Unavailable — select your zone or ask your agent"});
+      const flood = state.result;
+      const zone = flood.floodZone;
+      const subtype = flood.floodZoneSubtype ?? "";
 
       // X and X500 (0.2% annual chance) are low-risk — no required flood insurance
       const isLowRisk =
@@ -423,7 +416,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         subtype.includes("0.2 PCT") ||
         subtype.includes("MINIMAL");
 
-      const data = { zone, subtype, requiresFloodInsurance: !isLowRisk, lat, lng };
+      const data = { zone, subtype, requiresFloodInsurance: !isLowRisk, lat, lng,
+        status:"available",source: flood.sourceLabel,sourceUrl:flood.source, queriedAt: flood.queriedAt, sfha: flood.sfha,
+        staticBfe: flood.staticBfe, dfirmId: flood.dfirmId };
       _floodCache.set(cacheKey, { data, ts: Date.now() });
       return res.json(data);
     } catch (err) {
@@ -907,25 +902,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     try {
-      const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? "";
-      if (!apiKey) return "";
-      const response = await fetch(
-        "https://maps.googleapis.com/maps/api/geocode/json" +
-          `?address=${encodeURIComponent(address)}` +
-          `&key=${encodeURIComponent(apiKey)}`,
-      );
-      if (!response.ok) return "";
-      const data = await response.json();
-      const components: Array<{
-        long_name?: string;
-        types?: string[];
-      }> = data?.results?.[0]?.address_components ?? [];
-      const countyComponent = components.find((component) =>
-        component.types?.includes("administrative_area_level_2")
-      );
-      const county = String(countyComponent?.long_name ?? "")
-        .replace(/\s+(County|Parish)$/i, "")
-        .trim();
+      const county = (await geocodeAddress(address))?.countyName ?? "";
       if (county) {
         qrCountyCache.set(key, {
           county,
@@ -1411,6 +1388,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           policyType: z.enum(["HO3", "HO6", "DP3"]).default("HO3"),
         }).parse(req.body);
         const norm = normalizeAddr(cacheRequest.address);
+        const { currentPolicyExpirationDate } =
+          await getPrivateInsuranceProperty(user.id, cacheRequest.address);
+        const { request: b, propertyDefaults } =
+          prepareQuoteRushStartRequest(req.body,resolveQuoteRushPropertyDefaults,currentPolicyExpirationDate);
+        const answerIdentity=quoteAnswerIdentity({...b,policyEffectiveDate:propertyDefaults.policyEffectiveDate.value},user.id);
         const now = new Date();
         let reclaimedExpiredCacheRow = false;
         let activeCacheRowId: number | null = null;
@@ -1450,9 +1432,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const existingRows = await readQuoteCache({
           addressNormalized: norm,
           policyType: cacheRequest.policyType,
+          cacheScope:answerIdentity.cacheScope,
         });
         const existingRow =
-          selectReusableSharedQuoteCandidate(existingRows);
+          selectReusableSharedQuoteCandidate(existingRows.filter(r=>canReuseAnsweredQuote(r,answerIdentity.answerHash,user.id)));
         const existing = existingRow ? [existingRow] : [];
 
         if (existing.length > 0) {
@@ -1498,8 +1481,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (
             notExpired &&
             row.status === "success" &&
-            row.quotes &&
-            (row.quotes as any[]).length > 0
+            row.quotes
           ) {
             console.log("[qr-start] cache hit (success):", norm);
             // A prior process may have crashed after the provider accepted
@@ -1507,9 +1489,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // the idempotent delivery worker on a cache hit.
             scheduleQuoteJob(row.id, 0);
             return res.json({
+              status:"success",
               leadId: row.leadId,
+              quoteAccessToken:issueQuoteAccess(row,user.id),
               fromCache: true,
-              quotes: topThreePositiveQuotes(row.quotes),
+              quotes: topThreePositiveQuotes(row.quotes).map(q=>({...q,quoteUrl:row.ownerUserId===user.id?q.quoteUrl:null})),
               quoteCounter: row.quoteCounter,
               expiresAt: row.expiresAt,
               propertyDataSnapshot: row.propertyDataSnapshot ?? {},
@@ -1530,21 +1514,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             console.log("[qr-start] cache hit (pending):", norm);
             return res.json({
               leadId: row.leadId,
+              quoteAccessToken:issueQuoteAccess(row,user.id),
               fromCache: true,
               status: "pending",
             });
           }
 
         }
-
-        const { currentPolicyExpirationDate } =
-          await getPrivateInsuranceProperty(user.id, cacheRequest.address);
-        const { request: b, propertyDefaults } =
-          prepareQuoteRushStartRequest(
-            req.body,
-            resolveQuoteRushPropertyDefaults,
-            currentPolicyExpirationDate,
-          );
 
         // Private profile gates intentionally occur after valid shared-cache
         // returns, but before an expired/error row is reclaimed.
@@ -1638,6 +1614,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             : []),
         ];
         const initialRunValues = {
+          ...answerIdentity,
           addressDisplay: b.address,
           status: "pending",
           leadId: null,
@@ -1810,6 +1787,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               const rows = await readQuoteCache({
                 addressNormalized: norm,
                 policyType: cacheRequest.policyType,
+                cacheScope:answerIdentity.cacheScope,
               });
               return selectReusableSharedQuoteCandidate(rows);
             },
@@ -1821,6 +1799,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log("[qr-start] lost claim race:", norm);
           return res.json({
             leadId: row?.leadId ?? null,
+            quoteAccessToken:row?issueQuoteAccess(row as QuoteCacheRow,user.id):undefined,
             fromCache: true,
             status: row?.status ?? "pending",
           });
@@ -1860,15 +1839,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // (or an older caller's explicit non-empty value) always wins.
         let characteristics = null;
         try {
-          characteristics = await resolvePropertyCharacteristics(
-            countySlug,
-            b.address,
-          );
+          characteristics = await propertyCharacteristicsCache.read(normalizeParcelAddress(b.address),now);
         } catch (error: any) {
           console.error("[qr-start] property characteristics failed:", error?.message);
         }
         const characteristicValues = resolveQuoteRushCharacteristicValues(
-          b,
+          {...b,floodZone:b.floodZoneUnknown?"":b.floodZone,
+            propertyCharacteristicLocks:{...b.propertyCharacteristicLocks,squareFeet:true,yearBuilt:true,
+              floodZone:b.floodZoneUnknown||b.propertyCharacteristicLocks?.floodZone}},
           characteristics,
         );
         const propertyInputs = resolveQuoteRushPropertyInputs({
@@ -1914,7 +1892,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           dateOfBirth,
           email: userEmail,
           phone: userPhone,
-          creditPermissionGranted: true,
+          creditPermissionGranted: false,
           ...(b.newPurchase
             ? {}
             : {
@@ -2010,137 +1988,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
 
-        const result = await importAndSubmit(params);
-
-        // Capture provider mapping evidence as soon as the enrichment call has
-        // returned, including when import/submit subsequently fails. The raw
-        // JSON is intentionally not included in any consumer response.
-        if (result.rawPropertyData) {
-          const rawFetchedAt = new Date();
-          const rawExpiresAt = new Date(rawFetchedAt);
-          rawExpiresAt.setFullYear(rawExpiresAt.getFullYear() + 1);
-          const current = await readQuoteCache({ id: activeCacheRowId }, 1);
-          if (!await updateClaimedCache({
-              rawQuoterushPropertyData: result.rawPropertyData,
-              rawQuoterushPropertyDataSource: "quoterush",
-              rawQuoterushPropertyDataFetchedAt: rawFetchedAt,
-              rawQuoterushPropertyDataExpiresAt: rawExpiresAt,
-              propertyDataProvenance: {
-                ...(current[0]?.propertyDataProvenance ?? {}),
-                quoteRushRawPropertyData: {
-                  available: true,
-                  source: "quoterush",
-                  fetchedAt: rawFetchedAt.toISOString(),
-                  expiresAt: rawExpiresAt.toISOString(),
-                },
-              },
-            })) {
-            return res.status(409).json({
-              error: "This quote request was superseded by a newer run.",
-            });
-          }
-        }
-
-        if (!result.leadId) {
-          if (!await updateClaimedCache({ status: "error" })) {
-            return res.status(409).json({
-              error: "This quote request was superseded by a newer run.",
-            });
-          }
-          return res.status(500).json({
-            error:
-              result.error ??
-              "Failed to start quotes",
-          });
-        }
-
-        // Once QuoteRUSH has created a lead, preserve that identity even if
-        // SubmitQuoteRequest returns an error or times out. Re-importing would
-        // risk a duplicate paid submission; callers should keep polling or
-        // have an agent reconcile this existing lead instead.
-        let leadCacheWriteSucceeded = false;
-        try {
-          leadCacheWriteSucceeded = await updateClaimedCache({
-            leadId: result.leadId,
-          });
-        } catch {
-          // A transient cache outage after provider acceptance may leave the
-          // lead durable only at QuoteRUSH. Retry it only if a fresh read
-          // proves that this exact pending generation still owns the row.
-          const currentRows = await readQuoteCache(
-            { id: activeCacheRowId },
-            1,
-          );
-          const current = currentRows[0];
-          const generation = activeCacheGeneration;
-          if (
-            current &&
-            generation &&
-            current.status === "pending" &&
-            current.triggeredAt.getTime() === generation.triggeredAt.getTime() &&
-            (current.leadId == null || current.leadId === result.leadId) &&
-            generation.leadId == null
-          ) {
-            scheduleQuoteJob(activeCacheRowId, 0, result.leadId, generation.triggeredAt);
-            return res.status(202).json({
-              leadId: result.leadId,
-              status: "pending",
-              warning:
-                "The quote lead was accepted and is being reconciled. Results will be emailed when ready.",
-            });
-          }
-          throw new Error("The quote request was superseded by a newer run.");
-        }
-        if (!leadCacheWriteSucceeded) {
-          return res.status(409).json({
-            error: "This quote request was superseded by a newer run.",
-          });
-        }
-
-        if (!result.submitted) {
-          // Preserve and reconcile the imported lead; never re-import it.
-          scheduleQuoteJob(activeCacheRowId, 0);
-          return res.status(202).json({
-            leadId: result.leadId,
-            status: "pending",
-            warning:
-              "QuoteRUSH created the lead, but submission could not be confirmed. The existing lead will be checked without creating another.",
-          });
-        }
-
-        // Polling is server-owned. The browser only reads the cache, so the
-        // paid run completes even if the requester closes the tab.
-        scheduleQuoteJob(activeCacheRowId, 0);
-
-        // Notify FUB (non-blocking) only when we know who the user is.
-        if (userEmail) {
-          void sendLiveInsuranceLeadAlert({
-            address: b.address,
-            name: `${firstName} ${lastName}`.trim(),
-            email: userEmail,
-            phone: userPhone,
-            requestId: String(result.leadId),
-          });
-          createFollowUpBossContact({
-            firstName,
-            lastName,
-            email: userEmail,
-            phone: userPhone,
-            address: b.address,
-            agent: "Christian Tateo",
-            source: "havofl.com - INSURANCE LIVE QUOTE",
-            scenarioDetails:
-              `QuoteRUSH quotes started: ` +
-              `${b.address} · Coverage A: ` +
-              `$${b.coverageA.toLocaleString()} · ` +
-              `Zone: ${b.floodZone} · ` +
-              `LeadId: ${result.leadId}`,
-          }).catch((e: any) =>
-            console.error("[FUB] qr-start failed:", e)
-          );
-        }
-
-        res.json({ leadId: result.leadId });
+        const [run]=await readQuoteCache({id:activeCacheRowId},1);
+        if(!run)throw Error("Quote run unavailable");
+        try{await enqueueInsuranceImport(run,params);}
+        catch(error){await updateClaimedCache({status:"error"});throw error;}
+        res.status(202).json({status:"pending",leadId:null,quoteAccessToken:issueQuoteAccess(run,user.id)});
 
       } catch (err: any) {
         console.error("[qr-start] error:", err);
@@ -2181,6 +2033,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .status(404)
             .json({ error: "Unknown quote cache entry" });
         }
+        if(!verifyQuoteAccess(req.get("X-Quote-Access"),cacheLead,user.id))return res.status(403).json({error:"Quote access denied"});
 
         // Cache-only read. The server-owned background worker is the only
         // caller that contacts QuoteRUSH; this route preserves the existing
@@ -2189,9 +2042,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           status: cacheLead.status === "failed" || cacheLead.status === "error"
             ? "error"
             : cacheLead.status,
-          quotes: topThreePositiveQuotes(cacheLead.quotes as any),
+          quotes: topThreePositiveQuotes(cacheLead.quotes as any).map(q=>({...q,quoteUrl:cacheLead.ownerUserId===user.id?q.quoteUrl:null})),
           leadId: cacheLead.leadId ?? leadId,
           quoteCounter: cacheLead.quoteCounter ?? 0,
+          respondedCarriers:cacheLead.quoteCounter??0,
+          expectedCarriers:(cacheLead.agencyDefaultSnapshot as any)?.expectedCarriers??null,
           errorMessage:
             cacheLead.status === "failed"
               ? "Quote request timed out before carrier results stabilized."
@@ -2238,6 +2093,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .status(404)
             .json({ error: "Unknown quote cache entry" });
         }
+        if(!verifyQuoteAccess(req.get("X-Quote-Access"),cacheLead,user.id))return res.status(403).json({error:"Quote access denied"});
 
         const result = await getQuotes(leadId);
 
@@ -2260,7 +2116,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         res.json({
           ...result,
-          quotes: topThreePositiveQuotes(result.quotes as any),
+          quotes: topThreePositiveQuotes(result.quotes as any).map(q=>({...q,quoteUrl:cacheLead.ownerUserId===user.id?q.quoteUrl:null})),
         });
       } catch (err: any) {
         console.error("[qr-refresh] error:", err);

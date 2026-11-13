@@ -154,17 +154,17 @@ test("renewal date changes preserve the shared quote cache identity", async t =>
     leadId: 101,
     expiresAt: new Date("2099-01-01T00:00:00Z"),
   });
-  assert.equal((await readCache()).leadId, 101);
+  assert.equal((await readCache()).found, false);
 
   assert.equal((await saveDate("2026-11-15")).status, 200);
   const [updatedProperty] = await database.select().from(privateProperties);
   assert.equal(updatedProperty.quoteCacheScope, "unused");
   assert.equal(updatedProperty.currentPolicyExpirationDate, "2026-11-15");
-  assert.equal((await readCache()).leadId, 101);
+  assert.equal((await readCache()).found, false);
 
   assert.equal((await saveDate(null)).status, 200);
   const [clearedProperty] = await database.select().from(privateProperties);
   assert.equal(clearedProperty.currentPolicyExpirationDate, null);
   assert.equal(clearedProperty.quoteCacheScope, "unused");
-  assert.equal((await readCache()).leadId, 101);
+  assert.equal((await readCache()).found, false);
 });

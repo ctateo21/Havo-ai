@@ -65,3 +65,16 @@ detail view's `aop_deductible`, `carrier`, `flood_zone`/`flood_zone_source`
 (flood zone resolved from `GET /api/flood-zone`, FEMA NFHL). Reuse the existing
 dedicated `*_source` columns (e.g. `aop_deductible_source`, `carrier_source`)
 for manual-lock provenance when they already exist.
+
+**Quote-cache rolling upgrades:** inspect both the active routing and the
+physical cache schema before applying answer-identity migrations. Preserve
+legacy uniqueness while an old published reader still performs address-only
+lookups; use an isolated versioned table or a coordinated cutover for multiple
+answer variants.
+**Why:** the shared Supabase cache was legacy address-only while preview used
+the managed source database. Applying only Supabase changes would not upgrade
+the active writer, and dropping old uniqueness could expose new variants to
+an old reader.
+**How to apply:** additive ownership fields are a separate stage from changing
+uniqueness or routing. Approval to prepare the managed upgrade is not approval
+to apply it or publish.

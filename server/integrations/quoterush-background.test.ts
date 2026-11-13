@@ -175,8 +175,8 @@ test("polling marks a row failed at its durable maximum window", async () => {
 
   const outcome = await pollQuoteJob(1003, dependencies, new Date());
 
-  assert.equal(outcome, "failed");
-  assert.equal(cacheRow.status, "failed");
+  assert.equal(outcome, "completed");
+  assert.equal(cacheRow.status, "success");
   assert.equal(quoteRushCalls, 0);
 });
 

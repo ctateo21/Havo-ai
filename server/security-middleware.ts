@@ -19,7 +19,7 @@ export function installSecurity(app:Express) {
     }
     if(origin && !allowed.has(origin))return res.status(403).json({error:"Origin not allowed"});
     if(origin){res.setHeader("Access-Control-Allow-Origin",origin);res.vary("Origin");}
-    if(req.method==="OPTIONS"){res.setHeader("Access-Control-Allow-Headers","Content-Type, Authorization");res.setHeader("Access-Control-Allow-Methods","GET, POST, PATCH, DELETE, OPTIONS");return res.sendStatus(204);}
+    if(req.method==="OPTIONS"){res.setHeader("Access-Control-Allow-Headers","Content-Type, Authorization, X-Quote-Access");res.setHeader("Access-Control-Allow-Methods","GET, POST, PATCH, PUT, DELETE, OPTIONS");return res.sendStatus(204);}
     next();
   });
   const limit=rateLimit({windowMs:60_000,limit:30,standardHeaders:"draft-7",legacyHeaders:false});

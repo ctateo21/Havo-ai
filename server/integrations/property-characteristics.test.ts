@@ -32,7 +32,7 @@ test("FEMA lookup uses validated NFHL layer 28 fields and parses attributes", as
     assert.equal(url.pathname.endsWith("/NFHL/MapServer/28/query"), true);
     assert.equal(
       url.searchParams.get("outFields"),
-      "FLD_ZONE,ZONE_SUBTY,STATIC_BFE,SFHA_TF",
+      "FLD_ZONE,ZONE_SUBTY,STATIC_BFE,SFHA_TF,DFIRM_ID",
     );
     assert.equal(url.searchParams.get("geometry"), "-81.73,25.94");
     return new Response(JSON.stringify({
@@ -46,12 +46,16 @@ test("FEMA lookup uses validated NFHL layer 28 fields and parses attributes", as
       }],
     }));
   };
-  assert.deepEqual(await lookupFemaNfhl(25.94, -81.73, fetchImpl), {
+  const {queriedAt,...result}=await lookupFemaNfhl(25.94,-81.73,fetchImpl);
+  assert.ok(Number.isFinite(Date.parse(queriedAt)));
+  assert.deepEqual(result, {
     floodZone: "AE",
     floodZoneSubtype: "COASTAL FLOODPLAIN",
     staticBfe: 9,
     sfha: true,
-    source: "fema-nfhl-layer-28",
+    source: "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28",
+    sourceLabel:"FEMA National Flood Hazard Layer",
+    dfirmId:null,
   });
 });
 
@@ -218,6 +222,7 @@ test("public profile mapping excludes cache identity and only maps known constru
       floodDataSource: "fema", fromCache: true,
     }),
   } as PropertyCharacteristics;
+  profile.queriedAt=new Date("2026-11-12T00:00:00Z");
   const publicProfile = toPublicPropertyCharacteristics(profile);
   assert.equal("latitude" in publicProfile, false);
   assert.equal("parcelId" in publicProfile, false);
@@ -267,6 +272,7 @@ test("QuoteRUSH characteristics fill only unlocked missing values", () => {
 test("a valid cache row prevents every outbound lookup", async () => {
   const now = new Date("2026-02-01T00:00:00Z");
   const cached: PropertyCharacteristics = {
+    fieldSources:{floodZone:{value:"X",source:"FEMA NFHL",sourceUrl:"https://hazards.fema.gov",fetchedAt:"2026-01-01T00:00:00Z"}},
     addressNormalized: "100 MAIN ST TAMPA FL 33602",
     addressDisplay: "100 Main St, Tampa, FL 33602",
     county: "hillsborough",

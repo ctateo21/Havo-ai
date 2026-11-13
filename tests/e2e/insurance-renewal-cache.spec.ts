@@ -156,7 +156,7 @@ async function installAuthenticatedRenewalMocks(page: Page) {
   };
 }
 
-test("renewal expiration persists without replacing or rerunning a shared quote", async ({
+test("renewal expiration persists without exposing or automatically rerunning cached quotes", async ({
   page,
 }) => {
   // Keep the fixture's September quote inside its October expiry window.
@@ -164,7 +164,7 @@ test("renewal expiration persists without replacing or rerunning a shared quote"
   const state = await installAuthenticatedRenewalMocks(page);
   await page.goto(`/insurance?address=${encodeURIComponent(ADDRESS)}`);
 
-  await expect(page.getByText("Shared Cache Carrier")).toBeVisible();
+  await expect(page.getByText("Shared Cache Carrier")).toHaveCount(0);
   await page.getByTestId("select-new-purchase").selectOption("no");
   await page.getByTestId("select-currently-insured").selectOption("yes");
   await page.getByTestId("input-current-carrier").fill("Existing Carrier");
@@ -174,22 +174,22 @@ test("renewal expiration persists without replacing or rerunning a shared quote"
   );
   await expiration.fill(FIRST_EXPIRATION);
   await expect.poll(state.getSavedExpiration).toBe(FIRST_EXPIRATION);
-  await expect(page.getByText("Shared Cache Carrier")).toBeVisible();
+  await expect(page.getByText("Shared Cache Carrier")).toHaveCount(0);
   expect(state.getStartSubmissions()).toBe(0);
 
   await page.reload();
   await page.getByTestId("select-new-purchase").selectOption("no");
   await page.getByTestId("select-currently-insured").selectOption("yes");
   await expect(expiration).toHaveValue(FIRST_EXPIRATION);
-  await expect(page.getByText("Shared Cache Carrier")).toBeVisible();
+  await expect(page.getByText("Shared Cache Carrier")).toHaveCount(0);
 
   await expiration.fill(SECOND_EXPIRATION);
   await expect.poll(state.getSavedExpiration).toBe(SECOND_EXPIRATION);
-  await expect(page.getByText("Shared Cache Carrier")).toBeVisible();
+  await expect(page.getByText("Shared Cache Carrier")).toHaveCount(0);
   expect(state.getStartSubmissions()).toBe(0);
 
   await expiration.fill("");
   await expect.poll(state.getSavedExpiration).toBe(null);
-  await expect(page.getByText("Shared Cache Carrier")).toBeVisible();
+  await expect(page.getByText("Shared Cache Carrier")).toHaveCount(0);
   expect(state.getStartSubmissions()).toBe(0);
 });

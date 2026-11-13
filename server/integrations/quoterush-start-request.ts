@@ -32,11 +32,11 @@ function isClaimDateWithinFiveYears(value: string): boolean {
 const quoteRushStartSchema = z.object({
   address: z.string().min(5),
   coverageA: z.number().positive(),
-  policyType: z.enum(["HO3", "HO6", "DP3"]).default("HO3"),
+  policyType: z.enum(["HO3", "HO6", "DP3"]),
   // Exact inputs from the redesigned insurance estimate. Keep the legacy
   // indices optional for other callers that have not yet collected them.
-  yearBuilt: z.number().int().min(1800).max(2100).optional(),
-  roofYear: z.number().int().min(1800).max(2100).optional(),
+  yearBuilt: z.number().int().min(1800).max(new Date().getFullYear()+1),
+  roofYear: z.number().int().min(2000).max(2027),
   openingProtection: z.boolean().optional(),
   roofShape: z.enum(["Hip", "Flat", "Gable"]).optional(),
   secondaryWaterResistance: z.enum(["Yes", "No", "Unknown"]).optional(),
@@ -54,7 +54,7 @@ const quoteRushStartSchema = z.object({
   // Optional at shared-cache lookup time. The route requires this private
   // answer only after reusable success/pending rows have been returned and
   // before any paid claim or stale-row reclaim.
-  hasClaims: z.boolean().optional(),
+  hasClaims: z.boolean(),
   claimRecords: z.array(z.object({
     lossDate: z.string().refine(isClaimDateWithinFiveYears, {
       message: "Claim loss date must be within the past five years.",
@@ -67,7 +67,9 @@ const quoteRushStartSchema = z.object({
   hasMortgage: z.boolean().optional(),
   aopDeductible: z.number().default(2500),
   floodZone: z.string().default(""),
-  sqFt: z.number().default(0),
+  floodZoneUnknown: z.boolean().default(false),
+  sqFt: z.number().positive(),
+  sqFtConfirmed: z.literal(true),
   // The browser reports a lock only after a person has edited an auto-filled
   // characteristic. Absent locks preserve backward-compatible explicit input.
   propertyCharacteristicLocks: z.object({
@@ -94,6 +96,8 @@ const quoteRushStartSchema = z.object({
   usageType: z.enum(["primary", "secondary", "investment"]).optional(),
   rentalTerm: z.enum(["annual", "monthly", "weekly"]).optional(),
 }).superRefine((value, ctx) => {
+  if(!value.floodZoneUnknown && !value.floodZone.trim())ctx.addIssue({code:z.ZodIssueCode.custom,path:["floodZone"],message:"Select your flood zone or explicitly choose I don't know."});
+  if(!value.purchasePriceSource)ctx.addIssue({code:z.ZodIssueCode.custom,path:["purchasePriceSource"],message:"Confirm the source of the purchase price or current value."});
   if (value.hasClaims && value.claimRecords.length === 0) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

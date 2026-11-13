@@ -19,13 +19,8 @@ export function resolveQuoteRushPropertyInputs(
   inputs: QuoteRushPropertyInputs,
   currentYear = new Date().getFullYear(),
 ) {
-  const yearMap = [2015, 1995, 1980, 1960];
-  const roofYearMap = [
-    currentYear - 2,
-    currentYear - 8,
-    currentYear - 17,
-    currentYear - 22,
-  ];
+  if(!Number.isInteger(inputs.yearBuilt)||!inputs.yearBuilt)throw new Error("Year built is required");
+  if(!Number.isInteger(inputs.roofYear)||inputs.roofYear!<2000||inputs.roofYear!>2027)throw new Error("Enter a whole year from 2000 to 2027.");
 
   const construction =
     inputs.constIdx === 0
@@ -48,7 +43,7 @@ export function resolveQuoteRushPropertyInputs(
             frameConstruction: "",
           };
 
-  const yearBuilt = inputs.yearBuilt ?? yearMap[inputs.yearIdx ?? 1] ?? 1995;
+  const yearBuilt = inputs.yearBuilt!;
   // QuoteRUSH has verified mappings only for OpeningProtection and SWR.
   // Keep the roof-to-wall/deck posture as provenance/assumptions; never
   // invent unverified importer keys for it.
@@ -62,7 +57,7 @@ export function resolveQuoteRushPropertyInputs(
   return {
     yearBuilt,
     roofYear:
-      inputs.roofYear ?? roofYearMap[inputs.roofIdx ?? 1] ?? currentYear - 8,
+      inputs.roofYear!,
     ...construction,
     ...wind,
     ...((legacyExactAnswers || inputs.windMitigationLocks?.openingProtection) &&

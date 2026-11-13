@@ -1,4 +1,8 @@
+- [Official county tax standard](official-county-tax-standard.md) — underwriter-facing county-only figures; overrides old generic fallback and shared 85% rules.
 - [Insurance policy type & property-type resolution](insurance-policy-type.md) — condo/townhome→HO6 resolution priority, Zillow-type-on-client, dual TrackedLoan gotcha, manual locks.
+- [AI provider migration](ai-provider-migration.md) — separate gateway migration from cheaper-model validation; preserve native PDF interpretation and cited research.
+- [Agents demand test](agents-interest-experiment.md) — interest-only, no payments; verify live schema first and actual CRM/email delivery; keep unpublished for review.
+- [Separate flood premium rule](flood-premium-property-rule.md) — condo/townhome/villa/land have no separate premium; retain FEMA risk and label HOA coverage as assumed.
 - [Adding a persisted tracked_loans field](tracked-loans-persistence.md) — the 5-place checklist + migration, plus hydration-sync & onValueCommit gotchas for refi inputs.
 - [Supabase vs managed Postgres split](supabase-vs-neon-split.md) — DATABASE_URL is Replit-managed and separate from unused NEON_DATABASE_URL; user-facing data lives in Supabase.
 - [Supabase persistence communication](supabase-persistence-communication.md) — always flag required SQL/migrations and design user-entered settings to survive return visits.
@@ -11,7 +15,7 @@
 - [TypeScript incremental config changes](tsc-env-limit.md) — clear tsbuildinfo once if old diagnostics survive a compiler-option change.
 - [GitHub sync method & checkpoint gotcha](github-sync.md) — push via connectors-sdk proxy (no raw tokens); diff vs REMOTE tree, never `git diff HEAD` (checkpoints auto-commit).
 - [GitHub workflow publishing permissions](github-workflow-permissions.md) — the connector can manage repo data but cannot add workflow files; publishing needs a classic PAT with `repo` + `workflow`.
-- [QuoteRUSH live quoting](quoterush-integration.md) — explicit answers beat enrichment/defaults; manual quotes use a shared 30-day cache with lead-bound updates and race-safe polling.
+- [QuoteRUSH live quoting](quoterush-integration.md) — no credit checks; sourced facts, manual roof, configured rebuild rates; exact-answer/owner quote reuse and transactional results.
 - [Tax Collector bill scrape](tax-collector-bill-scrape.md) — HCPA nonAdValorem field is dead; CDD lines come from Apify browser scrape (needs one-time actor approval), cached per folio.
 - [FUB leaderboard data sources](fub-leaderboard-data-sources.md) — calls in /v1/calls (userId), showings in /v1/appointments (createdById, -1=system); texts/emails not listable globally.
 - [Loan limits & Jumbo](loan-limits-jumbo.md) — 2026 limit auto-flip FHA→Conv→Jumbo on BASE loan; Jumbo mirrors Conventional except AMI discount; sub-620 warns without switching.
@@ -19,7 +23,7 @@
 - [Hillsborough property tax estimate](hillsborough-tax-estimate.md) — HCPA estimator range = assessed-value range (85%–100% of price); Havo matches the LOWER bound via 85% assessed ratio.
 - [Private applicant DOB](private-applicant-dob.md) — DOB stays server-only in Neon; browser gets only a boolean status, and QuoteRUSH resolves DOB at the server boundary.
 - [Google Places autocomplete sessions](google-places-autocomplete.md) — independently invalidate prediction/detail races and rotate billing tokens when a search is abandoned.
-- [Property-tax source policy](property-tax-two-part.md) — retain labeled fallbacks until each county passes live verification; never disable globally. Refinance stays actual-bill-only.
+- [Two-part property-tax architecture](property-tax-two-part.md) — purchase estimates and refinance owner bills stay separate; current-bill lookups are address-only and actual-total-only.
 - [Refinance financing defaults](refinance-financing-defaults.md) — escrow-bearing loans default to financing both closing costs and the new escrow reserve; preserve saved choices.
 - [Refinance VA funding fee](refinance-va-funding-fee.md) — require disability Yes/No; exempt=$0, non-exempt=3.3% subsequent-use financed into the note.
 - [Refinance escrow-refund estimate](refinance-escrow-refund.md) — prefer statement balance; CD/manual fallback is 2 monthly escrow payments; never include it in guaranteed cash figures.
@@ -27,3 +31,5 @@
 - [Database route-test isolation](database-route-test-isolation.md) — keep local-HTTP database tests separate from suites that replace global fetch, because top-level Node tests can overlap.
 - [Database rehearsal boundaries](database-rehearsal-boundaries.md) — real SQL/HTTP codecs and independent source fixtures catch failures that checksum and claim mocks miss.
 - [Managed-data disaster recovery](managed-data-disaster-recovery.md) — retired-source recovery needs uninterrupted writer freeze and precision-preserving data boundaries.
+- [Dependency remediation](dependency-remediation.md) — preserve framework compatibility, keep unpatched advisories visible, and verify nested overrides actually resolve.
+- [Privacy and consent decisions](privacy-consent-policy.md) — retain records privately; save phones unverified without SMS; separate optional marketing consent.

@@ -61,9 +61,8 @@ test("FUB event source override leaves defaults and event type unchanged", async
   assert.equal(events[1].type, "Property Inquiry");
 });
 
-test("only qr-start overrides the FUB lead source", () => {
+test("paid quote dispatch is durable rather than an inline CRM contact call", () => {
   assert.equal(overrides.length, 1);
-  assert.equal(overrides[0].source, "havofl.com - INSURANCE LIVE QUOTE");
-  assert.ok(overrides[0].position > routes.indexOf('"/api/insurance/qr-start"'));
-  assert.ok(overrides[0].position < routes.indexOf('"/api/insurance/qr-quotes"'));
+  assert.equal(overrides[0].source,"havofl.com - INSURANCE LIVE QUOTE");
+  assert.match(routes,/await enqueueInsuranceImport/);
 });

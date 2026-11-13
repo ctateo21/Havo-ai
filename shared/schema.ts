@@ -564,6 +564,10 @@ export const insuranceQuoteCache = pgTable(
     cacheScope: text("cache_scope")
       .notNull()
       .default("shared"),
+    ownerUserId: text("owner_user_id"),
+    answerHash: text("answer_hash"),
+    runHadClaims: boolean("run_had_claims"),
+    callbackTokenHash: text("callback_token_hash"),
     // Quote inputs and their sources only. These JSON snapshots must never
     // contain applicant identity/contact data or DOB.
     propertyDataSnapshot: jsonb("property_data_snapshot")
@@ -622,8 +626,8 @@ export const insuranceQuoteCache = pgTable(
   },
   table => ({
     addressPolicyUnique: unique(
-      "insurance_quote_cache_address_policy_unique",
-    ).on(table.addressNormalized, table.policyType),
+      "insurance_quote_cache_address_policy_scope_unique",
+    ).on(table.addressNormalized, table.policyType, table.cacheScope),
     expiresAtIdx: index("insurance_quote_cache_expires_at_idx").on(
       table.expiresAt,
     ),
