@@ -1,6 +1,37 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const ADDRESS = "7400 36th Ave N, St Petersburg, FL 33710";
+async function readyLiveQuote(page:Page){
+  await expect(page.getByTestId("input-square-feet")).toHaveValue("1166");
+  await page.getByTestId("select-policy-type").selectOption("HO3");
+  await page.getByTestId("select-prior-claims").selectOption("no");
+  await page.getByTestId("select-new-purchase").selectOption("yes");
+  await page.getByTestId("input-purchase-date").fill("2027-01-15");
+  await page.getByTestId("input-property-purchase-price").fill("385000");
+  await page.getByTestId("select-ho6-residence-use").selectOption("primary");
+  await page.getByTestId("input-roof-year").fill("2018");
+  await page.getByTestId("confirm-square-footage").check();
+}
+test("missing contact prompts before carrier import; details can be saved",async({page})=>{
+  await fixture(page,{rate:250});
+  await page.route("**/api/insurance/qr-start",route=>route.fulfill({status:428,json:{code:"CONTACT_REQUIRED"}}));
+  await readyLiveQuote(page);
+  await page.getByRole("button",{name:"Get Live Quotes",exact:true}).click();
+  await expect(page.getByRole("dialog")).toContainText("Contact details required");
+  await page.getByLabel("First and last name",{exact:true}).fill("Test Buyer");
+  await page.getByLabel("Phone",{exact:true}).fill("2025550123");
+  await page.getByRole("button",{name:"Save contact details"}).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+test("an unconfirmed import stops pending polling with agent-review copy",async({page})=>{
+  await fixture(page,{rate:250});
+  await page.route("**/api/insurance/qr-start",route=>route.fulfill({json:{status:"pending",quoteAccessToken:"test-access"}}));
+  await page.route("**/api/insurance/qr-cache?**",route=>route.fulfill({json:{found:true,status:"error",quotes:[]}}));
+  await readyLiveQuote(page);
+  await page.getByRole("button",{name:"Get Live Quotes",exact:true}).click();
+  await expect(page.getByText("An agent will finish your quotes. Carrier submission could not be confirmed; no carrier results are available.")).toBeVisible({timeout:20000});
+  await expect(page.getByText("Working…",{exact:true})).toHaveCount(0);
+});
 const user = {
   id: "00000000-0000-4000-8000-000000000082", aud: "authenticated", role: "authenticated",
   email: "insurance-facts@example.test", email_confirmed_at: "2026-01-01T00:00:00Z",

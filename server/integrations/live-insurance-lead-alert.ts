@@ -7,6 +7,7 @@ export interface LiveInsuranceLead {
   phone: string;
   email: string;
   requestId: string;
+  reviewReason?: string;
 }
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, character => ({
@@ -20,6 +21,7 @@ export function liveInsuranceLeadContent(lead: LiveInsuranceLead) {
     ["Name", singleLine(lead.name) || "Not provided"],
     ["Phone", singleLine(lead.phone) || "Not provided"],
     ["Email", singleLine(lead.email) || "Not provided"],
+    ...(lead.reviewReason ? [["Agent review", singleLine(lead.reviewReason)]] : []),
   ];
   return {
     subject: `LIVE INSURANCE LEAD: ${singleLine(lead.address)}`,

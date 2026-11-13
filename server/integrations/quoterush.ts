@@ -100,16 +100,8 @@ function getAgency(): string {
   return process.env.QUOTERUSH_AGENCY_ID ?? process.env.QUOTERUSH_AGENCY ?? "";
 }
 
-function parseLeadId(text: string): number | null {
-  try {
-    const json = JSON.parse(text);
-    const id = json.id ?? json.leadId ?? json.LeadId
-               ?? json.lead_id ?? json.Id;
-    if (id) return parseInt(String(id), 10);
-  } catch {}
-  const m = text.match(/Lead\s*#(\d+)/i);
-  return m ? parseInt(m[1], 10) : null;
-}
+import { inspectImporterResponse } from "./quoterush-import-response";
+export { parseLeadId } from "./quoterush-import-response";
 
 function formatDateOfBirth(dateOfBirth: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateOfBirth);
@@ -143,10 +135,10 @@ export function buildImporterPayload(
     Client: {
       NameFirst: p.firstName || "Havo",
       NameLast: p.lastName || "Lead",
-      DOB: formatDateOfBirth(p.dateOfBirth),
       DateOfBirth: formatDateOfBirth(p.dateOfBirth),
-      Phone: p.phone || "",
+      DOB: formatDateOfBirth(p.dateOfBirth),
       PhoneNumber: p.phone || "",
+      Phone: p.phone || "",
       PhoneCell: p.phone || "",
       PhoneOther: "",
       EmailAddress: p.email || "",
@@ -162,7 +154,7 @@ export function buildImporterPayload(
       Zip: p.zip,
       County: p.county || "",
       International: false,
-      AssumedCreditScore: process.env.QUOTERUSH_ASSUMED_CREDIT_SCORE || "Excellent",
+      AssumedCreditScore: "Excellent",
       CreditPermission: "No",
       Assigned: assignedEmail,
       LeadSource: "Havo Platform",
@@ -181,14 +173,14 @@ export function buildImporterPayload(
       Zip: p.zip,
       County: p.county || "",
       NewPurchase: p.newPurchase || "No",
-      ...(p.purchaseDate ? { PurchaseDate: p.purchaseDate } : {}),
+      ...(p.purchaseDate ? { PurchaseDate: formatDateOfBirth(p.purchaseDate) } : {}),
       PurchasePrice: String(Math.round(p.purchasePrice)),
       UsageType: p.usageType || "Primary",
-      MonthsOccupied: p.monthsOccupied,
       MonthsOwnerOccupied: p.monthsOccupied,
+      MonthsOccupied: p.monthsOccupied,
       ...(p.rentalTerm ? { RentalTerm: p.rentalTerm } : {}),
       YearBuilt: String(p.yearBuilt),
-       PolicyEffectiveDate: p.policyEffectiveDate,
+       PolicyEffectiveDate: formatDateOfBirth(p.policyEffectiveDate),
       // Do not fabricate a square-footage value. Carrier data is only useful
       // when it is supplied by the user or a verified property source.
       ...(p.sqFt > 0 ? { SquareFeet: String(Math.round(p.sqFt)) } : {}),
@@ -411,10 +403,7 @@ export async function importAndSubmit(
   }
 
   // Step B: Import lead
-  console.log(
-    "[quoterush] importing lead:",
-    params.streetAddress, params.city
-  );
+  console.log("[quoterush] importing lead");
   const importPayload = buildImporterPayload(
     params, ASSIGNED_EMAIL
   );
@@ -422,7 +411,7 @@ export async function importAndSubmit(
   let importText: string;
   try {
     importRes = await fetch(
-      `https://importer.quoterush.com/Json/Import/${WEBID}?responseType=JSON`,
+      `https://importer.quoterush.com/Json/Import/${WEBID}`,
       {
         method: "POST",
         headers: {
@@ -430,6 +419,7 @@ export async function importAndSubmit(
           "webpassword": WEBPASSWORD,
         },
         body: JSON.stringify(importPayload),
+        signal: AbortSignal.timeout(30000),
       }
     );
     importText = await importRes.text();
@@ -443,20 +433,31 @@ export async function importAndSubmit(
     };
   }
   console.log("[quoterush] import completed:", importRes.status);
+  const inspection = inspectImporterResponse(importText, importRes.headers.get("content-type"), [
+    WEBID, WEBPASSWORD, ENDPOINT_KEY, AGENCY, ASSIGNED_EMAIL,
+    params.firstName, params.lastName, params.email, params.phone, params.dateOfBirth,
+    formatDateOfBirth(params.dateOfBirth), params.streetAddress, params.city, params.zip,
+    hooks.callbackUrl ?? "",
+  ]);
+  console.log("[quoterush] importer diagnostics", inspection.diagnostics);
 
-  if (!importRes.ok) {
+  if (!importRes.ok || inspection.rejected) {
+    if (inspection.leadId) await hooks.onLeadCreated?.(inspection.leadId);
     return {
-      leadId: 0,
+      leadId: inspection.leadId ?? 0,
       submitted: false,
-      error: `Import failed (${importRes.status})`,
+      error: `Import failed (${importRes.status})${inspection.leadId ? `; LeadId ${inspection.leadId}` : ""}: ${inspection.error}`,
         ...(rawPropertyData ? { rawPropertyData } : {}),
     };
   }
 
   // Step C: Extract LeadId
-  let leadId = parseLeadId(importText);
+  const leadId = inspection.leadId;
 
   if (!leadId || leadId <= 0) {
+    // HTTP success is not business success. Do not log the raw response:
+    // the provider may echo credentials or applicant data.
+    console.warn("[quoterush] importer did not return a verified LeadId",{httpStatus:importRes.status,code:"IMPORT_LEAD_ID_MISSING"});
     return {
       leadId: 0,
       submitted: false,
@@ -500,6 +501,7 @@ export async function importAndSubmit(
           ...(carriers?{Carriers:carriers}:{}),
           ...(hooks.callbackUrl?{callbackUrl:hooks.callbackUrl}:{}),
         }),
+        signal: AbortSignal.timeout(30000),
       }
     );
     submitText = await submitRes.text();
@@ -521,7 +523,7 @@ export async function importAndSubmit(
   return {
     leadId,
     submitted: submitRes.ok,
-    error: submitRes.ok ? undefined : submitText,
+    error: submitRes.ok ? undefined : `Quote submission failed (${submitRes.status})`,
     ...(rawPropertyData ? { rawPropertyData } : {}),
   };
 }

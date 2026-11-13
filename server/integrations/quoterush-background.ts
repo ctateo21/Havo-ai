@@ -63,8 +63,15 @@ export interface QuotePollingDependencies {
 const defaultDependencies: QuotePollingDependencies = {
   alertManualReview:async row=>{
     const {notifyInsuranceCrm}=await import("./quoterush-import-jobs");
-    await notifyInsuranceCrm(row,{},"No usable carrier quotes; agent follow-up requested");
-    await sendLiveInsuranceLeadAlert({address:row.addressDisplay,name:row.emailRecipient??"",email:row.emailRecipient??"",phone:"",
+    const {supabaseAdmin}=await import("../supabase");
+    const {insuranceContact}=await import("../insurance-contact");
+    const profile=row.ownerUserId&&supabaseAdmin
+      ? (await supabaseAdmin.from("profiles").select("name,phone,email").eq("id",row.ownerUserId).maybeSingle()).data:null;
+    const metadata=row.ownerUserId&&supabaseAdmin
+      ? (await supabaseAdmin.auth.admin.getUserById(row.ownerUserId)).data.user?.user_metadata??{}:{};
+    const contact=insuranceContact(profile,metadata,row.emailRecipient??"");
+    await notifyInsuranceCrm(row,contact,"No usable carrier quotes; agent follow-up requested");
+    await sendLiveInsuranceLeadAlert({address:row.addressDisplay,name:contact.name||"Contact details need review",email:contact.email,phone:contact.phone,
       requestId:`manual-${row.id}-${row.triggeredAt.getTime()}`});
   },
   getQuotes,

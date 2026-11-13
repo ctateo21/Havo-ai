@@ -32,7 +32,7 @@ export async function enqueueInsuranceImport(row:QuoteCacheRow,params:QuoteRushP
 async function alertAgent(row:QuoteCacheRow,params:Partial<QuoteRushParams>,reason:string){
   await notifyInsuranceCrm(row,params,reason);
   await sendLiveInsuranceLeadAlert({address:row.addressDisplay,name:`${params.firstName??""} ${params.lastName??""}`.trim(),
-    email:row.emailRecipient??"",phone:params.phone??"",requestId:`${row.id} ${reason}`});
+    email:row.emailRecipient??"",phone:params.phone??"",reviewReason:reason,requestId:`${row.id} ${reason}`});
 }
 export async function runInsuranceImport(id:number){
   if(!supabaseAdmin)return;
@@ -40,6 +40,7 @@ export async function runInsuranceImport(id:number){
   if(error||!job)return;
   const [row]=await readQuoteCache({id},1);
   if(!row||row.triggeredAt.toISOString()!==new Date(job.generation).toISOString()||row.status!=="pending"||row.leadId)return;
+  let reviewReason = "QuoteRush import or submission unconfirmed";
   try{
     const profile=await readPrivateProfile(job.owner_user_id);
     if(!profile?.dateOfBirth)throw Error("Private applicant profile unavailable");
@@ -55,11 +56,15 @@ export async function runInsuranceImport(id:number){
           assumptions:[...(current.assumptions??[]),...(warning?[warning]:[])]},{triggeredAt:row.triggeredAt,leadId:current.leadId,expectedStatus:"pending"});
       },
     });
-    if(!result.leadId)throw Error("Importer returned no verified LeadId");
     if(result.rawPropertyData){
       const fetched=new Date(),expires=new Date(fetched);expires.setFullYear(expires.getFullYear()+1);
       await updateQuoteCache(id,{rawQuoterushPropertyData:result.rawPropertyData,rawQuoterushPropertyDataSource:"quoterush",
-        rawQuoterushPropertyDataFetchedAt:fetched,rawQuoterushPropertyDataExpiresAt:expires},{triggeredAt:row.triggeredAt,leadId:result.leadId,expectedStatus:"pending"});
+        rawQuoterushPropertyDataFetchedAt:fetched,rawQuoterushPropertyDataExpiresAt:expires},{triggeredAt:row.triggeredAt,leadId:result.leadId || null,expectedStatus:"pending"});
+    }
+    if(!result.leadId||!result.submitted){
+      reviewReason = result.error || reviewReason;
+      console.warn("[quoterush] Agent review required",{phase:result.leadId?"submission":"import",hasVerifiedLeadId:!!result.leadId});
+      throw Error("QuoteRush import or submission unconfirmed");
     }
     await supabaseAdmin.from("insurance_quote_import_jobs").update({status:result.submitted?"submitted":"manual-review",params:{},callback_token:""}).eq("cache_id",id).eq("generation",job.generation);
     scheduleQuoteJob(id,0);
@@ -69,10 +74,11 @@ export async function runInsuranceImport(id:number){
     await supabaseAdmin.from("insurance_quote_import_jobs").update({status:"manual-review",params:{},callback_token:""}).eq("cache_id",id).eq("generation",job.generation);
     const [current]=await readQuoteCache({id},1);
     if(current&&current.triggeredAt.getTime()===row.triggeredAt.getTime()){
-      await updateQuoteCache(id,{assumptions:[...(current.assumptions??[]),"Agent review required: import or submission could not be confirmed."]},{triggeredAt:row.triggeredAt,leadId:current.leadId,expectedStatus:"pending"});
-      scheduleQuoteJob(id,0); // reaches manual-result email at the 12-minute cap
+      await updateQuoteCache(id,{status:"error",assumptions:[...(current.assumptions??[]),"Agent review required: import or submission could not be confirmed."]},{triggeredAt:row.triggeredAt,leadId:current.leadId,expectedStatus:"pending"});
+      // No carrier-results email for an unconfirmed import. alertAgent below
+      // informs the team; the browser sees a terminal state immediately.
     }
-    await alertAgent(row,job.params,"import requires manual reconciliation");
+    await alertAgent(row,job.params,reviewReason);
   }
 }
 let sweeper:ReturnType<typeof setInterval>|undefined;
@@ -97,13 +103,17 @@ export function registerQuoteCallbackAndImports(app:Express,notify?:typeof crmAl
   const resume=async()=>{
     if(!supabaseAdmin)return;
     try{
-      const {data,error}=await supabaseAdmin.from("insurance_quote_import_jobs").select("cache_id,status,claimed_at,generation").in("status",["queued","running"]).limit(100);
+      const {data,error}=await supabaseAdmin.from("insurance_quote_import_jobs").select("cache_id,status,claimed_at,generation,params").in("status",["queued","running"]).limit(100);
       if(error)return; // Migration not approved/applied yet; no work can be queued.
       for(const job of data??[]){
         if(job.status==="queued")void runInsuranceImport(job.cache_id).catch(()=>{});
         else if(Date.parse(job.claimed_at)<Date.now()-180000){
           await supabaseAdmin.from("insurance_quote_import_jobs").update({status:"manual-review",params:{},callback_token:""}).eq("cache_id",job.cache_id).eq("generation",job.generation).eq("status","running");
-          scheduleQuoteJob(job.cache_id,0);
+          const [row]=await readQuoteCache({id:job.cache_id},1);
+          if(row&&row.triggeredAt.toISOString()===new Date(job.generation).toISOString()){
+            await updateQuoteCache(row.id,{status:"error",assumptions:[...(row.assumptions??[]),"Agent review required: interrupted import must be reconciled."]},{triggeredAt:row.triggeredAt,leadId:row.leadId,expectedStatus:"pending"});
+            await alertAgent(row,job.params??{},"interrupted import requires manual reconciliation");
+          }
         }
       }
     }catch{/* Retry the queue read later, never re-import an ambiguous run. */}

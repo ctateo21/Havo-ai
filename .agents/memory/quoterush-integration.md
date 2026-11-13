@@ -8,7 +8,7 @@ description: How Havo's live insurance quoting talks to QuoteRUSH — manual tri
 ## Current insurance decisions (2026-11-12; supersede older shared-cache notes below)
 
 **Rule:** Never pull or ask permission to pull credit; send CreditPermission No.
-Use an assumed score (default Excellent), clearly disclosed.
+Use the fixed assumed score Excellent, clearly disclosed; no environment override.
 Coverage A comes only from confirmed area and administrator-configured county
 rebuild rates, or an explicit manual value—never market value. Rates start NULL.
 Roof year is explicitly entered/selected, integer 2000–2027, never inferred age.
@@ -215,16 +215,15 @@ prompt (Refresh = GetQuotes only, no re-submit, no cost).
 
 ## Credit-score authorization handling
 Quote requests do not ask the consumer for credit permission and are never
-blocked by the private consent timestamp. The importer always sends
-`CreditPermission: "Yes"` while the agent verification view labels permission
-and Excellent credit as unverified assumptions to confirm on follow-up.
+blocked by the private consent timestamp. The importer must always send
+`CreditPermission: "No"` with assumed Excellent credit. Never add a credit
+pull or permission prompt.
 
 Keep the historical private consent column physically present to avoid a
 destructive migration, but do not restore its removed consumer API/status flow.
 
-**Why:** product policy treats credit permission as an agent follow-up item;
-the consumer checkbox and five consent gates contradicted that low-friction
-flow and blocked otherwise valid quote requests.
+**Why:** Christian explicitly requires no credit pulls, including when repairing
+failed imports. The earlier credit-permission decision has been superseded.
 
 **How to apply:** do not add a consumer consent question, disabled-button
 condition, pre-cache gate, or pre-import recheck unless product policy changes.
