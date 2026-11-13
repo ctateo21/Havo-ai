@@ -430,6 +430,7 @@ export async function importAndSubmit(
           "webpassword": WEBPASSWORD,
         },
         body: JSON.stringify(importPayload),
+        signal: AbortSignal.timeout(30000),
       }
     );
     importText = await importRes.text();
@@ -457,6 +458,9 @@ export async function importAndSubmit(
   let leadId = parseLeadId(importText);
 
   if (!leadId || leadId <= 0) {
+    // HTTP success is not business success. Do not log the raw response:
+    // the provider may echo credentials or applicant data.
+    console.warn("[quoterush] importer did not return a verified LeadId",{httpStatus:importRes.status,code:"IMPORT_LEAD_ID_MISSING"});
     return {
       leadId: 0,
       submitted: false,
@@ -500,6 +504,7 @@ export async function importAndSubmit(
           ...(carriers?{Carriers:carriers}:{}),
           ...(hooks.callbackUrl?{callbackUrl:hooks.callbackUrl}:{}),
         }),
+        signal: AbortSignal.timeout(30000),
       }
     );
     submitText = await submitRes.text();
@@ -521,7 +526,7 @@ export async function importAndSubmit(
   return {
     leadId,
     submitted: submitRes.ok,
-    error: submitRes.ok ? undefined : submitText,
+    error: submitRes.ok ? undefined : `Quote submission failed (${submitRes.status})`,
     ...(rawPropertyData ? { rawPropertyData } : {}),
   };
 }

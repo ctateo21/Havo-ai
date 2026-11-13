@@ -61,6 +61,9 @@ test("callback token is compared against hash, not lead enumeration",()=>{
 });
 test("transactional zero-quote content has agency disclosures and schedule link",()=>{
   const r=quoteRushResultsContent({propertyAddress:request.address,quotes:[],physicalAddress:"Tampa Bay, Florida",unsubscribeUrl:"https://example.test/preferences"});
+  assert.match(r.subject,/finishing your insurance quotes/);
+  assert.doesNotMatch(r.subject,/carrier quotes/);
+  assert.doesNotMatch(r.html,/Your preliminary insurance carrier quotes/);
   assert.match(r.text,/finishing your quotes manually/);assert.match(r.text,/no credit check performed/);assert.match(r.text,/not a binder/);assert.match(r.text,/W142842/);assert.match(r.html,/Schedule a call/);
   const source=readFileSync(new URL("./property-alert-emails.ts",import.meta.url),"utf8").split("export async function sendQuoteRushResultsEmail")[1].split("export async function sendInternalAlert")[0];
   assert.doesNotMatch(source,/isUnsubscribed/);assert.match(source,/QUOTE_RESULTS_BCC/);

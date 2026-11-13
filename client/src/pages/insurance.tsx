@@ -8,6 +8,9 @@ import {
 } from "@/lib/auth";
 import { notifyNewScenario } from "@/lib/notify-scenario";
 import { authedFetch } from "@/lib/authed-fetch";
+import { updateProfileContact } from "@/lib/auth";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import {
   clearQRCache,
   type QRCacheEntry,
@@ -860,6 +863,11 @@ export default function InsuranceDashboard() {
   } | null>(null);
   const [agentVerification, setAgentVerification] = useState<string[]>([]);
   const [dobPromptOpen, setDobPromptOpen] = useState(false);
+  const [contactPromptOpen,setContactPromptOpen]=useState(false);
+  const [contactName,setContactName]=useState("");
+  const [contactPhone,setContactPhone]=useState("");
+  const [contactError,setContactError]=useState("");
+  const [contactSaving,setContactSaving]=useState(false);
   const [dobInput, setDobInput] = useState("");
   const [dobError, setDobError] = useState("");
   const [dobSaving, setDobSaving] = useState(false);
@@ -1808,7 +1816,7 @@ export default function InsuranceDashboard() {
           if (qrWaitRef.current) clearTimeout(qrWaitRef.current);
           return;
         }
-        if (data.found && data.status === "error") {
+        if (data.found && (data.status === "error" || data.status === "failed" || (data.status === "success" && !data.quotes?.length))) {
           setQrStatus("error");
           if (qrTimerRef.current) clearInterval(qrTimerRef.current);
           if (qrWaitRef.current) clearTimeout(qrWaitRef.current);
@@ -1930,14 +1938,14 @@ export default function InsuranceDashboard() {
           quoteCounter: counter,
         }, policyType);
 
-        if (serverStatus === "success") {
+        if (serverStatus === "success" && data.quotes?.length) {
           setQrStatus("success");
           if (qrWaitRef.current) clearTimeout(qrWaitRef.current);
           if (qrPollRef.current)
             clearInterval(qrPollRef.current);
           if (qrTimerRef.current)
             clearInterval(qrTimerRef.current);
-        } else if (serverStatus === "error") {
+        } else if (serverStatus === "error" || serverStatus === "failed" || (serverStatus === "success" && !data.quotes?.length)) {
           setQrStatus("error");
           if (qrWaitRef.current) clearTimeout(qrWaitRef.current);
           if (qrPollRef.current)
@@ -2100,6 +2108,12 @@ export default function InsuranceDashboard() {
       if (epoch !== quoteEpochRef.current) return;
 
       if (!startRes.ok) {
+        if(startRes.status===428&&data.code==="CONTACT_REQUIRED"){
+          setQrStatus("idle");
+          if(qrTimerRef.current)clearInterval(qrTimerRef.current);
+          setContactPromptOpen(true);
+          return;
+        }
         if (
           startRes.status === 428 &&
           data.code === "DOB_REQUIRED"
@@ -2727,7 +2741,7 @@ export default function InsuranceDashboard() {
                         {qrStatus === "expired" &&
                           "These saved rates are over 30 days old — re-run for current pricing."}
                         {qrStatus === "error" &&
-                          "Quote request failed — call us for a custom quote."}
+                          "An agent will finish your quotes — carrier submission could not be confirmed."}
                       </p>
                     </div>
                     <div className="shrink-0 flex items-center gap-2">
@@ -3087,8 +3101,8 @@ export default function InsuranceDashboard() {
                     qrQuotes.length === 0 && (
                     <div className="text-center py-4 space-y-3">
                       <p className="text-sm text-muted-foreground">
-                        This property may need a custom quote.
-                        Contact Tateo &amp; Co directly.
+                        An agent will finish your quotes. Carrier submission
+                        could not be confirmed; no carrier results are available.
                       </p>
                       <div className="flex gap-2 justify-center">
                         <Button
@@ -3159,6 +3173,29 @@ export default function InsuranceDashboard() {
       />
 
       {/* ── Existing-account live-quote DOB preflight ── */}
+      <Dialog open={contactPromptOpen} onOpenChange={setContactPromptOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Contact details required for live quotes</DialogTitle></DialogHeader>
+          <form className="space-y-3" onSubmit={async event=>{
+            event.preventDefault();
+            if(contactName.trim().split(/\s+/).length<2||contactName.includes("@")||contactPhone.replace(/\D/g,"").length<10){setContactError("Enter your first and last name and a valid phone number.");return;}
+            setContactSaving(true);setContactError("");
+            try{
+              const result=await updateProfileContact({name:contactName,phone:contactPhone});
+              if(!result.ok){setContactError(result.error??"Unable to save contact details.");return;}
+              setContactPromptOpen(false);
+              toast({title:"Contact details saved",description:"Select Get Live Quotes to submit your request."});
+            }finally{setContactSaving(false);}
+          }}>
+            <Label htmlFor="quote-contact-name">First and last name</Label>
+            <Input id="quote-contact-name" value={contactName} onChange={e=>setContactName(e.target.value)} required />
+            <Label htmlFor="quote-contact-phone">Phone</Label>
+            <Input id="quote-contact-phone" type="tel" value={contactPhone} onChange={e=>setContactPhone(e.target.value)} required />
+            {contactError&&<p role="alert">{contactError}</p>}
+            <Button disabled={contactSaving} type="submit">Save contact details</Button>
+          </form>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={dobPromptOpen}
         onOpenChange={(open) => {

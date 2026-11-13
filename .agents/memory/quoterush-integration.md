@@ -215,16 +215,15 @@ prompt (Refresh = GetQuotes only, no re-submit, no cost).
 
 ## Credit-score authorization handling
 Quote requests do not ask the consumer for credit permission and are never
-blocked by the private consent timestamp. The importer always sends
-`CreditPermission: "Yes"` while the agent verification view labels permission
-and Excellent credit as unverified assumptions to confirm on follow-up.
+blocked by the private consent timestamp. The importer must always send
+`CreditPermission: "No"` with assumed Excellent credit. Never add a credit
+pull or permission prompt.
 
 Keep the historical private consent column physically present to avoid a
 destructive migration, but do not restore its removed consumer API/status flow.
 
-**Why:** product policy treats credit permission as an agent follow-up item;
-the consumer checkbox and five consent gates contradicted that low-friction
-flow and blocked otherwise valid quote requests.
+**Why:** Christian explicitly requires no credit pulls, including when repairing
+failed imports. The earlier credit-permission decision has been superseded.
 
 **How to apply:** do not add a consumer consent question, disabled-button
 condition, pre-cache gate, or pre-import recheck unless product policy changes.

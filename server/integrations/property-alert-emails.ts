@@ -503,9 +503,11 @@ export function quoteRushResultsContent(args: {
   const disclosure = args.windMitigationReportConfirmed === true
     ? ""
     : `\n\n${WIND_MITIGATION_DISCLOSURE}`;
-  const subject = `Your insurance carrier quotes for ${args.propertyAddress}`;
+  const subject = args.quotes.length
+    ? `Your insurance carrier quotes for ${args.propertyAddress}`
+    : `We're finishing your insurance quotes for ${args.propertyAddress}`;
   const text =
-    `Your preliminary insurance carrier quotes\n\n` +
+    (rows.length ? `Your preliminary insurance carrier quotes\n\n` : `We're finishing your insurance quotes\n\n`) +
     `Property: ${args.propertyAddress}\n\n` +
     textRows.join("\n\n") +
     (rows.length?"":noQuotes)+
@@ -530,7 +532,7 @@ export function quoteRushResultsContent(args: {
   const html =
     `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">` +
     `<p style="font-size:22px;font-weight:bold;color:${HAVO_NAVY}">Havo</p>` +
-    `<h1 style="font-size:20px;color:${HAVO_NAVY}">Your preliminary insurance carrier quotes</h1>` +
+    `<h1 style="font-size:20px;color:${HAVO_NAVY}">${rows.length?"Your preliminary insurance carrier quotes":"We're finishing your insurance quotes"}</h1>` +
     `<p>Property: <strong>${esc(args.propertyAddress)}</strong></p>` +
     `<table cellpadding="0" style="border-collapse:collapse;width:100%;font-size:14px">${htmlRows}</table>` +
     htmlDisclosure +

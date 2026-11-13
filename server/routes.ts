@@ -32,6 +32,7 @@ import {
 } from "@shared/schema";
 import { searchProperties, getPropertyDetails, ZillowSearchParams, ZillowProperty } from "./integrations/zillow";
 import { isHillsboroughCountyAddress } from "@shared/hillsborough-county";
+import {insuranceContact} from "./insurance-contact";
 
 /**
  * ZIP-only Hillsborough matches that another supported county also claims
@@ -1538,9 +1539,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           : { data: null };
         const userMetadata =
           (user.user_metadata ?? {}) as Record<string, any>;
-        const userEmail = String(profile?.email ?? user.email ?? "");
-        const userName = String(profile?.name ?? userMetadata.name ?? "");
-        const userPhone = String(profile?.phone ?? userMetadata.phone ?? "");
+        const contact=insuranceContact(profile,userMetadata,user.email);
+        if(!contact.valid)return res.status(428).json({code:"CONTACT_REQUIRED",error:"Please complete your first and last name and phone in My Profile before requesting live carrier quotes."});
+        const userEmail = contact.email;
+        const userName = contact.name;
+        const userPhone = contact.phone;
         const privateInsuranceProfile =
           await getPrivateInsuranceProfile(user.id);
         const dateOfBirth = privateInsuranceProfile.dateOfBirth ?? "";
