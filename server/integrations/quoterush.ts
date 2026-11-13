@@ -100,16 +100,8 @@ function getAgency(): string {
   return process.env.QUOTERUSH_AGENCY_ID ?? process.env.QUOTERUSH_AGENCY ?? "";
 }
 
-function parseLeadId(text: string): number | null {
-  try {
-    const json = JSON.parse(text);
-    const id = json.id ?? json.leadId ?? json.LeadId
-               ?? json.lead_id ?? json.Id;
-    if (id) return parseInt(String(id), 10);
-  } catch {}
-  const m = text.match(/Lead\s*#(\d+)/i);
-  return m ? parseInt(m[1], 10) : null;
-}
+import { inspectImporterResponse } from "./quoterush-import-response";
+export { parseLeadId } from "./quoterush-import-response";
 
 function formatDateOfBirth(dateOfBirth: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateOfBirth);
@@ -411,10 +403,7 @@ export async function importAndSubmit(
   }
 
   // Step B: Import lead
-  console.log(
-    "[quoterush] importing lead:",
-    params.streetAddress, params.city
-  );
+  console.log("[quoterush] importing lead");
   const importPayload = buildImporterPayload(
     params, ASSIGNED_EMAIL
   );
@@ -444,18 +433,25 @@ export async function importAndSubmit(
     };
   }
   console.log("[quoterush] import completed:", importRes.status);
+  const inspection = inspectImporterResponse(importText, importRes.headers.get("content-type"), [
+    WEBID, WEBPASSWORD, ENDPOINT_KEY, AGENCY, ASSIGNED_EMAIL,
+    params.firstName, params.lastName, params.email, params.phone, params.dateOfBirth,
+    formatDateOfBirth(params.dateOfBirth), params.streetAddress, params.city, params.zip,
+    hooks.callbackUrl ?? "",
+  ]);
+  console.log("[quoterush] importer diagnostics", inspection.diagnostics);
 
-  if (!importRes.ok) {
+  if (!importRes.ok || inspection.rejected) {
     return {
       leadId: 0,
       submitted: false,
-      error: `Import failed (${importRes.status})`,
+      error: `Import failed (${importRes.status}): ${inspection.error}`,
         ...(rawPropertyData ? { rawPropertyData } : {}),
     };
   }
 
   // Step C: Extract LeadId
-  let leadId = parseLeadId(importText);
+  const leadId = inspection.leadId;
 
   if (!leadId || leadId <= 0) {
     // HTTP success is not business success. Do not log the raw response:

@@ -32,7 +32,7 @@ export async function enqueueInsuranceImport(row:QuoteCacheRow,params:QuoteRushP
 async function alertAgent(row:QuoteCacheRow,params:Partial<QuoteRushParams>,reason:string){
   await notifyInsuranceCrm(row,params,reason);
   await sendLiveInsuranceLeadAlert({address:row.addressDisplay,name:`${params.firstName??""} ${params.lastName??""}`.trim(),
-    email:row.emailRecipient??"",phone:params.phone??"",requestId:`${row.id} ${reason}`});
+    email:row.emailRecipient??"",phone:params.phone??"",reviewReason:reason,requestId:`${row.id} ${reason}`});
 }
 export async function runInsuranceImport(id:number){
   if(!supabaseAdmin)return;
@@ -40,6 +40,7 @@ export async function runInsuranceImport(id:number){
   if(error||!job)return;
   const [row]=await readQuoteCache({id},1);
   if(!row||row.triggeredAt.toISOString()!==new Date(job.generation).toISOString()||row.status!=="pending"||row.leadId)return;
+  let reviewReason = "QuoteRush import or submission unconfirmed";
   try{
     const profile=await readPrivateProfile(job.owner_user_id);
     if(!profile?.dateOfBirth)throw Error("Private applicant profile unavailable");
@@ -55,14 +56,15 @@ export async function runInsuranceImport(id:number){
           assumptions:[...(current.assumptions??[]),...(warning?[warning]:[])]},{triggeredAt:row.triggeredAt,leadId:current.leadId,expectedStatus:"pending"});
       },
     });
-    if(!result.leadId||!result.submitted){
-      console.warn("[quoterush] Agent review required",{phase:result.leadId?"submission":"import",hasVerifiedLeadId:!!result.leadId});
-      throw Error("QuoteRush import or submission unconfirmed");
-    }
     if(result.rawPropertyData){
       const fetched=new Date(),expires=new Date(fetched);expires.setFullYear(expires.getFullYear()+1);
       await updateQuoteCache(id,{rawQuoterushPropertyData:result.rawPropertyData,rawQuoterushPropertyDataSource:"quoterush",
-        rawQuoterushPropertyDataFetchedAt:fetched,rawQuoterushPropertyDataExpiresAt:expires},{triggeredAt:row.triggeredAt,leadId:result.leadId,expectedStatus:"pending"});
+        rawQuoterushPropertyDataFetchedAt:fetched,rawQuoterushPropertyDataExpiresAt:expires},{triggeredAt:row.triggeredAt,leadId:result.leadId || null,expectedStatus:"pending"});
+    }
+    if(!result.leadId||!result.submitted){
+      reviewReason = result.error || reviewReason;
+      console.warn("[quoterush] Agent review required",{phase:result.leadId?"submission":"import",hasVerifiedLeadId:!!result.leadId});
+      throw Error("QuoteRush import or submission unconfirmed");
     }
     await supabaseAdmin.from("insurance_quote_import_jobs").update({status:result.submitted?"submitted":"manual-review",params:{},callback_token:""}).eq("cache_id",id).eq("generation",job.generation);
     scheduleQuoteJob(id,0);
@@ -76,7 +78,7 @@ export async function runInsuranceImport(id:number){
       // No carrier-results email for an unconfirmed import. alertAgent below
       // informs the team; the browser sees a terminal state immediately.
     }
-    await alertAgent(row,job.params,"import requires manual reconciliation");
+    await alertAgent(row,job.params,reviewReason);
   }
 }
 let sweeper:ReturnType<typeof setInterval>|undefined;

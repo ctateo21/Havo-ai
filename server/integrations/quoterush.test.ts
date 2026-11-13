@@ -1119,6 +1119,29 @@ test("successful property data survives a later importer failure for persistence
   }
 });
 
+test("HTTP 200 validation rejection never reaches carriers and retains enrichment", async () => {
+  const previousFetch = globalThis.fetch;
+  const keys = ["QUOTERUSH_WEBID","QUOTERUSH_WEBID_PASSWORD","QUOTERUSH_ENDPOINT_KEY","QUOTERUSH_AGENCY_ID"];
+  const old = keys.map(key=>process.env[key]);
+  keys.forEach(key=>{process.env[key]="synthetic-test-credential";});
+  let calls=0;
+  globalThis.fetch = (async (url) => {
+    calls++;
+    if(String(url).includes("GetPropertyData")) return new Response('{"SquareFeet":1999}');
+    if(String(url).includes("/Json/Import/")) return new Response('{"LeadID":12345,"Error":"Invalid PhoneNumber test@example.com"}',{status:200,headers:{"content-type":"application/json"}});
+    throw Error("Unexpected carrier request");
+  }) as typeof fetch;
+  try {
+    const result=await importAndSubmit(params);
+    assert.equal(calls,2);assert.equal(result.leadId,0);assert.equal(result.submitted,false);
+    assert.match(result.error!,/Invalid PhoneNumber/);assert.ok(!result.error!.includes("test@example.com"));
+    assert.deepEqual(result.rawPropertyData,{SquareFeet:1999});
+  } finally {
+    globalThis.fetch=previousFetch;
+    keys.forEach((key,i)=>{if(old[i]===undefined)delete process.env[key];else process.env[key]=old[i];});
+  }
+});
+
 test("successful property data survives an importer response-read exception", async () => {
   const previousFetch = globalThis.fetch;
   const oldEnv = {
