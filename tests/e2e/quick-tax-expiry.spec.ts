@@ -20,6 +20,9 @@ test("expired official jobs restart at most twice and retain the estimate",async
   await page.waitForTimeout(3500);
   expect(polls).toBe(3);
   expect(quick).toBe(3);
+  await page.getByRole("button",{name:/^Next/}).click();
+  await page.getByRole("button",{name:/^Next/}).click();
+  await page.getByRole("button",{name:/See My Estimate/}).click();
   const row=page.getByTestId("property-tax-row").first();
   await expect(row).toContainText("$500.00/mo");
   await expect(row).toContainText("Estimated");
