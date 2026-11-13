@@ -29,7 +29,16 @@ export async function captureDistrictRates(input:EstimatorInput,out:EstimatorOut
  const {error}=await supabaseAdmin.from("county_tax_rate_districts").upsert({county:input.county,tax_year:out.rateYear??input.taxYear,district_code:district,district_name:district,school_mills:school,non_school_mills:non,levies,source_name:out.sourceLabel??`${input.county} County Property Appraiser`,source_url:out.url,fetched_at:out.fetchedAt,verified_against:`${input.parcelId}; ${input.purchasePrice}; HX ${input.homestead}; AV ${out.adValoremCents/100}`,updated_by:"official-estimator"},{onConflict:"county,tax_year,district_code"});
  if(error)console.warn("[property-tax-rates] Capture unavailable; migration may await approval");
 }
-export async function readQuickRates(county:string,year:number,district?:string|null,city?:string|null){
+export async function readQuickRates(...args:Parameters<typeof readStoredQuickRates>){
+ let timer:ReturnType<typeof setTimeout>|undefined;
+ try{
+  return await Promise.race([readStoredQuickRates(...args),new Promise<Awaited<ReturnType<typeof readStoredQuickRates>>>(resolve=>{
+   timer=setTimeout(()=>resolve(bundledQuickRates(...args)),600);
+  })]);
+ }catch{return bundledQuickRates(...args);}
+ finally{if(timer)clearTimeout(timer);}
+}
+async function readStoredQuickRates(county:string,year:number,district?:string|null,city?:string|null){
  const bundled=bundledQuickRates(county,year,district,city);
  if(!supabaseAdmin)return bundled;
  const {data,error}=await supabaseAdmin.from("county_tax_rate_districts").select("*").eq("county",county).lte("tax_year",year).gte("tax_year",year-1).order("tax_year",{ascending:false});
