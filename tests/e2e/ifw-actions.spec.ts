@@ -1,11 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 import { officialTaxFixture } from "./official-tax-fixture";
+import { blockLiveNetwork } from "./mock-network";
 
 test.beforeEach(async ({page}) => {
+  await blockLiveNetwork(page);
   await page.route("**/api/property-tax/**", route => {
-    const input = route.request().postDataJSON();
-    return route.fulfill({json:officialTaxFixture(input.purchasePrice,input.isPrimaryResidence)});
+    const input = route.request().method()==="POST"?route.request().postDataJSON():{};
+    const fixture=officialTaxFixture(input.purchasePrice,input.isPrimaryResidence);
+    return route.fulfill({json:{...fixture,key:new URL(route.request().url()).searchParams.get("key")??fixture.key}});
   });
 });
 

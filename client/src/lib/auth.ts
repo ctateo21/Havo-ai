@@ -515,6 +515,8 @@ export interface CashBuyScenario {
   /** Manual-lock for `propertyTaxes` — blocks the price/occupancy-driven
    *  `computeAnnualTaxes` recompute in `setPurchasePrice`/`setOccupancy`. */
   propertyTaxesSource?: CashBuyManualSource;
+  /** Auditable quick/official lookup snapshot; mirrored in user_answer_sources JSON. */
+  propertyTaxProvenance?: string;
   homeownersInsurance?: number;  // annual (synced from simulator midpoint)
   /** Manual-lock for `homeownersInsurance` — blocks both the 0.75%-of-price
    *  default and the insurance-simulator overwrite. */
@@ -558,7 +560,7 @@ export interface CashBuyScenario {
   /** Generic per-field manual-lock map. Mirrors `purchase_scenarios.user_answer_sources`.
    *  Used alongside the typed *_source columns above so future writers can
    *  record provenance without a schema change. */
-  userAnswerSources?: Record<string, "manual" | "default" | "zillow" | "simulator">;
+  userAnswerSources?: Record<string, string>;
 }
 
 export type TrackedLoanPropertyType = "primary" | "secondary" | "investment";
@@ -1242,7 +1244,7 @@ function rowToCashBuy(row: any): CashBuyScenario {
       : undefined;
   const userAnswerSources =
     row.user_answer_sources && typeof row.user_answer_sources === "object"
-      ? row.user_answer_sources as Record<string, "manual" | "default" | "zillow" | "simulator">
+      ? row.user_answer_sources as Record<string, string>
       : undefined;
 
   // HOA is stored as (amount, frequency). Normalize to a monthly number
@@ -1268,6 +1270,7 @@ function rowToCashBuy(row: any): CashBuyScenario {
     propertyTypeSource: toManualSource(row.property_type_source),
     propertyTaxes: row.property_taxes != null ? Number(row.property_taxes) : undefined,
     propertyTaxesSource: toManualSource(row.property_taxes_source),
+    propertyTaxProvenance: userAnswerSources?.property_tax_provenance,
     homeownersInsurance: row.homeowners_insurance != null ? Number(row.homeowners_insurance) : undefined,
     homeownersInsuranceSource: toManualSource(row.homeowners_insurance_source),
     annualFloodIns: suppressSeparateFloodInsurance(row.property_type)

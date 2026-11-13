@@ -1,5 +1,5 @@
 import { load } from "cheerio";
-const UA = "Mozilla/5.0 (compatible; HavoPropertyTax/1.0; +https://havofl.com)";
+export const COUNTY_TAX_USER_AGENT = "Mozilla/5.0 (compatible; HavoPropertyTax/1.0; +https://havofl.com)";
 /** Per-lookup cookie jar; hidden WebForms controls are copied verbatim. */
 export class CountySession {
   finalUrl = "";
@@ -7,19 +7,25 @@ export class CountySession {
   private cookies = new Map<string, string>();
   private previousUrl?: string;
   private lastRequestAt=0;
+  private readonly deadline=Date.now()+25_000;
   constructor(private readonly sendReferer = false, private readonly minimumDelayMs=0) {}
   async request(url: string, body?: URLSearchParams | string, json = false): Promise<string> {
     for (let redirects = 0; redirects < 8; redirects++) {
+      if(Date.now()>=this.deadline)throw new Error("County HTTP session exceeded 25 second budget");
       const wait=this.minimumDelayMs-(Date.now()-this.lastRequestAt);
       if(wait>0) await new Promise(resolve=>setTimeout(resolve,wait));
       this.lastRequestAt=Date.now();
-      const r = await fetch(url, {
+      const send=()=>{
+       const remaining=this.deadline-Date.now();if(remaining<=0)throw new Error("County HTTP session exceeded 25 second budget");
+       return fetch(url, {
         method: body === undefined ? "GET" : "POST", redirect: "manual",
-        headers: { "User-Agent": UA, Cookie: [...this.cookies].map(([k,v]) => `${k}=${v}`).join("; "),
+        headers: { "User-Agent": COUNTY_TAX_USER_AGENT, Cookie: [...this.cookies].map(([k,v]) => `${k}=${v}`).join("; "),
           ...(this.sendReferer && this.previousUrl && new URL(this.previousUrl).origin===new URL(url).origin ? {Referer:this.previousUrl} : {}),
           ...(body !== undefined ? { "Content-Type": json ? "application/json; charset=utf-8" : "application/x-www-form-urlencoded" } : {}) },
-        ...(body === undefined ? {} : { body }), signal: AbortSignal.timeout(30_000),
-      });
+        ...(body === undefined ? {} : { body }), signal: AbortSignal.timeout(Math.min(12_000,remaining)),
+      });};
+      let r:Response;
+      try{r=await send();}catch{r=await send();}
       this.previousUrl=url;
       this.finalUrl=url;
       this.status=r.status;

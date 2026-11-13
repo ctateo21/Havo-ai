@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { blockLiveNetwork } from "./mock-network";
 
 const ADDRESS = "100 Flood Test Way, Tampa, FL 33602";
 
@@ -23,6 +24,7 @@ async function installCashBuyApiMocks(
   page: Page,
   floodHandler: (route: Route) => Promise<void>,
 ) {
+  await blockLiveNetwork(page);
   await page.route("**/api/**", async route => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/flood-zone") {

@@ -644,7 +644,8 @@ function PropertyTaxSection({
 }) {
   const [lookupState, setLookupState] = useState<TaxLookupState>({ status: "idle" });
   const [manualInput, setManualInput] = useState<string>("");
-  const [showManual, setShowManual] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [lookupBusy, setLookupBusy] = useState(false);
 
   // Pre-populate manual input when the loan already has a manual value.
   useEffect(() => {
@@ -658,6 +659,7 @@ function PropertyTaxSection({
     const requestedAddress = loan.propertyAddress.trim();
     onCollectorLookupStart();
     const requestGeneration = lookupGenerationRef.current;
+    setLookupBusy(true);
     setLookupState({ status: "pending", pendingMessage: "Contacting tax collector…" });
     try {
       const { ok, data } = await requestCurrentPropertyTaxBill(requestedAddress);
@@ -693,22 +695,21 @@ function PropertyTaxSection({
             data.reason ||
             "Automatic lookup is not available for this address.",
         });
-        setShowManual(true);
       } else {
         setLookupState({ status: "error", errorMessage: "Unexpected response from tax lookup." });
       }
     } catch (e: any) {
       setLookupState({ status: "error", errorMessage: e?.message || "Network error — check your connection and try again." });
-    }
+    } finally { setLookupBusy(false); }
   }
 
   function commitManual() {
-    const n = parseFloat(manualInput.replace(/[^0-9.]/g, ""));
+    if (!manualInput.trim()) return;
+    const n = Number(manualInput.replace(/,/g, ""));
     const patch = buildManualPropertyTaxPatch(n);
     if (!patch) return;
     onManualTaxCommit();
     onUpdate(patch);
-    setShowManual(false);
     setLookupState({ status: "idle" });
   }
 
@@ -722,11 +723,22 @@ function PropertyTaxSection({
 
   return (
     <div
-      className="rounded-md border bg-muted/20 p-3 space-y-2"
+      className="border-b border-border/50"
       data-testid={`property-tax-section-${loan.id}`}
       role="region"
       aria-label="Current owner's annual property-tax bill"
     >
+      <button type="button" aria-expanded={expanded} aria-controls={`refi-tax-details-${loan.id}`}
+        onClick={() => setExpanded(value => !value)}
+        className="flex w-full items-center justify-between gap-2 py-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+        <span>Property Taxes</span>
+        <span className="flex items-center gap-2">
+          <span className="text-[10px] text-muted-foreground">{loan.annualPropertyTaxSource === "manual" ? "Your bill" : lookupState.status === "pending" ? "Est. · updating" : hasTax && ["tax-collector-bill-scrape","manatee-arcgis"].includes(loan.annualPropertyTaxSource ?? "") ? "Official" : "Estimated"}</span>
+          <span className="font-medium tabular-nums">{monthly === null ? "—" : `${formatCurrency(monthly)}/mo`}</span>
+          <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 transition-transform ${expanded ? "rotate-180" : ""}`} />
+        </span>
+      </button>
+      <div id={`refi-tax-details-${loan.id}`} hidden={!expanded} className="space-y-2 rounded-md bg-muted/20 p-3 mb-2">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-1.5">
           <Receipt className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -740,7 +752,7 @@ function PropertyTaxSection({
             className="h-7 gap-1 text-xs"
             onClick={handleLookup}
             disabled={
-              lookupState.status === "pending" ||
+              lookupBusy ||
               !loan.propertyAddress ||
               loan.propertyAddress === "Unknown address"
             }
@@ -756,12 +768,12 @@ function PropertyTaxSection({
             variant="ghost"
             size="sm"
             className="h-7 gap-1 text-xs"
-            onClick={() => setShowManual(v => !v)}
+            onClick={() => { const input = document.getElementById(`manual-tax-${loan.id}`) as HTMLInputElement | null; input?.focus(); input?.select(); }}
             data-testid={`btn-property-tax-manual-${loan.id}`}
             aria-label="Enter property tax bill manually"
           >
             <Pencil className="h-3 w-3" />
-            {showManual ? "Cancel" : hasTax && loan.annualPropertyTaxSource === "manual" ? "Edit" : "Enter manually"}
+            {hasTax && loan.annualPropertyTaxSource === "manual" ? "Edit" : "Enter manually"}
           </Button>
         </div>
       </div>
@@ -847,7 +859,7 @@ function PropertyTaxSection({
       )}
 
       {/* Manual entry form */}
-      {showManual && (
+      {(
         <div className="flex items-center gap-2 pt-1 flex-wrap">
           <Label htmlFor={`manual-tax-${loan.id}`} className="text-xs whitespace-nowrap">Annual bill ($)</Label>
           <Input
@@ -860,7 +872,7 @@ function PropertyTaxSection({
             placeholder="e.g. 4800"
             value={manualInput}
             onChange={e => setManualInput(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") commitManual(); if (e.key === "Escape") setShowManual(false); }}
+            onKeyDown={e => { if (e.key === "Enter") commitManual(); if (e.key === "Escape") setManualInput(loan.annualPropertyTaxSource === "manual" ? String(loan.annualPropertyTax ?? "") : ""); }}
             className="w-32 h-7 text-sm"
             aria-label="Annual property tax bill in dollars"
           />
@@ -876,12 +888,14 @@ function PropertyTaxSection({
             size="sm"
             variant="ghost"
             className="h-7 px-2"
-            onClick={() => setShowManual(false)}
+            onClick={() => setManualInput(loan.annualPropertyTaxSource === "manual" ? String(loan.annualPropertyTax ?? "") : "")}
+            aria-label="Reset annual bill input"
           >
             <X className="h-3 w-3" />
           </Button>
         </div>
       )}
+      </div>
     </div>
   );
 }

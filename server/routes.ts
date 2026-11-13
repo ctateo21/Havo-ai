@@ -2,6 +2,8 @@ import type { Express } from "express";
 import { geocodeAddress } from "./integrations/geocode";
 import {getFloodState,startFloodRechecks} from "./integrations/flood-rechecks";
 import {registerRebuildCostRoutes} from "./rebuild-cost-routes";
+import {registerFastPropertyTaxRoutes} from "./fast-property-tax-routes";
+import {registerPropertyTaxRatesAdmin} from "./property-tax-rates-admin";
 import {quoteAnswerIdentity,canReuseAnsweredQuote,issueQuoteAccess,verifyQuoteAccess} from "./integrations/quote-answer-identity";
 import {enqueueInsuranceImport,registerQuoteCallbackAndImports} from "./integrations/quoterush-import-jobs";
 import { createServer, type Server } from "http";
@@ -132,6 +134,8 @@ import {
 export async function registerRoutes(app: Express): Promise<Server> {
   registerInterestRoutes(app);
   registerRebuildCostRoutes(app);
+  registerFastPropertyTaxRoutes(app);
+  registerPropertyTaxRatesAdmin(app);
   startFloodRechecks();
   app.get("/api/insurance/quote-assumptions",(_req,res)=>res.json({assumedCreditScore:process.env.QUOTERUSH_ASSUMED_CREDIT_SCORE||"Excellent"}));
   registerQuoteCallbackAndImports(app,async(row,params,reason)=>createFollowUpBossContact({

@@ -68,7 +68,7 @@ const LEE_LAYER =
   "Lee_County_Parcels/FeatureServer/0";
 const COLLIER_LAYER =
   "https://services2.arcgis.com/SlIq32SqARUHIhSx/ArcGIS/rest/services/" +
-  "ParcelJoin/FeatureServer/0";
+  "Parcel/FeatureServer/2";
 
 function normalizeCity(value: string): string {
   return value
@@ -413,7 +413,7 @@ async function lookupCollier(
   fetchImpl: FetchImplementation,
 ): Promise<ParcelIdentity> {
   const county: CountySlug = "collier";
-  const source = "collier-pa-arcgis-parceljoin";
+  const source = "collier-pa-arcgis-parcel";
   const { houseNumber, streetName } = collierSearchParts(address);
   const city = requestedCity(address).replace(/'/g, "''");
   const escapedStreetName = streetName.replace(/'/g, "''");
@@ -421,22 +421,19 @@ async function lookupCollier(
     const candidates = await queryArcGis({
       url: COLLIER_LAYER,
       where:
-        `${houseNumber ? `SiteStreetNumber=${houseNumber} AND ` : ""}` +
-        `SiteStreetName LIKE '${escapedStreetName}%' AND SiteCity='${city}'`,
+        `SiteStreetAddress LIKE '${houseNumber ? houseNumber+" " : ""}${escapedStreetName}%' AND SiteCity='${city}'`,
       outFields:
-        "ParcelId,Folio,SiteStreetNumber,SiteStreetName,SiteStreetType," +
-        "SiteStreetAddress,SiteUnit,SiteCity,SiteZipCode,TaxYear," +
-        "TotalJustValue,CountyAssessedValue,MillageArea,CountyMillage," +
-        "SchoolMillage,MunicipalMillage,OtherMillage,TotalNadvTaxes",
+        "ParcelId,Folio,SiteStreetAddress,SiteCity,SiteZipCode",
       fetchImpl,
     });
-    const attributes = candidates.find((candidate) =>
+    const matches = candidates.filter((candidate) =>
       isStrictParcelAddressMatch(
         address,
         collierCandidateStreet(candidate),
         String(candidate.SiteCity ?? ""),
       ),
     );
+    const attributes=matches.length===1?matches[0]:undefined;
     return attributes
       ? foundFromAttributes({
           county,
@@ -573,7 +570,7 @@ export async function resolveParcel(
   // the annual official cache, never in a generic identity-derived fallback.
   if (!options.skipCache) {
     const cached = await readIdentityCache(county, address, now);
-    if (cached && (county!=="collier" || cached.source==="collier-official-estimator-page")) return cached;
+    if (cached && (county!=="collier" || ["collier-official-estimator-page","collier-pa-arcgis-parcel"].includes(cached.source))) return cached;
   }
 
   let identity: ParcelIdentity;
@@ -601,7 +598,7 @@ export async function resolveParcel(
           county,
           parcelId: found.account,
           folio: found.account,
-          taxDistrict: null,
+          taxDistrict: found.taxDistrict??null,
           situsAddress: found.situsAddress,
           situsCity: normalizeCity(found.situsCity),
           source: "pinellas-pa-arcgis",
