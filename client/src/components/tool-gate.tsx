@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { useAuth } from "@/context/auth-context";
 import { useSubscription } from "@/hooks/use-subscription";
 import { useQuoteAccess, type QuoteType } from "@/context/quote-access-context";
+import { useGooglePlaces } from "@/hooks/use-google-places";
 
 const types: Record<string, QuoteType> = {
   "/estimate": "purchase", "/cash-buy": "cash", "/refinance": "refinance",
@@ -25,6 +26,10 @@ export default function ToolGate({ children }: { children: ReactNode }) {
   const [checking, setChecking] = useState(!!address);
   const [retry, setRetry] = useState(0);
   const [input, setInput] = useState("");
+  const { bindInputRef } = useGooglePlaces({
+    enabled: !isLoading && !user && !address,
+    onPlaceSelected: place => setInput(place.formatted_address),
+  });
 
   useEffect(() => {
     if (isLoading || user || !address || !type) return;
@@ -61,7 +66,7 @@ export default function ToolGate({ children }: { children: ReactNode }) {
         event.preventDefault();
         if (input.trim()) navigate(`${path}?address=${encodeURIComponent(input.trim())}`);
       }}>
-        <Input aria-label="Florida property address" placeholder="Enter a Florida property address" value={input} onChange={event => setInput(event.target.value)} required />
+        <Input ref={bindInputRef} aria-label="Florida property address" placeholder="Enter a Florida property address" value={input} onChange={event => setInput(event.target.value)} autoComplete="off" required />
         <Button type="submit">Start my quote</Button>
       </form>}
   </section>;

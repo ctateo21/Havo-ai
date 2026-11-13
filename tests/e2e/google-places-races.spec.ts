@@ -5,6 +5,31 @@ type PredictionChoice = {
   placeId: string;
 };
 
+for (const path of ["/insurance", "/estimate", "/refinance"]) {
+  test(`guest entry ${path} suggests addresses before starting a quote`, async ({ page }) => {
+    await installGooglePlacesMock(page);
+    let starts = 0;
+    await page.route("**/api/anonymous-quote/start", async route => {
+      starts++;
+      await route.fulfill({ json: { allowed: true } });
+    });
+    await page.goto(path);
+    const input = page.getByRole("combobox", { name: "Florida property address" });
+    await input.fill("7400 36th");
+    await waitForPredictionRequest(page, "7400 36th");
+    const address = "7400 36th Ave N, St. Petersburg, FL 33710, USA";
+    await resolvePredictions(page, "7400 36th", [{address, placeId:"guest-property"}]);
+    await page.getByRole("option", {name:address}).click();
+    await waitForDetailRequest(page, "guest-property");
+    await resolveDetails(page, "guest-property", address);
+    await expect(input).toHaveValue(address);
+    expect(starts).toBe(0);
+    await page.getByRole("button", {name:"Start my quote"}).click();
+    await expect.poll(() => starts).toBeGreaterThan(0);
+    await expectAddressInUrl(page, address);
+  });
+}
+
 async function installGooglePlacesMock(page: Page) {
   await page.addInitScript(() => {
     type PredictionRequest = {
