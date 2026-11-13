@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import raw from "./data/fl-millage-9-counties.json";
 import {researchDistricts,researchParams,planningStatus,bundledQuickRates} from "./integrations/fl-millage-research";
 import {calculateQuickTax,quickTaxableBases} from "../shared/quick-property-tax";
+import {PUBLIC_APP_ROUTES} from "../shared/public-routes";
 const rows=researchDistricts();
 test("research preserves per-row years, source and school split",()=>{
  for(const row of rows){assert.ok([2025,2026].includes(row.tax_year));assert.ok(row.source_name);assert.match(row.source_url,/^https:/);assert.ok(row.non_school_mills>=0);}
@@ -37,6 +38,7 @@ test("Amendment 3 is off by default and changes only homestead non-school basis"
  assert.equal(quickTaxableBases(400000,false,{...p,amendment3_2027:true}).nonSchool,340000);
 });
 test("bundled rates work without new tables and grouped Collier IDs are not guessed",()=>{
+ assert.ok(PUBLIC_APP_ROUTES.has("/admin/property-tax-rates"));
  assert.equal(bundledQuickRates("pinellas",2026,"SP")?.rate.tax_year,2026);
  assert.equal(bundledQuickRates("collier",2026,"1")?.rate.tax_year,2025);
  assert.equal(bundledQuickRates("collier",2026,"999999"),null);
