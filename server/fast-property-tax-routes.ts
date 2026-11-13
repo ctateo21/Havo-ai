@@ -14,6 +14,7 @@ import {COUNTY_TAX_WARNINGS} from "../shared/official-tax";
 import {researchParams,planningLabel,planningStatus} from "./integrations/fl-millage-research";
 
 const jobs=new Map<string,{signature:string;value:any;expires:number}>();
+export function invalidateQuickTaxJobs(){jobs.clear();}
 const dependencies={resolveParcel,geocodeAddress,readOfficialCache,readQuickRates,officialParcelTax};
 export function within<T>(work:Promise<T>,ms:number):Promise<T>{
  return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error("County lookup time budget exceeded")),ms);work.then(v=>{clearTimeout(timer);resolve(v);},e=>{clearTimeout(timer);reject(e);});});

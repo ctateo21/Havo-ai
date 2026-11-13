@@ -16,7 +16,7 @@ UPDATE public.county_tax_rate_districts SET city_default=NULL
 for(const r of rows){
  const record={...r,levies:JSON.stringify(r.levies),updated_by:"research-seed"};
  const keys=Object.keys(record);
- sql+=`INSERT INTO public.county_tax_rate_districts(${keys.join(",")}) VALUES(${Object.values(record).map(quote).join(",")})
+ sql+=`INSERT INTO public.county_tax_rate_districts(${keys.join(",")}) VALUES(${Object.entries(record).map(([key,value])=>key==="fetched_at"?"now()":quote(value)).join(",")})
 ON CONFLICT(county,tax_year,district_code) DO UPDATE SET ${keys.filter(k=>!["county","tax_year","district_code"].includes(k)).map(k=>`${k}=EXCLUDED.${k}`).join(",")}
 WHERE county_tax_rate_districts.updated_by IN('legacy-preview-seed','research-seed');\n`;
 }

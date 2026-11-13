@@ -2,7 +2,7 @@ import {test} from "node:test";
 import assert from "node:assert/strict";
 import {calculateQuickTax,type DistrictRate,type EstimateParams} from "../shared/quick-property-tax";
 import {within} from "./fast-property-tax-routes";
-import {registerFastPropertyTaxRoutes} from "./fast-property-tax-routes";
+import {registerFastPropertyTaxRoutes,invalidateQuickTaxJobs} from "./fast-property-tax-routes";
 import express from "express";
 import {parsePinellasTacd} from "./integrations/dor-tacd";
 import {parseOfficialPropertyTaxResponse} from "../client/src/lib/official-property-tax";
@@ -80,4 +80,7 @@ test("official current-roll refresh never relabels a 2027 scenario as official",
  const result=await(await fetch(`http://127.0.0.1:${a.port}/api/property-tax/quick`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({county:"pinellas",address:"1 Scenario St, FL 33710",purchasePrice:400000,isPrimaryResidence:true})})).json();
  assert.equal(result.status,"rough_estimate");assert.equal(result.officialState,"complete");assert.equal(result.nav,100);
  assert.equal(result.annualTax,calculateQuickTax(400000,true,rate(6.273,13.5615),{...params(.85,26411),amendment3_2027:true})+100);
+ invalidateQuickTaxJobs();
+ const expired=await fetch(`http://127.0.0.1:${a.port}/api/property-tax/official-status?key=${result.key}`);
+ assert.equal(expired.status,404);
 });

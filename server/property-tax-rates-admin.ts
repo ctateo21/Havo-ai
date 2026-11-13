@@ -1,6 +1,7 @@
 import type {Express} from "express";
 import {z} from "zod";
 import {supabaseAdmin} from "./supabase";
+import {invalidateQuickTaxJobs} from "./fast-property-tax-routes";
 import {requireInterestAdmin} from "./b2b-interest-routes";
 const source=z.string().url().refine(s=>s.startsWith("https://"),"HTTPS source required");
 export const districtSchema=z.object({county:z.string().min(2),tax_year:z.number().int().min(2020).max(2100),district_code:z.string().min(1),district_name:z.string().min(1),city_default:z.string().nullable().optional(),school_mills:z.number().finite().nonnegative(),non_school_mills:z.number().finite().nonnegative(),levies:z.array(z.object({name:z.string(),mills:z.number().finite().nonnegative(),school:z.boolean()})),source_name:z.string().min(1),source_url:source,fetched_at:z.string().datetime().optional(),verified_against:z.string().optional()});
@@ -26,7 +27,7 @@ export function registerPropertyTaxRatesAdmin(app:Express){
    const token=/^Bearer\s+(.+)$/i.exec(req.headers.authorization??"")?.[1];
    const auth=await supabaseAdmin!.auth.getUser(token);if(!auth.data.user)return res.sendStatus(403);
    const {data,error}=await supabaseAdmin!.from(kind==="district"?"county_tax_rate_districts":"county_tax_estimate_params").upsert({...parsed.data,updated_by:auth.data.user.id}).select().single();
-   if(error)throw error;res.json({row:data});
+   if(error)throw error;invalidateQuickTaxJobs();res.json({row:data});
   }catch{res.status(503).json({error:"No successful rates update was confirmed"});}
  });
  app.post("/api/admin/property-tax-rates/collier-import",async(req,res)=>{
@@ -42,7 +43,7 @@ export function registerPropertyTaxRatesAdmin(app:Express){
    if(!auth.data.user)return res.sendStatus(403);
    const {data,error}=await supabaseAdmin!.rpc("import_collier_tax_rates",{p_parcels:mapped,p_rates:districts,p_actor:auth.data.user.id});
    if(error)throw Error("Import migration awaiting approval or import failed; no completed import confirmed");
-   res.json({imported:data});
+   invalidateQuickTaxJobs();res.json({imported:data});
   }catch(e){res.status(400).json({error:e instanceof Error?e.message:"CSV import failed"});}
  });
 }
