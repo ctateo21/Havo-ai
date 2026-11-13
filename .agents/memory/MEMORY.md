@@ -33,3 +33,4 @@
 - [Managed-data disaster recovery](managed-data-disaster-recovery.md) — retired-source recovery needs uninterrupted writer freeze and precision-preserving data boundaries.
 - [Dependency remediation](dependency-remediation.md) — preserve framework compatibility, keep unpatched advisories visible, and verify nested overrides actually resolve.
 - [Privacy and consent decisions](privacy-consent-policy.md) — retain records privately; save phones unverified without SMS; separate optional marketing consent.
+- [Anonymous first quote](anonymous-first-quote.md) — one quote total before personal details; account-gated actions preserve drafts and exclude anonymous CRM.

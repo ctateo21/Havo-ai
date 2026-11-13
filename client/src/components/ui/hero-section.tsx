@@ -66,7 +66,7 @@ export default function HeroSection() {
           See the real cost of any Florida home — before you sign anything
         </h1>
         <p className="text-lg md:text-xl text-white/80 mb-10">
-          Type any Florida address and get the true monthly cost in seconds — mortgage, property taxes, insurance, and flood. Free, instant, and no sign-up or personal info needed to see your first home.
+          Run your first quote free, no sign-up needed. See mortgage, property taxes, insurance, and flood estimates before sharing personal details.
         </p>
 
         <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3 max-w-xl mx-auto">

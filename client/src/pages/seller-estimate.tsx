@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useAnonymousDraft, useAnonymousAccountDraft } from "@/hooks/use-anonymous-draft";
+import { authedFetch } from "@/lib/authed-fetch";
+import { confirmAnonymousAccountDraftSaved } from "@/lib/anonymous-account-draft";
 import { Helmet } from "react-helmet";
 import { useLocation, useSearch } from "wouter";
 import ScenarioActions from "@/components/scenario-actions";
@@ -165,7 +168,7 @@ export default function SellerEstimatePage() {
   }, [search]);
 
   // Resolve initial scenario: existing by id, else by address match, else new.
-  const [scenario, setScenario] = useState<SellerScenario>(() => {
+  const [scenario, setScenario] = useAnonymousDraft<SellerScenario>("scenario", () => {
     const all = getSellerScenarios();
     const byId = idFromUrl ? all.find(s => s.id === idFromUrl) : undefined;
     if (byId) return byId;
@@ -189,6 +192,7 @@ export default function SellerEstimatePage() {
     };
   });
 
+  useAnonymousAccountDraft("seller", scenario);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [zillowStatus, setZillowStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   // Refinance tracked loans (for the Mortgage Payoff "pull from Refinance"
@@ -472,7 +476,7 @@ export default function SellerEstimatePage() {
     if (!hydratedRef.current) return;
     if (!scenario.address || scenario.address === "Unknown Address") return;
     setSaveStatus("saving");
-    const t = window.setTimeout(() => {
+    const t = window.setTimeout(async () => {
       try {
         // Always read the cache fresh inside the timer so we pick up any
         // writes that landed between the change and this fire (other tab,
@@ -493,7 +497,7 @@ export default function SellerEstimatePage() {
         const next = idx >= 0
           ? all.map(s => s.id === stamped.id ? stamped : s)
           : [stamped, ...all];
-        saveSellerScenarios(next);
+        await confirmAnonymousAccountDraftSaved("seller", () => saveSellerScenarios(next));
         // New scenario only (idx < 0 fires once): notify the assigned
         // agent (non-blocking, fire-and-forget).
         if (idx < 0) notifyNewScenario("Seller Estimate", stamped.address, "Saved a seller estimate scenario");
@@ -770,6 +774,12 @@ export default function SellerEstimatePage() {
             </div>
             <ScenarioActions
               scenarioType="seller"
+              onSave={async () => {
+                const existing = getSellerScenarios();
+                await confirmAnonymousAccountDraftSaved("seller", () => saveSellerScenarios(existing.some(item => item.id === scenario.id)
+                  ? existing.map(item => item.id === scenario.id ? scenario : item)
+                  : [scenario, ...existing]));
+              }}
               getPdfData={() => {
                 if (!scenario.address || !scenario.address.trim()) return null;
                 const STATUS_LABELS: Record<string, string> = {
@@ -1468,7 +1478,7 @@ function MarketAnalysisSection({
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
       if (!token) throw new Error("Not signed in");
-      const res = await fetch("/api/listing-market-analysis", {
+      const res = await authedFetch("/api/listing-market-analysis", {
         method: "POST",
         credentials: "include",
         headers: {

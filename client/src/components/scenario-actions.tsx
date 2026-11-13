@@ -355,6 +355,7 @@ export default function ScenarioActions({
 
       <AuthDialog
         open={authOpen}
+        redirectAfterRegister={false}
         onOpenChange={(next) => {
           // Clear any pending intent when the user dismisses the
           // dialog without finishing auth. Without this, a stale

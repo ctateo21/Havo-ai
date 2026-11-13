@@ -1,105 +1,68 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Redirect, useSearch } from "wouter";
-import { Loader2, Lock } from "lucide-react";
+import { Redirect, useLocation, useSearch } from "wouter";
+import { Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useAuth } from "@/context/auth-context";
 import { useSubscription } from "@/hooks/use-subscription";
-import AuthDialog from "@/components/ui/auth-dialog";
+import { useQuoteAccess, type QuoteType } from "@/context/quote-access-context";
 
-// localStorage key remembering the ONE home an anonymous visitor is
-// allowed to quote for free. Once set, any other home prompts sign-up.
-const FREE_ADDRESS_KEY = "havo_free_address";
+const types: Record<string, QuoteType> = {
+  "/estimate": "purchase", "/cash-buy": "cash", "/refinance": "refinance",
+  "/insurance": "insurance", "/seller": "seller",
+};
 
-function normalizeAddress(a: string): string {
-  return a.trim().toLowerCase().replace(/\s+/g, " ");
-}
+export default function ToolGate({ children }: { children: ReactNode }) {
+  const { user, isLoading } = useAuth();
+  const sub = useSubscription();
+  const [path, navigate] = useLocation();
+  const search = useSearch();
+  const address = new URLSearchParams(search).get("address")?.trim() || "";
+  const type = types[path];
+  const key = `${type}:${address}`;
+  const { authorize } = useQuoteAccess();
+  const [allowedKey, setAllowedKey] = useState("");
+  const [checking, setChecking] = useState(!!address);
+  const [retry, setRetry] = useState(0);
+  const [input, setInput] = useState("");
 
-function readFreeAddress(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return localStorage.getItem(FREE_ADDRESS_KEY);
-  } catch {
-    return null;
-  }
-}
+  useEffect(() => {
+    if (isLoading || user || !address || !type) return;
+    let active = true;
+    setChecking(true);
+    void authorize(type, address).then(allowed => {
+      if (!active) return;
+      if (allowed) setAllowedKey(key);
+      setChecking(false);
+    });
+    return () => { active = false; };
+  }, [isLoading, user, address, type, key, authorize, retry]);
 
-function CenterSpinner() {
-  return (
-    <div className="flex flex-col items-center justify-center py-32 text-muted-foreground">
-      <Loader2 className="h-8 w-8 animate-spin" />
+  if (isLoading || (user && sub.isLoading) || (!user && checking)) return (
+    <div role="status" aria-label="Preparing your quote" className="mx-auto max-w-4xl space-y-5 px-6 py-20">
+      <div className="h-8 w-2/3 rounded bg-muted animate-pulse" />
+      <div className="h-64 rounded-xl bg-muted animate-pulse" />
     </div>
   );
-}
-
-/**
- * Gate for the five quote tools (Purchase with Loan/Cash, Refinance,
- * Insurance, Sell Your Home). Three tiers:
- *
- *  - Signed in + active Havo Pro (trialing or paid) → full access.
- *  - Signed in but no active subscription → sent to /subscribe to start
- *    their 7-day free trial.
- *  - Not signed in → one free home. The first home they open is
- *    remembered; they can use any tool on that home, but a second home
- *    (or saving/sending, which ScenarioActions already gates) requires
- *    creating an account.
- */
-export default function ToolGate({ children }: { children: ReactNode }) {
-  const { user, isLoading: authLoading } = useAuth();
-  const sub = useSubscription();
-  const search = useSearch();
-  const [authOpen, setAuthOpen] = useState(false);
-
-  const currentAddress = normalizeAddress(
-    new URLSearchParams(search).get("address") || "",
-  );
-  const freeAddress = readFreeAddress();
-
-  // For an anonymous visitor, claim the first home they open as their
-  // free quote. Done in an effect so it runs once the view mounts.
-  useEffect(() => {
-    if (authLoading || user) return;
-    if (!currentAddress || freeAddress) return;
-    try {
-      localStorage.setItem(FREE_ADDRESS_KEY, currentAddress);
-    } catch {
-      /* ignore storage failures */
-    }
-  }, [authLoading, user, currentAddress, freeAddress]);
-
-  if (authLoading) return <CenterSpinner />;
-
-  // Signed-in users get full tool access. With FREE_ACCESS_MODE on,
-  // useSubscription reports active without any Stripe call; the
-  // subscription redirect below is preserved for paid mode.
   if (user) {
-    if (sub.isLoading) return <CenterSpinner />;
     if (!sub.data?.active) return <Redirect to="/subscribe" />;
     return <>{children}</>;
   }
+  if (address && allowedKey === key) return <>{children}</>;
 
-  // Anonymous: before any home is claimed, allow access — the effect
-  // above claims the first address-bearing view they open. Once a home
-  // is claimed, ONLY that exact home stays free; a different home, or a
-  // tool opened without an address, requires creating an account. (The
-  // ?address param stays in sync with in-page changes, so switching the
-  // property re-runs this gate.)
-  if (!freeAddress) return <>{children}</>;
-  if (currentAddress && currentAddress === freeAddress) return <>{children}</>;
-
-  return (
-    <div className="flex flex-col items-center justify-center py-32 px-6 text-center">
-      <div className="rounded-full bg-muted p-4 mb-5">
-        <Lock className="h-7 w-7 text-muted-foreground" />
-      </div>
-      <h1 className="text-2xl font-semibold mb-2">You've used your free quote</h1>
-      <p className="text-muted-foreground max-w-md mb-6">
-        Create a free account to quote more homes, save your numbers, and
-        download or send estimates. No credit card required.
-      </p>
-      <Button size="lg" onClick={() => setAuthOpen(true)}>
-        Create free account
-      </Button>
-      <AuthDialog open={authOpen} onOpenChange={setAuthOpen} defaultTab="register" />
-    </div>
-  );
+  return <section className="mx-auto flex max-w-lg flex-col items-center px-6 py-24 text-center">
+    <div className="mb-5 rounded-full bg-muted p-4"><Lock className="h-7 w-7 text-primary" /></div>
+    <h1 className="mb-3 text-2xl font-semibold">{address ? "Keep exploring with a free account" : "Run your first quote free, no sign-up needed"}</h1>
+    <p className="mb-6 text-muted-foreground">{address
+      ? "Your first quote includes edits and return visits. Create an account for another address or quote type, or to save, download, share, email, and request live carrier quotes. Your draft stays here."
+      : "Enter a Florida property address. No personal details are needed for your first estimate."}</p>
+    {address ? <Button onClick={() => setRetry(value => value + 1)}>Continue / Try again</Button> :
+      <form className="flex w-full flex-col gap-3" onSubmit={event => {
+        event.preventDefault();
+        if (input.trim()) navigate(`${path}?address=${encodeURIComponent(input.trim())}`);
+      }}>
+        <Input aria-label="Florida property address" placeholder="Enter a Florida property address" value={input} onChange={event => setInput(event.target.value)} required />
+        <Button type="submit">Start my quote</Button>
+      </form>}
+  </section>;
 }

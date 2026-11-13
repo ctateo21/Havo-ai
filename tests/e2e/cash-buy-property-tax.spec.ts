@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Page, type Route } from "./quote-access-fixture";
 import { blockLiveNetwork } from "./mock-network";
 
 test.beforeEach(async ({page}) => { await blockLiveNetwork(page); });

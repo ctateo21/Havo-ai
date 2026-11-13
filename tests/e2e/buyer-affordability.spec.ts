@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Page, type Route } from "./quote-access-fixture";
 import { calculateBuyerAffordability } from "../../client/src/lib/buyer-affordability";
 
 const TEST_USER = {

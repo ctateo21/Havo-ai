@@ -21,7 +21,9 @@ import {
   DrawerClose,
 } from "@/components/ui/drawer";
 import { useAuth } from "@/context/auth-context";
-import { updateProfileContact } from "@/lib/auth";
+import { getSession, updateProfileContact } from "@/lib/auth";
+import { useQuoteAccess } from "@/context/quote-access-context";
+import { authedFetch } from "@/lib/authed-fetch";
 
 /** Work / Follow Up Boss showing line. tel:/sms: need digits only. */
 const SHOWING_PHONE = "8132148356";
@@ -101,6 +103,7 @@ export function ScheduleShowingButton({
   className,
 }: ScheduleShowingButtonProps) {
   const { user } = useAuth();
+  const { requireAccount } = useQuoteAccess();
   const [open, setOpen] = useState(false); // Call/Text sheet
   const [contactOpen, setContactOpen] = useState(false); // guest contact modal
   const [form, setForm] = useState<Contact>({ name: "", email: "", phone: "" });
@@ -116,6 +119,7 @@ export function ScheduleShowingButton({
   }, [service, address, qualificationStatus]);
 
   function notifyFub(eventType: ShowingEvent, contactMethod: ContactMethod | null, contact: Contact) {
+    if (!getSession()) return;
     try {
       const fullName = (contact.name || "").trim();
       const spaceIdx = fullName.indexOf(" ");
@@ -125,7 +129,7 @@ export function ScheduleShowingButton({
           : fullName || (contact.email ? contact.email.split("@")[0] : "");
       const lastName = spaceIdx > 0 ? fullName.slice(spaceIdx + 1) : "-";
       // keepalive lets this complete even as the sms:/tel: link opens.
-      fetch("/api/fub/showing-request", {
+      authedFetch("/api/fub/showing-request", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         keepalive: true,
@@ -186,14 +190,16 @@ export function ScheduleShowingButton({
     setOpen(true);
   }
 
-  function handleScheduleClick() {
-    const loggedIn = Boolean(user);
+  async function handleScheduleClick() {
+    if (!getSession() && !await requireAccount()) return;
+    const session = getSession();
+    const loggedIn = Boolean(session);
 
     if (loggedIn) {
       const contact: Contact = {
-        name: (user?.name || "").trim(),
-        email: (user?.email || "").trim(),
-        phone: (user?.phone || "").trim(),
+        name: (session?.name || "").trim(),
+        email: (session?.email || "").trim(),
+        phone: (session?.phone || "").trim(),
       };
 
       // Prompt the contact modal only when a required field is missing from the
@@ -220,6 +226,7 @@ export function ScheduleShowingButton({
   }
 
   async function handleContactSubmit() {
+    if (!getSession() && !await requireAccount()) return;
     const name = form.name.trim();
     const email = form.email.trim();
     const phone = form.phone.trim();

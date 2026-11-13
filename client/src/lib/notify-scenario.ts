@@ -1,4 +1,5 @@
 import { getSession } from "@/lib/auth";
+import { authedFetch } from "@/lib/authed-fetch";
 import { getStoredReferralSource } from "@/components/referral-source-dialog";
 
 // Fire-and-forget notification to the assigned FollowUpBoss agent when a
@@ -18,7 +19,7 @@ export function notifyNewScenario(scenarioType: string, address: string, details
     : (fullName || sessionUser.email.split("@")[0]);
   const lastName = spaceIdx > 0 ? fullName.slice(spaceIdx + 1) : "-";
 
-  fetch("/api/leads/notify-new-scenario", {
+  authedFetch("/api/leads/notify-new-scenario", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

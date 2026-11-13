@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Helmet } from "react-helmet";
 import { useLocation, useSearch } from "wouter";
 import ScenarioActions from "@/components/scenario-actions";
+import { useAnonymousDraft, useAnonymousAccountDraft } from "@/hooks/use-anonymous-draft";
+import { authedFetch } from "@/lib/authed-fetch";
+import { confirmAnonymousAccountDraftSaved } from "@/lib/anonymous-account-draft";
 import {
   ArrowLeft, MapPin, Save, AlertCircle, Loader2, Banknote, Camera, Sparkles, ChevronDown,
 } from "lucide-react";
@@ -287,7 +290,7 @@ export default function CashBuyPage() {
   }, [search]);
 
   // Resolve initial scenario: existing by id → by address → new draft.
-  const [scenario, setScenario] = useState<CashBuyScenario>(() => {
+  const [scenario, setScenario] = useAnonymousDraft<CashBuyScenario>("scenario", () => {
     const all = getCashBuyScenarios();
     const byId = idFromUrl ? all.find(s => s.id === idFromUrl) : undefined;
     if (byId) return byId;
@@ -318,6 +321,7 @@ export default function CashBuyPage() {
     };
   });
 
+  useAnonymousAccountDraft("cash", { ...scenario, cashToClose: cashToCloseOf(scenario) });
   const officialTax=useCashBuyOfficialTax(scenario);
   useEffect(()=>{
     if(scenario.propertyTaxesSource==="manual")return;
@@ -342,7 +346,7 @@ export default function CashBuyPage() {
     if (!isAuthenticated) return;
     if (!scenario.address || scenario.address === "Unknown Address") return;
     setSaveStatus("saving");
-    const t = window.setTimeout(() => {
+    const t = window.setTimeout(async () => {
       try {
         const all = getCashBuyScenarios();
         const stamped: CashBuyScenario = {
@@ -354,7 +358,7 @@ export default function CashBuyPage() {
         const next = idx >= 0
           ? all.map(s => s.id === stamped.id ? stamped : s)
           : [stamped, ...all];
-        saveCashBuyScenarios(next);
+        await confirmAnonymousAccountDraftSaved("cash", () => saveCashBuyScenarios(next));
         // New scenario only (idx < 0 fires once): notify the assigned
         // agent (non-blocking, fire-and-forget).
         if (idx < 0) notifyNewScenario("Cash Buy", stamped.address, "Saved a cash buy scenario");
@@ -526,7 +530,7 @@ export default function CashBuyPage() {
   const { data: floodData } = useQuery<{ zone: string; subtype: string; requiresFloodInsurance: boolean }>({
     queryKey: ["/api/flood-zone", scenario.address],
     queryFn: () =>
-      fetch(`/api/flood-zone?address=${encodeURIComponent(scenario.address)}`).then((r) => {
+      authedFetch(`/api/flood-zone?address=${encodeURIComponent(scenario.address)}`).then((r) => {
         if (!r.ok) throw new Error("Flood zone not found");
         return r.json();
       }),
@@ -916,6 +920,13 @@ export default function CashBuyPage() {
                 dialog renders inside this component tree. */}
             <ScenarioActions
               scenarioType="cash_buy"
+              onSave={async () => {
+                const existing = getCashBuyScenarios();
+                const stamped = { ...scenario, updatedAt: new Date().toISOString(), cashToClose: cashToCloseOf(scenario) };
+                await confirmAnonymousAccountDraftSaved("cash", () => saveCashBuyScenarios(existing.some(item => item.id === stamped.id)
+                  ? existing.map(item => item.id === stamped.id ? stamped : item)
+                  : [stamped, ...existing]));
+              }}
               getPdfData={() => {
                 if (
                   !scenario.address ||

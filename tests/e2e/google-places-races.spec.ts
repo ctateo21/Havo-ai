@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "./quote-access-fixture";
 
 type PredictionChoice = {
   address: string;
@@ -121,6 +121,7 @@ async function installGooglePlacesMock(page: Page) {
 
   await page.route("**/api/**", route => {
     const url = new URL(route.request().url());
+    if (url.pathname === "/api/anonymous-quote/start") return route.fulfill({json:{allowed:true}});
     if (url.pathname === "/api/ami") {
       return route.fulfill({
         status: 503,
@@ -202,23 +203,14 @@ async function expectAddressInUrl(page: Page, expectedAddress: string) {
 }
 
 async function openUnlockedEstimate(page: Page, seedAddress: string) {
+  await installAuthenticatedUser(page);
   const estimatePath = `/estimate?address=${encodeURIComponent(seedAddress)}`;
 
   await page.goto(estimatePath);
   await page.getByRole("button", { name: "Add Property" }).waitFor();
 
-  await page.evaluate(() => {
-    history.pushState(null, "", "/");
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  });
-  await page.getByPlaceholder("Enter a property address...").waitFor();
-
-  await page.evaluate(path => {
-    localStorage.setItem("tateo_auth", "1");
-    history.pushState(null, "", path);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, estimatePath);
-  await page.getByRole("button", { name: "Add Property" }).waitFor();
+  // A real mocked session replaces the retired localStorage-only unlock.
+  // Signed-in home redirects to the dashboard, so no guest-home detour.
 }
 
 async function expectSessionAbandoned(
@@ -613,6 +605,7 @@ test("insurance add-property dialog abandons sessions and commits only the lates
   page,
 }) => {
   const seedAddress = "30 Insurance Seed St, Tampa, FL 33602";
+  await installAuthenticatedUser(page);
   await page.goto(`/insurance?address=${encodeURIComponent(seedAddress)}`);
   await page.getByTitle("Compare another property").click();
 

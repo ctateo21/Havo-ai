@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useAnonymousDraft } from "@/hooks/use-anonymous-draft";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertTriangle, KeyRound } from "lucide-react";
-import type { TrackedLoan, TrackedLoanPropertyType, TrackedLoanType } from "@/lib/auth";
+import { getSession, type TrackedLoan, type TrackedLoanPropertyType, type TrackedLoanType } from "@/lib/auth";
 
 interface FreeClearEntryProps {
   creditScore: number;
@@ -31,10 +32,10 @@ const LOAN_TYPE_OPTIONS: { value: TrackedLoanType; label: string; primaryOnly?: 
 /** No-lien entry: the property is owned outright, so the only analysis
  *  that applies is a 1st-lien cash-out refinance. */
 export function FreeClearEntry({ creditScore, onCreateLoan }: FreeClearEntryProps) {
-  const [address, setAddress] = useState("");
-  const [homeValue, setHomeValue] = useState("");
-  const [occupancy, setOccupancy] = useState<TrackedLoanPropertyType>("primary");
-  const [loanType, setLoanType] = useState<TrackedLoanType>("conventional");
+  const [address, setAddress] = useAnonymousDraft("freeClear.address", new URLSearchParams(window.location.search).get("address") || "");
+  const [homeValue, setHomeValue] = useAnonymousDraft("freeClear.homeValue", "");
+  const [occupancy, setOccupancy] = useAnonymousDraft<TrackedLoanPropertyType>("freeClear.occupancy", "primary");
+  const [loanType, setLoanType] = useAnonymousDraft<TrackedLoanType>("freeClear.loanType", "conventional");
   const [error, setError] = useState<string | null>(null);
 
   const num = (s: string) => {
@@ -75,8 +76,12 @@ export function FreeClearEntry({ creditScore, onCreateLoan }: FreeClearEntryProp
       freeAndClear: true,
       refiGoal: "cash_out",
     });
-    setAddress("");
-    setHomeValue("");
+    // Keep the anonymous form editable/revisitable along with its calculated
+    // draft. In particular a denied new-address attempt must not erase inputs.
+    if (getSession()) {
+      setAddress("");
+      setHomeValue("");
+    }
   }
 
   return (

@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ServicesProvider } from "./context/services-context";
 import { AuthProvider } from "./context/auth-context";
+import { QuoteAccessProvider } from "./context/quote-access-context";
 
 function ScrollToTop() {
   const [location] = useLocation();
@@ -61,6 +62,7 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <AuthProvider>
+          <QuoteAccessProvider>
           <ServicesProvider>
             <ScrollToTop />
             <Switch>
@@ -121,6 +123,7 @@ function App() {
             </Switch>
             <Toaster />
           </ServicesProvider>
+          </QuoteAccessProvider>
         </AuthProvider>
       </TooltipProvider>
     </QueryClientProvider>

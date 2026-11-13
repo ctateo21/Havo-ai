@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./quote-access-fixture";
 import { officialTaxFixture } from "./official-tax-fixture";
 import { blockLiveNetwork } from "./mock-network";
 
@@ -14,6 +14,7 @@ async function installApiMocks(page: Page): Promise<void> {
   await blockLiveNetwork(page);
   await page.route("**/api/**", async route => {
     const url = new URL(route.request().url());
+    if (url.pathname === "/api/anonymous-quote/start") return route.fulfill({json:{allowed:true}});
     if(url.pathname.startsWith("/api/property-tax/")) {
       const input=route.request().method()==="POST"?route.request().postDataJSON():{};
       const fixture=officialTaxFixture(input.purchasePrice,input.isPrimaryResidence);

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Loader2, Search, MapPin, Home, AlertCircle, CheckCircle2, ExternalLink } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { useQuoteAccess, type QuoteType } from "@/context/quote-access-context";
 import { useToast } from "@/hooks/use-toast";
 
 // Mirror of server-side PropertyScenario. Kept loose (optional fields) so a
@@ -80,6 +81,7 @@ export default function PropertyLookupDialog({
   open, onOpenChange, initialAddressOrUrl = "", applyLabel = "Apply to scenario", onApply,
 }: Props) {
   const { toast } = useToast();
+  const { authorize, requireAccount } = useQuoteAccess();
   const [input, setInput] = useState(initialAddressOrUrl);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,6 +104,15 @@ export default function PropertyLookupDialog({
     setError(null);
     setProperty(null);
     try {
+      const quoteType = ({
+        "/estimate": "purchase", "/cash-buy": "cash", "/refinance": "refinance",
+        "/insurance": "insurance", "/seller": "seller",
+      } as Record<string, QuoteType>)[window.location.pathname];
+      // Listing URLs cannot be bound to an address until resolved. Require a
+      // real account rather than spending anonymous access on an opaque URL.
+      if (/^https?:\/\//i.test(input.trim())) {
+        if (!await requireAccount()) return;
+      } else if (quoteType && !await authorize(quoteType, input.trim())) return;
       const res = await apiRequest("POST", "/api/zillow-property-lookup", { addressOrUrl: input.trim() });
       const body = await res.json();
       setProperty(body.property as LookedUpProperty);

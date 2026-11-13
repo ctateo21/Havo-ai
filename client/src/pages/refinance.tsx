@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { useSearch, useLocation } from "wouter";
 import ScenarioActions from "@/components/scenario-actions";
+import { useAnonymousDraft, useAnonymousAccountDraft } from "@/hooks/use-anonymous-draft";
+import { useQuoteAccess } from "@/context/quote-access-context";
+import { authedFetch } from "@/lib/authed-fetch";
+import { confirmAnonymousAccountDraftSaved, hasPendingAnonymousAccountDraft } from "@/lib/anonymous-account-draft";
 import { Home, ArrowLeft, Building2, Landmark } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
@@ -14,7 +18,7 @@ import { FreeClearEntry } from "@/components/refi/free-clear-entry";
 import { LoanTracker, type MortgageAnalysis, type LiveRate, type PropertyType } from "@/components/refi/loan-tracker";
 import { useQuery } from "@tanstack/react-query";
 import {
-  getTrackedLoans, saveTrackedLoans, subscribeAuthChange,
+  getSession, getTrackedLoans, saveTrackedLoans, subscribeAuthChange,
   subscribePersistenceError,
   getSellerScenarios, saveSellerScenarios,
   type TrackedLoan,
@@ -125,17 +129,35 @@ export default function Refinance() {
 
   const { user } = useAuth();
   const isAuthenticated = !!user;
+  const { authorize } = useQuoteAccess();
+  const beganAnonymous = useRef(!user || hasPendingAnonymousAccountDraft());
+  const promotedDraft = useRef(false);
 
   const [statementData, setStatementData] = useState<MortgageAnalysis | null>(null);
-  const [trackedLoans, setTrackedLoansState] = useState<TrackedLoan[]>(() => getTrackedLoans());
+  const [trackedLoans, setTrackedLoansState] = useAnonymousDraft<TrackedLoan[]>("trackedLoans", () => getTrackedLoans());
+  useAnonymousAccountDraft("refinance", trackedLoans);
 
   const { toast } = useToast();
 
   // Keep local state in sync with auth cache (login, logout, hydration completes).
   useEffect(() => {
-    const unsub = subscribeAuthChange(() => setTrackedLoansState(getTrackedLoans()));
+    const unsub = subscribeAuthChange(() => {
+      if (!beganAnonymous.current) setTrackedLoansState(getTrackedLoans());
+    });
     return unsub;
   }, []);
+
+  useEffect(() => {
+    if (!user || !beganAnonymous.current || promotedDraft.current || !trackedLoans.length) return;
+    promotedDraft.current = true;
+    const addresses = new Set(trackedLoans.map(loan => loan.propertyAddress.trim().toLowerCase()));
+    const merged = [...trackedLoans, ...getTrackedLoans().filter(loan => !addresses.has(loan.propertyAddress.trim().toLowerCase()))];
+    setTrackedLoansState(merged);
+    void confirmAnonymousAccountDraftSaved("refinance", () => saveTrackedLoans(merged)).catch(() => {
+      promotedDraft.current = false;
+      toast({ title: "Your draft is still here", description: "We couldn't save it to your account. Use Save Scenario to retry.", variant: "destructive" });
+    });
+  }, [user, trackedLoans, toast, setTrackedLoansState]);
 
   // Surface tracked_loans persistence errors (including missing-column
   // warnings from the schema-safe strip-and-retry) as a single toast.
@@ -171,6 +193,7 @@ export default function Refinance() {
   function updateLoans(updater: TrackedLoan[] | ((prev: TrackedLoan[]) => TrackedLoan[])) {
     setTrackedLoansState(prev => {
       const next = typeof updater === "function" ? (updater as (p: TrackedLoan[]) => TrackedLoan[])(prev) : updater;
+      if (!getSession()) return next;
       saveTrackedLoans(next).catch((e: any) => {
         toast({
           title: "Refinance change didn't save",
@@ -226,7 +249,7 @@ export default function Refinance() {
   const [pendingExtras, setPendingExtras] = useState<Partial<TrackedLoan> | null>(null);
   const [showPropertyTypeDialog, setShowPropertyTypeDialog] = useState(false);
   // Which of the 4 entry options is showing in the analyzer slot.
-  const [entryMethod, setEntryMethod] = useState<EntryMethod>("statement");
+  const [entryMethod, setEntryMethod] = useAnonymousDraft<EntryMethod>("entryMethod", user ? "statement" : "manual");
 
   // Single Refinance-wide credit score input. Seeded from the first
   // tracked loan that already has one (so refresh/logout/login restores
@@ -297,6 +320,7 @@ export default function Refinance() {
   };
 
   const handleAnalyzed = async (analysis: MortgageAnalysis, extras?: Partial<TrackedLoan>) => {
+    if (!await authorize("refinance", analysis.propertyAddress || address)) return;
     if (trackedLoans.length >= MAX_TRACKED_LOANS) return;
     const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
     const incoming = normalize(analysis.propertyAddress || "");
@@ -362,6 +386,7 @@ export default function Refinance() {
   // collects occupancy in its own form).
   const commitNewLoan = async (newLoan: TrackedLoan) => {
     if (trackedLoans.length >= MAX_TRACKED_LOANS) return;
+    if (!await authorize("refinance", newLoan.propertyAddress)) return;
     const next = [newLoan, ...trackedLoans];
     // Update local state immediately so the loan card renders without
     // waiting for Supabase. We don't go through updateLoans() here
@@ -371,13 +396,17 @@ export default function Refinance() {
     setPendingAnalysis(null);
     setPendingExtras(null);
     setShowPropertyTypeDialog(false);
+    if (!getSession()) {
+      toast({ title: "Your refinance estimate is ready", description: "Your draft stays on this device. Create an account to save or send it." });
+      return;
+    }
     // Persist to tracked_loans FIRST. The schema-safe upsert in auth.ts
     // strips any missing optional columns automatically. We only mirror
     // into Sell-Your-Home and trigger Zillow AFTER the refi save
     // succeeds — otherwise a transient Supabase failure leaves the
     // user with an orphan seller draft and no matching refi row.
     try {
-      await saveTrackedLoans(next);
+      await confirmAnonymousAccountDraftSaved("refinance", () => saveTrackedLoans(next));
       toast({ title: "Loan saved to your refinance dashboard." });
       // Notify the assigned agent (non-blocking, fire-and-forget).
       notifyNewScenario("Refinance", newLoan.propertyAddress, "Saved a refinance scenario");
@@ -411,6 +440,7 @@ export default function Refinance() {
     loan: TrackedLoan,
     photos?: { primaryPhotoUrl?: string; propertyPhotos?: string[] },
   ) {
+    if (!getSession()) return;
     try {
       const result = createOrUpdateSellerScenarioFromRefinance({
         trackedLoan: loan,
@@ -433,7 +463,7 @@ export default function Refinance() {
   async function autoPullZillowForLoan(loan: TrackedLoan) {
     const addr = loan.propertyAddress;
     if (!addr || addr === "Unknown address") return;
-    const res = await fetch("/api/zillow-property-lookup", {
+    const res = await authedFetch("/api/zillow-property-lookup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ addressOrUrl: addr }),
@@ -582,7 +612,7 @@ export default function Refinance() {
                 // Persist the current full set — saveTrackedLoans
                 // mirrors auth.ts auto-save semantics (delete-then-
                 // upsert) and now throws on Supabase error.
-                await saveTrackedLoans(trackedLoans);
+                await confirmAnonymousAccountDraftSaved("refinance", () => saveTrackedLoans(trackedLoans));
               }}
             />
           </div>
@@ -704,7 +734,8 @@ export default function Refinance() {
             analyzerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
           }}
           onRemove={id => updateLoans(prev => prev.filter(l => l.id !== id))}
-          onUpdate={(id, updates) => {
+          onUpdate={async (id, updates) => {
+            if (updates.propertyAddress && !await authorize("refinance", updates.propertyAddress)) return;
             updateLoans(prev => {
               const next = prev.map(l => l.id === id ? { ...l, ...updates } : l);
               // If this edit touched a value that maps into Sell-Your-Home

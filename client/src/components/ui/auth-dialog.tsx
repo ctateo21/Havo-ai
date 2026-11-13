@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   login,
+  getSession,
   normalizeDateOfBirth,
   register,
   requestPasswordReset,
@@ -107,7 +108,7 @@ export default function AuthDialog({
     if (!result.ok) { setSiError(result.error || "Login failed."); return; }
     trackEvent("account_signed_in");
     refresh();
-    onAuthenticated?.();
+    if (getSession()) onAuthenticated?.();
     handleOpenChange(false);
     // reset
     setSiEmail(""); setSiPassword("");
@@ -142,13 +143,13 @@ export default function AuthDialog({
     if (!result.ok) { setRegError(result.error || "Registration failed."); return; }
     trackEvent("account_created");
     refresh();
-    onAuthenticated?.();
+    if (getSession()) onAuthenticated?.();
     handleOpenChange(false);
     // reset
     setRegName(""); setRegEmail(""); setRegPhone(""); setRegDateOfBirth(""); setRegPassword(""); setRegConfirm("");
     // Free access — no payment step. Drop the new user straight into their
     // dashboard so they can start running quotes right away.
-    if (redirectAfterRegister) setLocation("/dashboard");
+    if (redirectAfterRegister && getSession() && !/^\/(estimate|cash-buy|refinance|insurance|seller)(?:\/|$)/.test(window.location.pathname)) setLocation("/dashboard");
   }
 
   async function handleForgot(e: React.FormEvent) {
@@ -180,12 +181,12 @@ export default function AuthDialog({
   const description = mode === "forgot"
     ? "Enter your email and we'll send you a password reset link."
     : defaultTab === "register"
-      ? "Run your numbers for free. Create an account only when you want to save, download, or send your estimate."
+      ? "Run your first quote free, no sign-up needed. Create an account for another address or quote type, or to save, download, share, email, and request live carrier quotes. Your current draft stays here. Marketing consent is optional."
       : "Sign in to save, download, and revisit your property scenarios.";
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>

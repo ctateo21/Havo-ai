@@ -1,5 +1,8 @@
 import { useMemo, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import ScenarioActions from "@/components/scenario-actions";
+import { useQuoteAccess } from "@/context/quote-access-context";
+import { useAnonymousDraft, useAnonymousAccountDraft } from "@/hooks/use-anonymous-draft";
+import { confirmAnonymousAccountDraftSaved } from "@/lib/anonymous-account-draft";
 import { useQuickPropertyTax } from "@/hooks/use-quick-property-tax";
 import { PropertyTaxRow } from "@/components/property-tax-row";
 import { officialTaxRequestKey, resolvePurchasePropertyTaxSource } from "@/lib/official-property-tax";
@@ -929,17 +932,15 @@ export default function Estimate() {
   );
   // Local-only flag for guests who completed the lead-capture flow but did
   // not create a real account. Persisted across reloads via localStorage.
-  const [leadUnlocked, setLeadUnlocked] = useState(() =>
-    typeof window !== "undefined" && localStorage.getItem("tateo_auth") === "1"
-  );
-  const isAuthenticated = !!authUser || leadUnlocked;
+  const isAuthenticated = !!authUser;
+  const { authorize, requireAccount } = useQuoteAccess();
   // Seed scenarios from the user's saved dashboard properties so all of them appear as subtabs
   // when navigating from the dashboard (or anywhere else, for logged-in users).
   const initialScenariosRef = useRef<{ list: Scenario[]; activeId: string; freshSeededId: string | null } | null>(null);
   if (initialScenariosRef.current === null) {
     const fallback = { list: [{ id: "sc0", address, savedInputs: null }], activeId: "sc0", freshSeededId: "sc0" as string | null };
     const hasSession = typeof window !== "undefined"
-      && (getSession() !== null || localStorage.getItem("tateo_auth") === "1");
+      && getSession() !== null;
     if (!hasSession) {
       initialScenariosRef.current = fallback;
     } else {
@@ -965,8 +966,8 @@ export default function Estimate() {
       }
     }
   }
-  const [scenarios, setScenarios] = useState<Scenario[]>(initialScenariosRef.current.list);
-  const [activeScenarioId, setActiveScenarioId] = useState(initialScenariosRef.current.activeId);
+  const [scenarios, setScenarios] = useAnonymousDraft<Scenario[]>("scenarios", initialScenariosRef.current.list);
+  const [activeScenarioId, setActiveScenarioId] = useAnonymousDraft("activeScenarioId", initialScenariosRef.current.activeId);
 
   // Fire a background Zillow lookup once on mount for a new address, or for
   // a saved property whose older record has no photos yet. Saved photos are
@@ -1051,7 +1052,8 @@ export default function Estimate() {
   // Apply Zillow lookup results: update purchase price + HOA on the active
   // scenario; if Zillow returned a different formatted address, navigate so
   // the URL stays the source of truth for `address`.
-  function handleZillowApply(p: LookedUpProperty) {
+  async function handleZillowApply(p: LookedUpProperty) {
+    if (p.address && !await authorize("purchase", p.address)) return;
     setInputs(prev => ({
       ...prev,
       purchasePrice: p.purchasePrice ?? p.listingPrice ?? p.zestimate ?? prev.purchasePrice,
@@ -1457,7 +1459,7 @@ export default function Estimate() {
 
     // Also remove the corresponding entry from the dashboard so it doesn't
     // immediately get re-added by the auto-save effect on the next render.
-    if (removed) {
+    if (removed && getSession()) {
       try {
         const key = removed.address.trim().toLowerCase();
         const next = getPurchaseScenarios().filter(s => s.address.trim().toLowerCase() !== key);
@@ -1487,15 +1489,10 @@ export default function Estimate() {
       toast({ title: "Maximum 5 scenarios", description: "Remove a tab to add a new property." });
       return;
     }
-    if (!isAuthenticated) {
-      setLeadDialogForScenario(true);
-      setLeadDialogOpen(true);
-    } else {
-      setShowAddressPrompt(true);
-    }
+    setShowAddressPrompt(true);
   }
 
-  function confirmNewScenario(meta?: PlaceMeta, addrOverride?: string) {
+  async function confirmNewScenario(meta?: PlaceMeta, addrOverride?: string) {
     // Prefer the explicitly passed value (from the autocomplete callback) over
     // React state, which may not have flushed yet when this runs.
     const addr = (addrOverride ?? newScenarioAddress).trim();
@@ -1512,6 +1509,7 @@ export default function Estimate() {
       });
       return;
     }
+    if (!await authorize("purchase", addr)) return;
     // Don't add a duplicate tab for an address we already have open.
     const dupKey = addr.toLowerCase();
     const dup = scenarios.find(s => s.address.trim().toLowerCase() === dupKey);
@@ -1629,7 +1627,7 @@ export default function Estimate() {
       const spaceIdx = fullName.indexOf(" ");
       const firstName = spaceIdx > 0 ? fullName.slice(0, spaceIdx) : (fullName || sessionUser.email.split("@")[0]);
       const lastName = spaceIdx > 0 ? fullName.slice(spaceIdx + 1) : "-";
-      fetch("/api/leads/notify-new-scenario", {
+      authedFetch("/api/leads/notify-new-scenario", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1659,11 +1657,11 @@ export default function Estimate() {
   // jump-to-step-4 shortcut when this exact address has a saved
   // Purchase scenario. New addresses always start on Page 1 so the
   // user actually answers the borrower questions.
-  const [step, setStep] = useState<number>(() => {
+  const [step, setStep] = useAnonymousDraft<number>("step", () => {
     if (!fromDashboard) return 1;
     if (typeof window === "undefined") return 1;
     const hasSession =
-      getSession() !== null || localStorage.getItem("tateo_auth") === "1";
+      getSession() !== null;
     if (!hasSession) return 1;
     const key = address.trim().toLowerCase();
     if (!key || key === "unknown address") return 1;
@@ -2118,8 +2116,6 @@ export default function Estimate() {
   function handleLeadSuccess() {
     if (leadDialogForScenario) {
       setLeadDialogForScenario(false);
-      try { localStorage.setItem("tateo_auth", "1"); } catch {}
-      setLeadUnlocked(true);
       setShowAddressPrompt(true);
     } else if (leadDialogAction === "share") {
       const url = window.location.href;
@@ -2138,7 +2134,8 @@ export default function Estimate() {
     inputRef: addressInputElementRef,
   } = useGooglePlaces({
     enabled: isEditingAddress,
-    onPlaceSelected: place => {
+    onPlaceSelected: async place => {
+      if (!await authorize("purchase", place.formatted_address)) return;
       setIsEditingAddress(false);
       setLocation(`/estimate?address=${encodeURIComponent(place.formatted_address)}`);
     },
@@ -2162,7 +2159,7 @@ export default function Estimate() {
   // FEMA flood zone for the entered address
   const { data: floodData } = useQuery<{ zone: string; subtype: string; requiresFloodInsurance: boolean }>({
     queryKey: ["/api/flood-zone", address],
-    queryFn: () => fetch(`/api/flood-zone?address=${encodeURIComponent(address)}`).then(r => { if (!r.ok) throw new Error("Flood zone not found"); return r.json(); }),
+    queryFn: () => authedFetch(`/api/flood-zone?address=${encodeURIComponent(address)}`).then(r => { if (!r.ok) throw new Error("Flood zone not found"); return r.json(); }),
     staleTime: 24 * 60 * 60 * 1000,
     retry: false,
   });
@@ -2190,7 +2187,7 @@ export default function Estimate() {
   // Area Median Income for the entered address
   const { data: amiData } = useQuery<{ areaName: string; annualAMI: number; monthlyAMI: number; source: string }>({
     queryKey: ["/api/ami", address],
-    queryFn: () => fetch(`/api/ami?address=${encodeURIComponent(address)}`).then(r => { if (!r.ok) throw new Error("AMI not found"); return r.json(); }),
+    queryFn: () => authedFetch(`/api/ami?address=${encodeURIComponent(address)}`).then(r => { if (!r.ok) throw new Error("AMI not found"); return r.json(); }),
     staleTime: 24 * 60 * 60 * 1000,
     retry: false,
   });
@@ -2238,7 +2235,7 @@ export default function Estimate() {
   function inputsForAddress(addr: string): Inputs {
     const base = makeDefaultInputs(defaultPrice);
     if (typeof window === "undefined") return base;
-    const hasSession = getSession() !== null || localStorage.getItem("tateo_auth") === "1";
+    const hasSession = getSession() !== null;
     if (!hasSession || !addr) return base;
     const key = addr.trim().toLowerCase();
     const allSaved = getPurchaseScenarios();
@@ -2572,7 +2569,7 @@ export default function Estimate() {
     });
   }
 
-  const [inputs, setInputs] = useState<Inputs>(() => inputsForAddress(address));
+  const [inputs, setInputs] = useAnonymousDraft<Inputs>("inputs", () => inputsForAddress(address));
   const confirmedInputs=useRef("");
   useEffect(()=>{
     const key=JSON.stringify([activeScenarioId,inputs.monthlyIncome,inputs.monthlyDebts,inputs.creditScore,inputs.downPaymentPct,inputs.purchasePrice]);
@@ -3952,6 +3949,9 @@ export default function Estimate() {
     rateBeforeDiscountPoints: calc.rateBeforeDiscountPoints,
     rateAfterDiscountPoints: calc.rateAfterDiscountPoints,
   }), [address, calc, inputs, quickTax.result, quickTax.key]);
+  useAnonymousAccountDraft("purchase", {
+    ...currentPurchaseScenarioSnapshot, id: activeScenarioId, savedAt: new Date().toISOString(),
+  });
   const [feeWorksheetOpen, setFeeWorksheetOpen] = useState(false);
   const [openingLiveQuote, setOpeningLiveQuote] = useState(false);
   useEffect(() => {
@@ -4029,6 +4029,7 @@ export default function Estimate() {
   }
 
   const handleGetLiveInsuranceQuote = async () => {
+    if (!getSession() && !await requireAccount()) return;
     if (openingLiveQuote) return;
     setOpeningLiveQuote(true);
     try {
@@ -4129,7 +4130,7 @@ export default function Estimate() {
       s.id === targetScenarioId ? { ...s, saveStatus: "saving" } : s
     ));
     let timerFired = false;
-    const handle = setTimeout(() => {
+    const handle = setTimeout(async () => {
       timerFired = true;
       let didWrite = false;
       try {
@@ -4192,21 +4193,21 @@ export default function Estimate() {
             updated[idx] = { ...cur, ...next };
             console.debug("[purchase-scenario-save] scenario id", cur.id);
             console.debug("[purchase-scenario-save] write ok (existing)");
-            savePurchaseScenarios(updated);
+            await confirmAnonymousAccountDraftSaved("purchase", () => savePurchaseScenarios(updated));
             didWrite = true;
           }
         } else {
           const newId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
           console.debug("[purchase-scenario-save] scenario id", newId);
           console.debug("[purchase-scenario-save] write ok (new)");
-          savePurchaseScenarios([
+          await confirmAnonymousAccountDraftSaved("purchase", () => savePurchaseScenarios([
             ...existing,
             {
               id: newId,
               savedAt: new Date().toISOString(),
               ...next,
             },
-          ]);
+          ]));
           didWrite = true;
         }
         // On no-op (nothing changed) we still flip the status back to
@@ -4467,10 +4468,10 @@ export default function Estimate() {
                       type="text"
                       value={editAddressVal}
                       onChange={(e) => setEditAddressVal(e.target.value)}
-                      onKeyDown={(e) => {
+                      onKeyDown={async (e) => {
                         if (e.key === "Enter") {
                           const val = editAddressVal.trim();
-                          if (val) setLocation(`/estimate?address=${encodeURIComponent(val)}`);
+                          if (val && await authorize("purchase", val)) setLocation(`/estimate?address=${encodeURIComponent(val)}`);
                           setIsEditingAddress(false);
                         } else if (e.key === "Escape") {
                           setIsEditingAddress(false);
@@ -4565,8 +4566,20 @@ export default function Estimate() {
               <ScenarioActions
                 scenarioType="purchase"
                 onDownloadPdf={generateEstimatePDF}
-                onSave={() => {
+                onSave={async () => {
                   if (!calcRef.current.taxComplete) throw new Error("Enter the annual bill before saving this financial estimate.");
+                  if (!getSession()) throw new Error("Please sign in before saving.");
+                  const existing = getPurchaseScenarios();
+                  const key = address.trim().toLowerCase();
+                  const match = existing.find(scenario => scenario.address.trim().toLowerCase() === key);
+                  const snapshot = {
+                    ...currentPurchaseScenarioSnapshot,
+                    id: match?.id || activeScenarioIdRef.current,
+                    savedAt: match?.savedAt || new Date().toISOString(),
+                  };
+                  await confirmAnonymousAccountDraftSaved("purchase", () => savePurchaseScenarios(match
+                    ? existing.map(scenario => scenario.id === match.id ? { ...scenario, ...snapshot } : scenario)
+                    : [...existing, snapshot]));
                 }}
               />
             </div>
@@ -6520,7 +6533,6 @@ export default function Estimate() {
                       onClick={handleGetLiveInsuranceQuote}
                       disabled={
                         openingLiveQuote ||
-                        !authUser ||
                         !address ||
                         address === "Unknown Address"
                       }

@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./quote-access-fixture";
 import { officialTaxFixture } from "./official-tax-fixture";
 import { blockLiveNetwork } from "./mock-network";
 

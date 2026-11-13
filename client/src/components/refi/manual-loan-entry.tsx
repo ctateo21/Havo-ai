@@ -10,6 +10,7 @@ import { formatCurrency } from "@/lib/refi-calculations";
 import { monthlyPI, remainingBalance, paymentsMadeSince, remainingYears } from "@/lib/amortization";
 import type { MortgageAnalysis } from "./loan-tracker";
 import type { TrackedLoan } from "@/lib/auth";
+import { useAnonymousDraft } from "@/hooks/use-anonymous-draft";
 
 interface ManualLoanEntryProps {
   onAnalyzed: (analysis: MortgageAnalysis, extras: Partial<TrackedLoan>) => void;
@@ -18,21 +19,21 @@ interface ManualLoanEntryProps {
 /** Manual origination-details entry with an amortization-table balance
  *  check before the loan is tracked. */
 export function ManualLoanEntry({ onAnalyzed }: ManualLoanEntryProps) {
-  const [address, setAddress] = useState("");
-  const [purchaseDate, setPurchaseDate] = useState("");
-  const [purchasePrice, setPurchasePrice] = useState("");
-  const [loanAmount, setLoanAmount] = useState("");
+  const [address, setAddress] = useAnonymousDraft("manual.address", new URLSearchParams(window.location.search).get("address") || "");
+  const [purchaseDate, setPurchaseDate] = useAnonymousDraft("manual.purchaseDate", "");
+  const [purchasePrice, setPurchasePrice] = useAnonymousDraft("manual.purchasePrice", "");
+  const [loanAmount, setLoanAmount] = useAnonymousDraft("manual.loanAmount", "");
   // Loan amount can be entered as a dollar figure or a % of purchase price.
-  const [loanAmountMode, setLoanAmountMode] = useState<"dollar" | "percent">("dollar");
+  const [loanAmountMode, setLoanAmountMode] = useAnonymousDraft<"dollar" | "percent">("manual.loanAmountMode", "dollar");
   // Loan program — FHA/VA finance a funding fee into the original loan
   // amount that most users don't know to include, so we add it for them.
-  const [loanType, setLoanType] = useState<"conventional" | "fha" | "va" | "dscr" | "bank_statement">("conventional");
+  const [loanType, setLoanType] = useAnonymousDraft<"conventional" | "fha" | "va" | "dscr" | "bank_statement">("manual.loanType", "conventional");
   // VA funding fee depends on usage; VA-disability-exempt pays none.
-  const [vaUse, setVaUse] = useState<"first" | "subsequent" | "exempt">("first");
-  const [rate, setRate] = useState("");
-  const [termYears, setTermYears] = useState("30");
-  const [balance, setBalance] = useState("");
-  const [monthlyEscrow, setMonthlyEscrow] = useState("");
+  const [vaUse, setVaUse] = useAnonymousDraft<"first" | "subsequent" | "exempt">("manual.vaUse", "first");
+  const [rate, setRate] = useAnonymousDraft("manual.rate", "");
+  const [termYears, setTermYears] = useAnonymousDraft("manual.termYears", "30");
+  const [balance, setBalance] = useAnonymousDraft("manual.balance", "");
+  const [monthlyEscrow, setMonthlyEscrow] = useAnonymousDraft("manual.monthlyEscrow", "");
   const [error, setError] = useState<string | null>(null);
   // Verification step state — set after "Verify Balance" is pressed.
   const [check, setCheck] = useState<{ amortized: number; entered: number; monthsElapsed: number } | null>(null);

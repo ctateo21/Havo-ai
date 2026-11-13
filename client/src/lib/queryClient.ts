@@ -1,4 +1,5 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { authedFetch } from "@/lib/authed-fetch";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
@@ -13,7 +14,7 @@ export async function apiRequest(
   data?: unknown | undefined,
   signal?: AbortSignal,
 ): Promise<Response> {
-  const res = await fetch(url, {
+  const res = await authedFetch(url, {
     method,
     headers: data ? { "Content-Type": "application/json" } : {},
     body: data ? JSON.stringify(data) : undefined,
@@ -31,7 +32,7 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const res = await fetch(queryKey[0] as string, {
+    const res = await authedFetch(queryKey[0] as string, {
       credentials: "include",
     });
 
