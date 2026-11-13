@@ -19,6 +19,15 @@ export function normalizeGuestAddress(address:string) {
 function digest(value:string,secret:string) {
   return createHmac("sha256",secret).update(value).digest("base64url");
 }
+export function sameGuestProperty(left:string,right:string) {
+  const a=normalizeGuestAddress(left), b=normalizeGuestAddress(right);
+  if(a===b)return true;
+  // Canonical providers may spell the city differently. Require an identical
+  // street (including unit) AND ZIP before ignoring the city spelling.
+  const street=(s:string)=>normalizeGuestAddress(s.split(",")[0]);
+  const zip=(s:string)=>s.match(/\b\d{5}(?:-\d{4})?\b/g)?.at(-1)?.slice(0,5);
+  return !!zip(left)&&zip(left)===zip(right)&&left.includes(",")&&right.includes(",")&&street(left)===street(right);
+}
 export function signGuestClaim(claim:Claim,secret:string) {
   const data=Buffer.from(JSON.stringify(claim)).toString("base64url");
   return `${data}.${digest(data,secret)}`;
@@ -43,7 +52,7 @@ function claimFor(req:Request) {
 }
 export function hasAnonymousQuoteFor(req:Request,address:unknown) {
   const claim=claimFor(req);
-  return !!claim&&typeof address==="string"&&normalizeGuestAddress(claim.address)===normalizeGuestAddress(address);
+  return !!claim&&typeof address==="string"&&sameGuestProperty(claim.address,address);
 }
 export async function authenticatedQuoteUser(req:Request):Promise<boolean> {
   const token=/^Bearer\s+(.+)$/i.exec(req.headers.authorization??"")?.[1];
@@ -70,16 +79,16 @@ export function registerAnonymousQuoteRoutes(app:Express,authenticate=authentica
     const now=Date.now(),address=normalizeGuestAddress(parsed.data.address);
     const existing=claimFor(req);
     if(existing){
-      if(normalizeGuestAddress(existing.address)!==address||existing.quoteType!==parsed.data.quoteType)return signup(res);
+      if(!sameGuestProperty(existing.address,parsed.data.address))return signup(res);
       return res.json({allowed:true,...parsed.data});
     }
     for(const [key,value] of devices)if(value.reset<now)devices.delete(key);
     const device=digest(`${req.ip??req.socket.remoteAddress}|${req.get("user-agent")??""}`,secret);
     const prior=devices.get(device);
-    if(prior&&(prior.claim.address!==address||prior.claim.quoteType!==parsed.data.quoteType))return signup(res);
+    if(prior&&!sameGuestProperty(prior.claim.address,parsed.data.address))return signup(res);
     if(prior&&++prior.count>30)return res.status(429).json({error:"Please wait before retrying your first quote."});
     if(!prior&&devices.size>=10000)return res.status(503).json({error:"First-quote access is busy. Please try again later."});
-    const claim=prior?.claim??{id:randomUUID(),quoteType:parsed.data.quoteType,address,expires:now+YEAR*1000};
+    const claim=prior?.claim??{id:randomUUID(),quoteType:parsed.data.quoteType,address:parsed.data.address,expires:now+YEAR*1000};
     devices.set(device,{claim,count:prior?.count??1,reset:prior?.reset??now+86400_000});
     res.cookie(COOKIE,signGuestClaim(claim,secret),{httpOnly:true,sameSite:"lax",secure:process.env.NODE_ENV==="production",maxAge:YEAR*1000,path:"/"});
     return res.json({allowed:true,...parsed.data});

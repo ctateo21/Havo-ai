@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiRequest } from "@/lib/queryClient";
+import { authedFetch } from "@/lib/authed-fetch";
 import { mergeQuickPropertyTax, parseQuickPropertyTax, type QuickPropertyTax } from "@/lib/quick-property-tax";
 import { officialTaxRequestKey } from "@/lib/official-property-tax";
 
@@ -39,14 +40,24 @@ export function useQuickPropertyTax(inputs: TaxInputs) {
         return;
       }
       try {
-        const response = await apiRequest("GET", `/api/property-tax/official-status?key=${encodeURIComponent(serverKey)}`, undefined, abort.signal);
+        let response = await authedFetch(`/api/property-tax/official-status?key=${encodeURIComponent(serverKey)}`, {signal: abort.signal});
+        // Autoscale requests can land on another process with no local job.
+        // Re-open through the address-authorized route and its county caches.
+        const recovered = response.status === 404;
+        if (recovered) response = await apiRequest("POST", "/api/property-tax/quick", {
+          address, purchasePrice, isPrimaryResidence, scenarioId, refinance,
+        }, abort.signal);
+        if (!response.ok) throw new Error(response.status === 401
+          ? "Create a free account to continue. Your quote stays here."
+          : "Official verification is temporarily unavailable.");
         const next = parseQuickPropertyTax(await response.json());
         if (abort.signal.aborted) return;
-        if (next.key !== serverKey) throw new Error("Official response does not match this property request.");
+        if (!recovered && next.key !== serverKey) throw new Error("Official response does not match this property request.");
         setState(previous => previous.key !== key ? previous : {
-          key, loading: false, result: previous.result ? mergeQuickPropertyTax(previous.result, next) : next,
+          key, loading: false, result: previous.result ? mergeQuickPropertyTax(
+            recovered ? {...previous.result,key:next.key} : previous.result, next) : next,
         });
-        if (next.officialState === "pending") timer = setTimeout(() => void poll(serverKey), 3000);
+        if (next.officialState === "pending") timer = setTimeout(() => void poll(next.key), 3000);
       } catch (error) {
         if (!abort.signal.aborted) setState(previous => previous.key !== key ? previous : {
           ...previous, loading: false, error: error instanceof Error ? error.message : "Official verification failed.",

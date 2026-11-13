@@ -107,8 +107,8 @@ export function registerFastPropertyTaxRoutes(app:Express,deps=dependencies){
  });
  app.get("/api/property-tax/official-status",async(req,res)=>{
   const job=jobs.get(String(req.query.key??""));
-  if(!await authenticatedQuoteUser(req)&&(!job||!hasAnonymousQuoteFor(req,job.address)))return res.status(401).json({code:"SIGN_UP_REQUIRED"});
   if(!job||job.expires<Date.now())return res.status(404).json({status:"unavailable",reason:"Lookup expired; refresh county data",officialState:"failed",annualTax:null});
+  if(!await authenticatedQuoteUser(req)&&!hasAnonymousQuoteFor(req,job.address))return res.status(401).json({code:"SIGN_UP_REQUIRED"});
   res.json(job.value);
  });
 }

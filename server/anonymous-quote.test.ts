@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
-import {registerAnonymousQuoteRoutes,signGuestClaim,verifyGuestClaim,normalizeGuestAddress} from "./anonymous-quote";
+import {registerAnonymousQuoteRoutes,signGuestClaim,verifyGuestClaim,normalizeGuestAddress,sameGuestProperty} from "./anonymous-quote";
+test("same street and ZIP tolerate canonical city spelling but not another unit or ZIP",()=>{
+  assert.equal(sameGuestProperty("7400 36th Ave N, Saint Petersburg, FL 33710","7400 36th Avenue North, St Pete, Florida 33710, USA"),true);
+  assert.equal(sameGuestProperty("7400 36th Ave N, St Pete, FL 33710","7400 36th Ave N, St Pete, FL 33711"),false);
+  assert.equal(sameGuestProperty("7400 36th Ave N Unit 1, St Pete, FL 33710","7400 36th Ave N Unit 2, St Pete, FL 33710"),false);
+});
 
 test("anonymous claim is signed, expiring, and address-normalized",()=>{
   const claim={id:"test",quoteType:"purchase",address:normalizeGuestAddress("3102 W Nassau St, Tampa, FL 33607, USA"),expires:2000};
@@ -61,7 +66,7 @@ test("each quote type gets one address-bound run; signed-in requests bypass the 
       }
       assert.equal((await post("/api/anonymous-quote/start",body)).status,200);
       assert.equal((await post("/api/anonymous-quote/start",{...body,address:"7400 36th Ave N, St Petersburg FL 33710"})).status,401);
-      assert.equal((await post("/api/anonymous-quote/start",{...body,quoteType:quoteType==="cash"?"purchase":"cash"})).status,401);
+      assert.equal((await post("/api/anonymous-quote/start",{...body,quoteType:quoteType==="cash"?"purchase":"cash"})).status,200);
       assert.equal((await post("/api/property-tax/quick",{address:body.address})).status,200);
       assert.equal((await post("/api/property-tax/quick",{address:"different address"})).status,401);
       assert.equal((await post("/api/leads/notify-new-scenario",{})).status,401);
