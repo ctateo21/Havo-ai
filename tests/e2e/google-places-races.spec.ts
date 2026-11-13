@@ -209,18 +209,8 @@ async function openUnlockedEstimate(page: Page, seedAddress: string) {
   await page.goto(estimatePath);
   await page.getByRole("button", { name: "Add Property" }).waitFor();
 
-  await page.evaluate(() => {
-    history.pushState(null, "", "/");
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  });
-  await page.getByPlaceholder("Enter a property address...").waitFor();
-
-  await page.evaluate(path => {
-    localStorage.setItem("tateo_auth", "1");
-    history.pushState(null, "", path);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, estimatePath);
-  await page.getByRole("button", { name: "Add Property" }).waitFor();
+  // A real mocked session replaces the retired localStorage-only unlock.
+  // Signed-in home redirects to the dashboard, so no guest-home detour.
 }
 
 async function expectSessionAbandoned(
