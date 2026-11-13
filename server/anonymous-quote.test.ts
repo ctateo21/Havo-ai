@@ -75,3 +75,24 @@ test("each quote type gets one address-bound run; signed-in requests bypass the 
     if(previous===undefined)delete process.env.SESSION_SECRET;else process.env.SESSION_SECRET=previous;
   }
 });
+
+test("signed-in property lookups need no first-quote cookie", async () => {
+  const app = express();
+  app.use(express.json());
+  registerAnonymousQuoteRoutes(app, async req => req.get("Authorization") === "Bearer valid-test-session");
+  const paths = ["/api/properties/lookup-by-address", "/api/properties/zestimate", "/api/zillow-property-lookup"];
+  for (const path of paths) app.post(path, (_req, res) => res.json({ok:true}));
+  app.get("/api/flood-zone", (_req, res) => res.json({ok:true}));
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  const base = `http://127.0.0.1:${(server.address() as {port:number}).port}`;
+  try {
+    for (const path of paths) {
+      assert.equal((await fetch(base + path, {method:"POST", headers:{Authorization:"Bearer valid-test-session","Content-Type":"application/json"},body:JSON.stringify({address:"7400 36th Ave N",addressOrUrl:"7400 36th Ave N"})})).status, 200);
+    }
+    assert.equal((await fetch(base + "/api/flood-zone?address=test", {headers:{Authorization:"Bearer valid-test-session"}})).status,200);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
