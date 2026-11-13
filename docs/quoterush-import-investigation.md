@@ -34,9 +34,9 @@ historical contract fixture is explicitly not a captured successful request.
 | Field or transport | Before | Now | Rejection assessment |
 |---|---|---|---|
 | URL query | none | none | Removed optional JSON query to restore original transport |
-| Client.DOB → DateOfBirth | DOB only | DateOfBirth only, MM/DD/YYYY | Single documented key; no duplicate |
-| Client.Phone → PhoneNumber | Phone plus PhoneCell | PhoneNumber plus PhoneCell | Single documented primary phone key; cell field unchanged |
-| HO.MonthsOccupied → MonthsOwnerOccupied | MonthsOccupied | MonthsOwnerOccupied | Single documented key; value unchanged |
+| Client.DOB / DateOfBirth | DOB only | Both, identical MM/DD/YYYY | Historical and documented aliases retained by request |
+| Client.Phone / PhoneNumber | Phone plus PhoneCell | Both plus PhoneCell, identical strings | Historical and documented aliases retained |
+| HO.MonthsOccupied / MonthsOwnerOccupied | MonthsOccupied | Both, identical enum | Historical and documented aliases retained |
 | HO.PurchaseDate | date passed through, possibly YYYY-MM-DD | MM/DD/YYYY | Normalize at outgoing boundary |
 | HO.PolicyEffectiveDate | date passed through, possibly YYYY-MM-DD | MM/DD/YYYY | Normalize at outgoing boundary |
 | Client.CreditPermission | Yes | No | Intentional no-credit rule; provider acceptance with assumed score remains unverified |
@@ -105,8 +105,8 @@ Field manifest (angle-bracket values are redacted/unconfirmed, not defaults):
 ```text
 Client:
  NameFirst=<confirmed first name>; NameLast=<confirmed last name>
- DateOfBirth=<private DOB, MM/DD/YYYY>
- PhoneNumber=PhoneCell=<confirmed phone string>; PhoneOther=""
+ DOB=DateOfBirth=<private DOB, MM/DD/YYYY>
+ Phone=PhoneNumber=PhoneCell=<confirmed phone string>; PhoneOther=""
  EmailAddress=<confirmed email>; Assigned=<QUOTERUSH_ASSIGNED_EMAIL>
  Address=<street>; City=<city>; State="FL"; Zip=<five-digit string>; County=<county>
  EntityType="Individual"; Gender="Male"; MaritalStatus="Single"
@@ -120,7 +120,7 @@ HO:
  Address=<street>; City=<city>; State="FL"; Zip=<ZIP>; County=<county>
  NewPurchase="Yes"; PurchaseDate=<confirmed MM/DD/YYYY date, if present>
  PurchasePrice="300000"; UsageType=<confirmed use>
- MonthsOwnerOccupied=<confirmed enum>; RentalTerm=<if supplied>
+ MonthsOccupied=MonthsOwnerOccupied=<confirmed enum>; RentalTerm=<if supplied>
  YearBuilt=<confirmed year string>; PolicyEffectiveDate=<confirmed MM/DD/YYYY date>
  SquareFeet=<positive confirmed sq ft, rounded string>
  ConstructionType=<confirmed type>; Construction=<confirmed subtype>

@@ -4,11 +4,15 @@ const vocabulary = new Set(("error errors message status validation invalid miss
 // Names only, never values. Keep this covered by a builder-key contract test.
 for (const word of `redacted is for could verified verify date use duplicate exists errorcode success ok validationerrors
 PhoneCell PhoneOther EntityType Gender MaritalStatus Industry Occupation EPolicy International Assigned LeadSource LeadStatus Lob_Home Lob_Auto Lob_Flood
-FormType NewPurchase PurchaseDate PurchasePrice UsageType MonthsOwnerOccupied RentalTerm YearBuilt PolicyEffectiveDate SquareFeet ConstructionType Construction MasonryConstruction FoundationType RoofShape RoofMaterial UpdateRoofYear UpdateRoofType
+FormType NewPurchase PurchaseDate PurchasePrice UsageType MonthsOccupied MonthsOwnerOccupied RentalTerm YearBuilt PolicyEffectiveDate SquareFeet ConstructionType Construction MasonryConstruction FoundationType RoofShape RoofMaterial UpdateRoofYear UpdateRoofType
 CoverageA CoverageB CoverageBPercent CoverageC CoverageCPercent CoverageD CoverageDPercent CoverageE CoverageF AllOtherPerilsDeductible HurricaneDeductible WindHailDeductible FloodZone MilesToCoast FloodPolicy CurrentlyInsured CurrentCarrier CurrentPolicyNumber AnyLapses Claims HaveWindMitForm OpeningProtection SecondaryWaterResistance Terrain BurglarAlarm FireAlarm FireHydrant FireStation Mortgage WaterBackup WaterBackupAmount RoofLossSettlement PersonalInjuryCoverage IdentityTheft IncreaseReplacementCostOnDwelling ClaimDetail Amount PriorResidence Paid`.split(/\s+/)) vocabulary.add(word.toLowerCase());
 export function redactImporterText(value: string): string {
   return value.replace(/https?:\/\/\S+|\S+@\S+/gi, "[redacted]")
-    .replace(/[\p{L}\p{M}\p{N}_+./@%-]+/gu, word => vocabulary.has(word.toLowerCase()) ? word : "[redacted]")
+    .replace(/[\p{L}\p{M}\p{N}_+./@%-]+/gu, word => {
+      const core = word.replace(/[.]+$/, "");
+      const suffix = word.slice(core.length);
+      return (vocabulary.has(core.toLowerCase()) ? core : "[redacted]") + suffix;
+    })
     .replace(/[\r\n\t]+/g, " ").slice(0, 600);
 }
 function positiveId(value: unknown): number | null {
@@ -22,7 +26,7 @@ function findId(value: unknown): number | null {
     const node = pending.pop();
     if (!node || typeof node !== "object") continue;
     for (const [key, child] of Object.entries(node)) {
-      if (!Array.isArray(node) && /^(lead_?id|id)$/i.test(key)) {
+      if (!Array.isArray(node) && /^leadid$/i.test(key)) {
         const id = positiveId(child); if (id) return id;
       }
       if (child && typeof child === "object") pending.push(child);

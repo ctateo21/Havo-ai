@@ -183,9 +183,9 @@ test("six zero-cost policy payload sanity cases stay normalized", () => {
 
 test("importer always sends the agency-confirmed credit permission value", () => {
   const payload=buildImporterPayload(params,"agent@example.com");
-  assert.equal(payload.Client.DOB,undefined);
-  assert.equal(payload.Client.Phone,undefined);
-  assert.equal(payload.HO.MonthsOccupied,undefined);
+  assert.equal(payload.Client.DOB,payload.Client.DateOfBirth);
+  assert.equal(payload.Client.Phone,payload.Client.PhoneNumber);
+  assert.equal(payload.HO.MonthsOccupied,payload.HO.MonthsOwnerOccupied);
   assert.equal(payload.Client.PhoneNumber,params.phone);
   assert.equal(payload.HO.MonthsOwnerOccupied,params.monthsOccupied);
   assert.equal(payload.Client.AssumedCreditScore,"Excellent");

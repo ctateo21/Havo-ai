@@ -1,6 +1,7 @@
 {
   "baseline": "6da559cede6ee81d2ab4c7ed683860e8a6b4884d",
   "evidence": "Synthetic contract from historical builder, not a captured successful production request",
+  "currentAliasPairs": [["DOB", "DateOfBirth"], ["Phone", "PhoneNumber"], ["MonthsOccupied", "MonthsOwnerOccupied"]],
   "Client": {
     "DOB": "01/02/1980",
     "Phone": "5555555555",

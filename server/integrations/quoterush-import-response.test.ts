@@ -9,7 +9,7 @@ test("documented plain integer, quoted integer and text lead responses",()=>{
     assert.equal(parseLeadId(body),12345);
 });
 test("case insensitive lead keys and Data/Result wrappers",()=>{
-  for(const key of ["LeadId","LeadID","leadId","leadID","Id","ID","lead_id"])
+  for(const key of ["LeadId","LeadID","leadId","leadID"])
     for(const wrapper of [null,"Data","Result","data","result"]) {
       const value = {[key]:"12345"};
       assert.equal(parseLeadId(JSON.stringify(wrapper?{[wrapper]:value}:value)),12345);
@@ -42,6 +42,12 @@ test("arrays and arbitrary deep wrappers yield only explicitly named IDs",()=>{
   for(let i=0;i<30;i++) value={wrapper:[value]};
   assert.equal(parseLeadId(JSON.stringify(value)),5);
   assert.equal(parseLeadId('[500,{"count":5}]'),null);
+  assert.equal(inspectImporterResponse('{"Errors":[{"Id":55,"Message":"Invalid date"}]}',"application/json").leadId,null);
+  assert.equal(parseLeadId('{"Data":{"Id":55}}'),null);
+});
+test("diagnostic punctuation stays readable without exposing unknown words",()=>{
+  const result=inspectImporterResponse('{"Error":"PurchaseDate is not a valid date. Could not be verified."}',"application/json");
+  assert.match(result.error,/valid date\. Could not be verified\./);
 });
 test("readable date validation retains rejected ID for reconciliation",()=>{
   const r=inspectImporterResponse('{"LeadId":55,"Error":"PurchaseDate is not a valid date for Jane"}',"application/json",["Jane"]);

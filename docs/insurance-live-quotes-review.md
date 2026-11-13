@@ -65,7 +65,7 @@ FIRM panel/effective-date enrichment is optional and not implemented.
 - `SCHEDULE_CALL_URL`: present in the workspace; verify deployment configuration.
   Code default: https://calendar.app.google/bGd2q1fVCsmzPgPb6
 - `QUOTE_RESULTS_BCC`: optional; default sales@havofl.com.
-- `QUOTERUSH_ASSUMED_CREDIT_SCORE`: optional; default Excellent.
+- Assumed credit is fixed to Excellent; credit permission is always No.
 - `AGENCY_PHYSICAL_ADDRESS`: present in the workspace. Missing value falls back
   to Tampa Bay, Florida and records a warning.
 - Existing QuoteRUSH env names remain unchanged.
