@@ -1,3 +1,19 @@
+# Follow-up: strict property identity and bounded recovery
+
+The free try covers every tool on the first property. Matching preserves all
+comma-delimited street/unit segments, accepts ZIP only after the state, and
+requires normalized city equality when ZIP is absent. Different units and
+directionals are never treated as the same property.
+
+Expired official-tax jobs receive at most two automatic restarts per request
+cycle. Exhaustion retains any estimate with a friendly failed-verification state.
+
+The preview workflow was restarted with `QUOTERUSH_PAUSED=true` so updated
+credentials load without resuming imports, quote polling, or outbound QuoteRush
+calls. This switch applies to the development workflow command, not the
+production start command. It leaves durable jobs untouched while paused.
+Remove the switch and restart only when live QuoteRush activity is authorized.
+
 # Production quote recovery — review only
 
 ## Evidence

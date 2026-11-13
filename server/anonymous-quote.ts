@@ -13,7 +13,7 @@ const inputSchema = z.object({
 });
 type Claim = {id:string; quoteType:string; address:string; expires:number};
 export function normalizeGuestAddress(address:string) {
-  const aliases:Record<string,string>={street:"st",avenue:"ave",road:"rd",boulevard:"blvd",drive:"dr",court:"ct",lane:"ln",place:"pl",terrace:"ter",circle:"cir",parkway:"pkwy",highway:"hwy",north:"n",south:"s",east:"e",west:"w",florida:"fl",saint:"st",apartment:"unit",apt:"unit",suite:"unit"};
+  const aliases:Record<string,string>={street:"st",avenue:"ave",road:"rd",boulevard:"blvd",drive:"dr",court:"ct",lane:"ln",place:"pl",terrace:"ter",circle:"cir",parkway:"pkwy",highway:"hwy",north:"n",south:"s",east:"e",west:"w",florida:"fl",saint:"st",apartment:"unit",apt:"unit",suite:"unit",ste:"unit"};
   return address.toLowerCase().replace(/,?\s*(usa|united states)\s*$/,"").replace(/[.,]/g,"").replace(/#\s*/g,"unit ").replace(/\b\d{5}-\d{4}\b/g,x=>x.slice(0,5)).replace(/\b[a-z]+\b/g,x=>aliases[x]??x).replace(/\s+/g," ").trim();
 }
 function digest(value:string,secret:string) {
@@ -22,11 +22,18 @@ function digest(value:string,secret:string) {
 export function sameGuestProperty(left:string,right:string) {
   const a=normalizeGuestAddress(left), b=normalizeGuestAddress(right);
   if(a===b)return true;
-  // Canonical providers may spell the city differently. Require an identical
-  // street (including unit) AND ZIP before ignoring the city spelling.
-  const street=(s:string)=>normalizeGuestAddress(s.split(",")[0]);
-  const zip=(s:string)=>s.match(/\b\d{5}(?:-\d{4})?\b/g)?.at(-1)?.slice(0,5);
-  return !!zip(left)&&zip(left)===zip(right)&&left.includes(",")&&right.includes(",")&&street(left)===street(right);
+  // Only the city may vary. Preserve every street/unit segment, and never
+  // mistake a five-digit house number for a ZIP.
+  const parts=(s:string)=>{
+    const segments=s.replace(/,?\s*(usa|united states)\s*$/i,"").split(",").map(normalizeGuestAddress);
+    if(segments.length<3||segments.some(x=>!x))return null;
+    const state=/^fl(?: (\d{5}))?$/.exec(segments.at(-1)!);
+    if(!state)return null;
+    return {property:segments.slice(0,-2).join(","),city:segments.at(-2)!,state:segments.at(-1)!,zip:state[1]};
+  };
+  const x=parts(left),y=parts(right);
+  return !!x&&!!y&&x.property===y.property&&x.state===y.state
+    &&(!!x.zip&&!!y.zip||x.city===y.city);
 }
 export function signGuestClaim(claim:Claim,secret:string) {
   const data=Buffer.from(JSON.stringify(claim)).toString("base64url");

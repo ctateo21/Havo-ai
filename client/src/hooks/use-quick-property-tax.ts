@@ -29,6 +29,7 @@ export function useQuickPropertyTax(inputs: TaxInputs) {
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = Date.now() + 180_000;
+    let expiredRestarts = 0;
     setState(previous => ({ key, loading: true, result: previous.key === key ? previous.result : undefined }));
     async function poll(serverKey: string) {
       if (abort.signal.aborted) return;
@@ -44,6 +45,9 @@ export function useQuickPropertyTax(inputs: TaxInputs) {
         // Autoscale requests can land on another process with no local job.
         // Re-open through the address-authorized route and its county caches.
         const recovered = response.status === 404;
+        if (recovered && expiredRestarts++ >= 2) {
+          throw new Error("Official verification is temporarily unavailable. Any estimate is retained; refresh or enter your bill.");
+        }
         if (recovered) response = await apiRequest("POST", "/api/property-tax/quick", {
           address, purchasePrice, isPrimaryResidence, scenarioId, refinance,
         }, abort.signal);
