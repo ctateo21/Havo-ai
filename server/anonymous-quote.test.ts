@@ -1,7 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
-import {registerAnonymousQuoteRoutes,signGuestClaim,verifyGuestClaim,normalizeGuestAddress} from "./anonymous-quote";
+import {registerAnonymousQuoteRoutes,signGuestClaim,verifyGuestClaim,normalizeGuestAddress,sameGuestProperty} from "./anonymous-quote";
+for (const [left,right,expected] of [
+  ["100 Main St, Unit 2, Tampa, FL 33607","100 Main St, Unit 5, Tampa, FL 33607",false],
+  ["100 Main St, Tampa, FL 33607","100 Main St, Apt 5, Tampa, FL 33607",false],
+  ["12345 Main St, Tampa, FL","12345 Main St, Orlando, FL",false],
+  ["12345 Main Street, Tampa, Florida","12345 Main St, Tampa, FL",true],
+  ["7400 36th Ave N, St Petersburg, FL 33710","7400 36th Ave N, Kenneth City, FL 33710",true],
+  ["7400 36th Ave N, St Petersburg, FL 33710","7400 36th Ave S, Kenneth City, FL 33710",false],
+  ["100 Main St, #2, Tampa, FL 33607","100 Main St, #5, Tampa, FL 33607",false],
+  ["100 Main St, Ste 2, Tampa, FL 33607","100 Main Street, Suite 2, Other City, Florida 33607, USA",true],
+  ["100 Main St, Apt 2, Tampa, FL","100 Main St, Apt 2, Orlando, FL 33607",false],
+] as const) test(`property identity regression: ${left} vs ${right}`,()=>{
+  assert.equal(sameGuestProperty(left,right),expected);
+  assert.equal(sameGuestProperty(right,left),expected);
+});
+test("same street and ZIP tolerate canonical city spelling but not another unit or ZIP",()=>{
+  assert.equal(sameGuestProperty("7400 36th Ave N, Saint Petersburg, FL 33710","7400 36th Avenue North, St Pete, Florida 33710, USA"),true);
+  assert.equal(sameGuestProperty("7400 36th Ave N, St Pete, FL 33710","7400 36th Ave N, St Pete, FL 33711"),false);
+  assert.equal(sameGuestProperty("7400 36th Ave N Unit 1, St Pete, FL 33710","7400 36th Ave N Unit 2, St Pete, FL 33710"),false);
+});
 
 test("anonymous claim is signed, expiring, and address-normalized",()=>{
   const claim={id:"test",quoteType:"purchase",address:normalizeGuestAddress("3102 W Nassau St, Tampa, FL 33607, USA"),expires:2000};
@@ -61,7 +80,7 @@ test("each quote type gets one address-bound run; signed-in requests bypass the 
       }
       assert.equal((await post("/api/anonymous-quote/start",body)).status,200);
       assert.equal((await post("/api/anonymous-quote/start",{...body,address:"7400 36th Ave N, St Petersburg FL 33710"})).status,401);
-      assert.equal((await post("/api/anonymous-quote/start",{...body,quoteType:quoteType==="cash"?"purchase":"cash"})).status,401);
+      assert.equal((await post("/api/anonymous-quote/start",{...body,quoteType:quoteType==="cash"?"purchase":"cash"})).status,200);
       assert.equal((await post("/api/property-tax/quick",{address:body.address})).status,200);
       assert.equal((await post("/api/property-tax/quick",{address:"different address"})).status,401);
       assert.equal((await post("/api/leads/notify-new-scenario",{})).status,401);

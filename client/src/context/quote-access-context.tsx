@@ -63,6 +63,12 @@ export function QuoteAccessProvider({ children }: { children: ReactNode }) {
   }, [user]);
 
   useEffect(() => {
+    const onRequired = () => setOpen(true);
+    window.addEventListener("havo:signup-required", onRequired);
+    return () => window.removeEventListener("havo:signup-required", onRequired);
+  }, []);
+
+  useEffect(() => {
     // Lead forms and successful signup without an authenticated session do not
     // unlock anything. Wait for the real Supabase user in AuthContext.
     if (!user || !pending.current) return;

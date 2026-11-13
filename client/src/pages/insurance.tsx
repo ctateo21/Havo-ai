@@ -3109,8 +3109,9 @@ export default function InsuranceDashboard() {
                     qrQuotes.length === 0 && (
                     <div className="text-center py-4 space-y-3">
                       <p className="text-sm text-muted-foreground">
-                        An agent will finish your quotes. Carrier submission
+                        Our Havo team will finish your quotes. Carrier submission
                         could not be confirmed; no carrier results are available.
+                        Our team will reach out — or call/email us.
                       </p>
                       <div className="flex gap-2 justify-center">
                         <Button

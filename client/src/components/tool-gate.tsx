@@ -59,7 +59,7 @@ export default function ToolGate({ children }: { children: ReactNode }) {
     <div className="mb-5 rounded-full bg-muted p-4"><Lock className="h-7 w-7 text-primary" /></div>
     <h1 className="mb-3 text-2xl font-semibold">{address ? "Keep exploring with a free account" : "Run your first quote free, no sign-up needed"}</h1>
     <p className="mb-6 text-muted-foreground">{address
-      ? "Your first quote includes edits and return visits. Create an account for another address or quote type, or to save, download, share, email, and request live carrier quotes. Your draft stays here."
+      ? "Your first property includes edits, return visits, and exploring the other tools. Create an account for another address, or to save, download, share, email, and request live carrier quotes. Your draft stays here."
       : "Enter a Florida property address. No personal details are needed for your first estimate."}</p>
     {address ? <Button onClick={() => setRetry(value => value + 1)}>Continue / Try again</Button> :
       <form className="flex w-full flex-col gap-3" onSubmit={event => {

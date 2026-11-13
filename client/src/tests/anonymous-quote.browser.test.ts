@@ -20,7 +20,7 @@ const user = {
 type Call = { path: string; method: string; body: any; bearer?: string };
 
 /** All provider calls, CRM, database writes and paid APIs are intercepted. */
-async function fixture(page: Page, options: { signedIn?: boolean; saveFailure?: boolean } = {}) {
+async function fixture(page: Page, options: { signedIn?: boolean; saveFailure?: boolean; taxResult?: boolean } = {}) {
   const calls: Call[] = [];
   let claimed: string | null = null;
   let signedIn = !!options.signedIn;
@@ -66,12 +66,16 @@ async function fixture(page: Page, options: { signedIn?: boolean; saveFailure?: 
     if (url.pathname.startsWith("/api/")) {
       calls.push({ path: url.pathname, method: request.method(), body, bearer: request.headers().authorization });
       if (url.pathname === "/api/anonymous-quote/start") {
-        const key = `${body.quoteType}:${normalize(body.address)}`;
+        const key = normalize(body.address);
         if (!claimed || claimed === key || signedIn) {
           claimed ??= key;
           return json({ allowed: true, quoteType: body.quoteType, address: body.address });
         }
         return json({ code: "SIGN_UP_REQUIRED", error: "Create an account for another quote." }, 401);
+      }
+      const lookupAddress = body?.addressOrUrl || body?.address || body?.location || url.searchParams.get("address");
+      if (!signedIn && lookupAddress && (!claimed || normalize(lookupAddress) !== claimed)) {
+        return json({code:"SIGN_UP_REQUIRED"},401);
       }
       if (url.pathname === "/api/zillow-property-lookup") return json({
         cached: true, property: { address: body?.addressOrUrl || ADDRESS,
@@ -95,7 +99,10 @@ async function fixture(page: Page, options: { signedIn?: boolean; saveFailure?: 
       if (url.pathname === "/api/ami") return json({annualAMI:80000,monthlyAMI:6667,areaName:"Synthetic test area"});
       if (url.pathname === "/api/rates") return json({ rates: [], source: "Fixture", disclaimer: "Test estimates" });
       if (url.pathname === "/api/insurance/quote-assumptions") return json({ assumedCreditScore: "Excellent" });
-      if (url.pathname === "/api/property-tax/quick") return json({ status: "unavailable", reason: "Fixture — enter a manual bill." });
+      if (url.pathname === "/api/property-tax/quick") return json(options.taxResult
+        ? {key:"guest-tax",status:"estimate",annualTax:5890,adValorem:5890,nav:0,navPending:false,
+          taxYear:2026,ratesYear:2026,sourceName:"Fixture county millage",officialState:"complete"}
+        : {key:"guest-tax",status: "unavailable",officialState:"failed", reason: "Fixture — enter a manual bill." });
       if (url.pathname === "/api/profile/status") return json({ hasDateOfBirth: signedIn });
       return json({});
     }
@@ -117,6 +124,33 @@ function anonymousWrites(calls: Call[]) {
   return calls.filter(call => /\/rest\/v1\//.test(call.path) && !["GET", "HEAD"].includes(call.method)
     || /\/api\/(?:leads|fub|insurance\/qr-start|ifw\/activity)/.test(call.path));
 }
+
+test("guest purchase reaches populated results with no denied lookup", async ({page})=>{
+  const denied:string[]=[];
+  page.on("response",r=>{if(r.status()===401&&new URL(r.url()).pathname.startsWith("/api/"))denied.push(new URL(r.url()).pathname);});
+  const calls=await fixture(page,{taxResult:true});
+  await visit(page,"/estimate");
+  await page.getByRole("button",{name:"primary",exact:true}).click();
+  await page.getByRole("button",{name:/^Next/}).click();
+  await page.getByRole("button",{name:/^Next/}).click();
+  await page.getByRole("button",{name:/See My Estimate/}).click();
+  await expect(page.getByText("New Monthly Mortgage Payment",{exact:true}).locator("xpath=following-sibling::p")).toHaveText(/^\$/);
+  await expect(page.getByText("$385,000",{exact:true}).first()).toBeVisible();
+  expect(calls.some(c=>c.path==="/api/property-tax/quick")).toBe(true);
+  expect(denied).toEqual([]);
+});
+
+test("guest insurance loads sourced estimate inputs without denied lookups",async({page})=>{
+  const denied:string[]=[];
+  page.on("response",r=>{if(r.status()===401&&new URL(r.url()).pathname.startsWith("/api/"))denied.push(new URL(r.url()).pathname);});
+  const calls=await fixture(page);
+  await visit(page,"/insurance");
+  await expect(page.getByTestId("button-save-insurance")).toBeVisible();
+  await expect.poll(()=>calls.some(c=>c.path==="/api/insurance/property-characteristics")).toBe(true);
+  await expect(page.locator('input[value="1958"]').first()).toBeVisible();
+  await expect(page.locator('input[value="1166"]').first()).toBeVisible();
+  expect(denied).toEqual([]);
+});
 
 for (const flow of flows) {
   test(`${flow.type}: first calculation has no signup and starts before lookups`, async ({ page }) => {
@@ -160,14 +194,14 @@ for (const flow of flows) {
   });
 }
 
-test("one anonymous quote total across all types, not one per type", async ({ page }) => {
+test("the first property can be explored across tools without another signup", async ({ page }) => {
   const calls = await fixture(page);
   await visit(page, "/cash-buy");
   await expect(page.getByTestId("button-save-cash_buy")).toBeVisible();
   for (const flow of flows.filter(flow => flow.type !== "cash")) {
     await visit(page, flow.path);
-    await assertSignup(page);
-    await page.keyboard.press("Escape");
+    await expect(page.getByTestId(`button-save-${flow.action}`)).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
   }
   await visit(page, "/cash-buy");
   await expect(page.getByTestId("button-save-cash_buy")).toBeVisible();
