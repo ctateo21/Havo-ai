@@ -3,11 +3,9 @@ import type { OfficialTaxBreakdown, TaxPart, TaxSource } from "@shared/official-
 /**
  * Client-side guard for purchase property-tax responses.
  *
- * A purchase estimate may only display a number when the server identifies a
- * result from the approved official county-estimator adapter. Formula,
- * parcel-cache, bill-scrape, and millage estimates are not a tax value that
- * can be presented to a borrower. Keep this check in one small,
- * dependency-free helper so every purchase surface applies the same rule.
+ * Official-only legacy parsing is kept separate from quick planning estimates.
+ * A quick estimate is usable in payment totals but never becomes an official
+ * bill or satisfies official completion merely because it contains a number.
  */
 
 export type OfficialPropertyTaxResolution =
@@ -69,11 +67,18 @@ export function resolvePurchasePropertyTaxSource(
   annualTax: number,
   recordedSource: string | undefined,
   currentKey: string,
-  resolved: { key: string; breakdown?: OfficialTaxBreakdown } | null,
-): "manual" | "official" | "unavailable" {
+  resolved: { key: string; breakdown?: OfficialTaxBreakdown; status?: string; annualTax?: number | null } | null,
+): "manual" | "official" | "estimate" | "area_estimate" | "rough_estimate" | "unavailable" {
   if (!Number.isFinite(annualTax) || annualTax < 0) return "unavailable";
   if (recordedSource === "manual") return "manual";
+  if (resolved?.key === currentKey &&
+      ["estimate", "area_estimate", "rough_estimate"].includes(recordedSource ?? "") &&
+      recordedSource === resolved.status &&
+      hasMatchingOfficialAnnualTax(resolved.annualTax, annualTax)) {
+    return recordedSource as "estimate" | "area_estimate" | "rough_estimate";
+  }
   if (recordedSource !== "official" || resolved?.key !== currentKey ||
+      (resolved.status !== undefined && resolved.status !== "official") ||
       resolved.breakdown?.total.cents == null) return "unavailable";
   return hasMatchingOfficialAnnualTax(resolved.breakdown.total.cents / 100, annualTax)
     ? "official" : "unavailable";
@@ -207,6 +212,9 @@ export function parseOfficialPropertyTaxResponse(
   const status = typeof data.status === "string"
     ? data.status.trim().toLowerCase()
     : "";
+  if(["estimate","area_estimate","rough_estimate"].includes(status)) {
+    return {status:"unavailable",reason:"Provisional estimate is not an official county result."};
+  }
   if (
     status === "unavailable" ||
     status === "error" ||

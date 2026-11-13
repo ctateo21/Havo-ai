@@ -1,4 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { blockLiveNetwork } from "./mock-network";
+
+test.beforeEach(async ({page}) => { await blockLiveNetwork(page); });
 
 const COLLier_ADDRESS = "100 Test Ave, Naples, FL 34102";
 const TEST_USER = {
@@ -18,33 +21,55 @@ const TEST_USER = {
 type TaxReply =
   | { defer: true }
   | {
-      annualTax?: number;
+      annualTax?: number | null;
       source?: string;
       parcelId?: string;
       taxDistrict?: string;
       millageRate?: number;
       nonAdValoremPending?: boolean;
       useFallback?: boolean;
+      key?: string;
+      status?: "estimate" | "area_estimate" | "rough_estimate" | "official" | "unavailable";
+      officialState?: "pending" | "complete" | "failed";
+      nav?: number | null;
+      navPending?: boolean;
+      label?: string;
+      reason?: string;
     };
 
 type PendingRoute = {
   route: Route;
   finish: () => void;
+  key?: string;
 };
 
 async function fulfillJson(route: Route, body: unknown): Promise<void> {
-  // Match the current official AV + collector NAV contract, not legacy
-  // annualTax-only responses that have no auditable components.
-  const b=body as any;
-  if(typeof b?.annualTax==="number"&&!b.breakdown){
-    const source={name:"Collier County Property Appraiser Tax Estimator",url:"https://www.collierappraiser.com/",fetchedAt:"2026-11-12T12:00:00Z",taxYear:2026,parcelId:b.parcelId??"COL-TEST"};
-    body={...b,breakdown:{adValorem:{cents:b.annualTax*100,source},nonAdValorem:{cents:0,source:{...source,name:"Collier County Tax Collector",url:"https://county-taxes.net/fl-collier/property-tax"}},
-      total:{cents:b.annualTax*100},warnings:[]}};
-  }
   await route.fulfill({
     status: 200,
     contentType: "application/json",
     body: JSON.stringify(body),
+  });
+}
+
+async function fulfillTax(route: Route, reply: Exclude<TaxReply, {defer:true}>, key: string) {
+  const annual = typeof reply.annualTax === "number" ? reply.annualTax : null;
+  const status = reply.status ?? (annual === null || reply.useFallback ? "unavailable" : "official");
+  const source = { name:"Synthetic Collier County Property Appraiser Tax Estimator",url:"https://www.collierappraiser.com/",
+    fetchedAt:"2026-11-12T12:00:00Z",taxYear:2026,parcelId:reply.parcelId??"COL-TEST" };
+  const nav = reply.nav ?? (status === "official" ? 0 : null);
+  const av = annual === null ? null : Math.round((annual - (nav ?? 0))*100)/100;
+  await fulfillJson(route, {
+    ...reply, key:reply.key??key,status,annualTax:annual,monthlyTax:annual===null?null:annual/12,
+    adValorem:av,nav,navPending:reply.navPending??nav===null,taxYear:2026,ratesYear:2026,
+    district:reply.taxDistrict??"Synthetic Naples district",sourceName:source.name,sourceUrl:source.url,
+    label:reply.label??(status==="official"?"Official county purchase-estimator":"Estimated from synthetic district millage"),
+    reason:reply.reason??(status==="unavailable"?"Official county figure unavailable.":undefined),
+    officialState:reply.officialState??(status==="official"?"complete":status==="unavailable"?"failed":"pending"),
+    ...(status==="official"&&annual!==null ? {breakdown:{
+      adValorem:{cents:Math.round(av!*100),source},
+      nonAdValorem:{cents:Math.round((nav??0)*100),source:{...source,name:"Synthetic Collier County Tax Collector",url:"https://county-taxes.net/fl-collier/property-tax"}},
+      total:{cents:Math.round(annual*100)},warnings:[],
+    }}:{}),
   });
 }
 
@@ -54,6 +79,7 @@ async function installCashBuyMocks(
     zillowPending?: boolean;
     zillowPrice?: number;
     taxReplies?: TaxReply[];
+    officialReplies?: Exclude<TaxReply, {defer:true}>[];
   } = {},
 ) {
   const pendingZillow: PendingRoute[] = [];
@@ -65,6 +91,8 @@ async function installCashBuyMocks(
   }])];
   let zillowRequests = 0;
   let taxRequests = 0;
+  let officialRequests = 0;
+  const officialReplies = [...(options.officialReplies??[])];
 
   await page.route("**/api/zillow-property-lookup", route => {
     zillowRequests += 1;
@@ -86,15 +114,19 @@ async function installCashBuyMocks(
     return fulfillJson(route, body);
   });
 
-  await page.route("**/api/property-tax/county", route => {
+  await page.route("**/api/property-tax/quick", route => {
     taxRequests += 1;
     const reply = taxReplies.shift() ?? { useFallback: true };
     if ("defer" in reply) {
       return new Promise<void>(finish => {
-        pendingTaxes.push({ route, finish });
+        pendingTaxes.push({ route, finish, key:`mock-tax-${taxRequests}` });
       });
     }
-    return fulfillJson(route, reply);
+    return fulfillTax(route, reply, `mock-tax-${taxRequests}`);
+  });
+  await page.route("**/api/property-tax/official-status?**", route => {
+    officialRequests += 1;
+    return fulfillTax(route, officialReplies.shift()??{useFallback:true}, new URL(route.request().url()).searchParams.get("key")!);
   });
 
   await page.route("**/api/flood-zone**", route =>
@@ -111,6 +143,7 @@ async function installCashBuyMocks(
   return {
     getZillowRequests: () => zillowRequests,
     getTaxRequests: () => taxRequests,
+    getOfficialRequests: () => officialRequests,
     async resolveZillow() {
       const pending = pendingZillow.shift();
       if (!pending) throw new Error("No pending Zillow request");
@@ -130,17 +163,18 @@ async function installCashBuyMocks(
       const pending = pendingTaxes.shift();
       if (!pending) throw new Error("No pending tax request");
       if ("defer" in body) throw new Error("A deferred tax response needs a result");
-      await fulfillJson(pending.route, body);
+      await fulfillTax(pending.route, body, pending.key!);
       pending.finish();
     },
   };
 }
 
-async function openCashBuy(page: Page, address = COLLier_ADDRESS): Promise<void> {
+async function openCashBuy(page: Page, address = COLLier_ADDRESS, expanded = true): Promise<void> {
   await page.goto(`/cash-buy?address=${encodeURIComponent(address)}`);
   await expect(page.getByTestId("cash-buy-property-taxes")).toBeVisible();
   await page.getByTestId("select-cash-occupancy").click();
   await page.getByRole("option",{name:"Primary Residence",exact:true}).click();
+  if(expanded) await expandTax(page);
 }
 
 function taxRow(page: Page) {
@@ -151,11 +185,18 @@ function taxInput(page: Page) {
   return taxRow(page).locator("input");
 }
 
+async function expandTax(page: Page) {
+  const toggle = taxRow(page).getByRole("button", {name:/Property Taxes/});
+  if(await toggle.getAttribute("aria-expanded")==="false") await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded","true");
+}
+
 test("blank use is unavailable and only primary sends homestead",async({page})=>{
   const state=await installCashBuyMocks(page,{taxReplies:Array.from({length:3},()=>({annualTax:4321,source:"county-estimator"}))});
   const flags:boolean[]=[];
-  page.on("request",req=>{if(req.url().endsWith("/api/property-tax/county"))flags.push(req.postDataJSON().isPrimaryResidence);});
+  page.on("request",req=>{if(req.url().endsWith("/api/property-tax/quick"))flags.push(req.postDataJSON().isPrimaryResidence);});
   await page.goto(`/cash-buy?address=${encodeURIComponent(COLLier_ADDRESS)}`);
+  await expandTax(page);
   await expect(taxRow(page)).toContainText("Select Property Use");
   await expect(taxInput(page)).toHaveValue("");
   expect(state.getTaxRequests()).toBe(0);
@@ -185,8 +226,9 @@ test("shows an official Collier purchase-estimator result and badge", async ({ p
   await openCashBuy(page);
 
   await expect.poll(state.getTaxRequests).toBe(1);
-  await expect(taxRow(page)).toContainText("Official estimate");
-  await expect(taxInput(page)).toHaveValue("4,321");
+  await expect(taxRow(page).getByText("Official",{exact:true})).toBeVisible();
+  await expect(taxRow(page)).toContainText("$4,321.00/yr");
+  await expect(taxInput(page)).toHaveValue("");
   await expect(taxRow(page)).toContainText("county purchase-estimator");
 });
 
@@ -197,8 +239,8 @@ test("leaves an unavailable official estimate for manual entry", async ({ page }
   await openCashBuy(page);
 
   await expect.poll(state.getTaxRequests).toBe(1);
-  await expect(taxRow(page)).toContainText("Official unavailable");
-  await expect(taxRow(page)).toContainText("No formula estimate is shown");
+  await expect(taxRow(page)).toContainText("Official county figure unavailable");
+  await expect(taxRow(page)).toContainText("No fallback rate has been substituted");
   await expect(taxInput(page)).toHaveValue("");
 });
 
@@ -208,12 +250,12 @@ test("manual tax edits survive a pending parcel response", async ({ page }) => {
   });
   await openCashBuy(page);
   await expect.poll(state.getTaxRequests).toBe(1);
-  await expect(taxRow(page)).toContainText("Looking up parcel");
+  await expect(taxRow(page)).toContainText("Checking property tax sources");
 
   await taxInput(page).fill("12000");
-  // NumRow intentionally keeps the raw edit while the input is focused.
+  // Manual bill editing stays independent of the background tax job.
   await expect(taxInput(page)).toHaveValue("12000");
-  await expect(taxRow(page)).toContainText("Manual");
+  await expect(taxRow(page)).toContainText("Your bill");
 
   await state.resolveTax({
     annualTax: 4_321,
@@ -221,7 +263,7 @@ test("manual tax edits survive a pending parcel response", async ({ page }) => {
     parcelId: "COL-LATE",
   });
   await expect(taxInput(page)).toHaveValue("12000");
-  await expect(taxRow(page)).toContainText("Manual");
+  await expect(taxRow(page)).toContainText("Your bill");
 });
 
 test("manual tax edits survive Zillow price hydration", async ({ page }) => {
@@ -239,7 +281,7 @@ test("manual tax edits survive Zillow price hydration", async ({ page }) => {
 
   await expect.poll(state.getTaxRequests).toBe(0);
   await expect(taxInput(page)).toHaveValue("12000");
-  await expect(taxRow(page)).toContainText("Manual");
+  await expect(taxRow(page)).toContainText("Your bill");
 });
 
 test("ignores a stale tax response after the purchase price changes", async ({ page }) => {
@@ -255,17 +297,18 @@ test("ignores a stale tax response after the purchase price changes", async ({ p
     annualTax: 4_321,
     source: "county-estimator",
   });
-  // The official-only policy leaves the changed request unavailable until
-  // the second official response resolves; the old result cannot win.
+  // The changed tuple stays unavailable until its own response resolves;
+  // the old result cannot win.
   await expect(taxInput(page)).toHaveValue("");
-  await expect(taxRow(page)).toContainText("Looking up parcel");
+  await expect(taxRow(page)).toContainText("Checking property tax sources");
 
   await state.resolveTax({
     annualTax: 6_789,
     source: "county-estimator",
   });
-  await expect(taxInput(page)).toHaveValue("6,789");
-  await expect(taxRow(page)).toContainText("Official estimate");
+  await expect(taxRow(page)).toContainText("$6,789.00/yr");
+  await expect(taxInput(page)).toHaveValue("");
+  await expect(taxRow(page).getByText("Official",{exact:true})).toBeVisible();
 });
 
 test("ignores a stale tax response after property use changes", async ({ page }) => {
@@ -282,17 +325,17 @@ test("ignores a stale tax response after property use changes", async ({ page })
     annualTax: 4_321,
     source: "county-estimator",
   });
-  // The official-only policy leaves the changed request unavailable until
-  // the second official response resolves.
+  // The changed tuple stays unavailable until its own response resolves.
   await expect(taxInput(page)).toHaveValue("");
-  await expect(taxRow(page)).toContainText("Looking up parcel");
+  await expect(taxRow(page)).toContainText("Checking property tax sources");
 
   await state.resolveTax({
     annualTax: 7_654,
     source: "county-estimator",
   });
-  await expect(taxInput(page)).toHaveValue("7,654");
-  await expect(taxRow(page)).toContainText("Official estimate");
+  await expect(taxRow(page)).toContainText("$7,654.00/yr");
+  await expect(taxInput(page)).toHaveValue("");
+  await expect(taxRow(page).getByText("Official",{exact:true})).toBeVisible();
 });
 
 test("keeps an official tax after same-price Zillow hydration", async ({ page }) => {
@@ -307,11 +350,12 @@ test("keeps an official tax after same-price Zillow hydration", async ({ page })
   await page.getByTestId("cash-buy-purchase-price").locator("input").fill("500000");
   await expect.poll(state.getTaxRequests).toBe(1);
   await state.resolveTax({ annualTax: 4_321, source: "county-estimator" });
-  await expect(taxRow(page)).toContainText("Official estimate");
+  await expect(taxRow(page).getByText("Official",{exact:true})).toBeVisible();
   await state.resolveZillow();
 
-  await expect(taxInput(page)).toHaveValue("4,321");
-  await expect(taxRow(page)).toContainText("Official estimate");
+  await expect(taxRow(page)).toContainText("$4,321.00/yr");
+  await expect(taxInput(page)).toHaveValue("");
+  await expect(taxRow(page).getByText("Official",{exact:true})).toBeVisible();
 });
 
 test("keeps an official tax while closing-cost controls change", async ({ page }) => {
@@ -320,15 +364,89 @@ test("keeps an official tax while closing-cost controls change", async ({ page }
   });
   await openCashBuy(page);
   await expect.poll(state.getTaxRequests).toBe(1);
-  await expect(taxRow(page)).toContainText("Official estimate");
+  await expect(taxRow(page).getByText("Official",{exact:true})).toBeVisible();
 
   await page.getByTestId("cash-buy-closing-percent").locator("input").fill("3");
-  await expect(taxInput(page)).toHaveValue("4,321");
-  await expect(taxRow(page)).toContainText("Official estimate");
+  await expect(taxRow(page)).toContainText("$4,321.00/yr");
+  await expect(taxInput(page)).toHaveValue("");
+  await expect(taxRow(page).getByText("Official",{exact:true})).toBeVisible();
   await page.getByTestId("btn-closing-mode-dollar").click();
   await page.getByTestId("cash-buy-closing-dollar").locator("input").fill("20000");
-  await expect(taxInput(page)).toHaveValue("4,321");
-  await expect(taxRow(page)).toContainText("Official estimate");
+  await expect(taxRow(page)).toContainText("$4,321.00/yr");
+  await expect(taxInput(page)).toHaveValue("");
+  await expect(taxRow(page).getByText("Official",{exact:true})).toBeVisible();
+});
+
+test("quick tax journey verifies officially, retains estimates on failure, and uses a compact keyboard-accessible row", async ({page}) => {
+  await page.clock.install();
+  const state = await installCashBuyMocks(page, {
+    taxReplies:[
+      {status:"estimate",annualTax:4321.17,nav:null,navPending:true,officialState:"pending",label:"Estimated from synthetic 2026 district millage"},
+      {status:"area_estimate",annualTax:4321.17,nav:null,navPending:true,officialState:"pending",label:"Area estimate from synthetic 2026 district millage"},
+    ],
+    officialReplies:[
+      {status:"official",annualTax:4625.53,nav:304.36,navPending:false,officialState:"complete"},
+      {status:"unavailable",annualTax:null,officialState:"failed",reason:"Fixture collector timed out"},
+    ],
+  });
+  await openCashBuy(page,COLLier_ADDRESS,false);
+  const row = taxRow(page);
+  const toggle = row.getByRole("button",{name:/Property Taxes/});
+  await expect(row).toHaveCount(1);
+  await expect(toggle).toHaveAttribute("aria-expanded","false");
+  await expect(toggle).toContainText("$360.10/mo");
+  await expect(toggle).toContainText("Est. · updating");
+  await expect(taxInput(page)).toHaveCount(0);
+  await expect(page.getByText("Monthly carrying cost (estimate)",{exact:true}).locator("xpath=..")).not.toContainText("Unavailable");
+
+  const insuranceRow = page.getByTestId("cash-buy-homeowners-insurance");
+  const taxBounds = await toggle.boundingBox();
+  const insuranceBounds = await insuranceRow.getByRole("button",{name:/Homeowners Insurance/}).boundingBox();
+  expect(taxBounds).not.toBeNull();
+  expect(insuranceBounds).not.toBeNull();
+  expect(Math.abs(taxBounds!.height-insuranceBounds!.height)).toBeLessThanOrEqual(1);
+  expect(taxBounds!.height).toBeLessThanOrEqual(58);
+
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-expanded","true");
+  await expect(taxInput(page)).toBeVisible();
+  await expect(row).toContainText("Pending");
+  await expect(row.getByRole("link",{name:/Synthetic Collier/})).toHaveAttribute("href","https://www.collierappraiser.com/");
+  await page.keyboard.press("Space");
+  await expect(toggle).toHaveAttribute("aria-expanded","false");
+  await expect(taxInput(page)).toHaveCount(0);
+
+  await page.clock.runFor(3000);
+  await expect.poll(state.getOfficialRequests).toBe(1);
+  await expect(toggle).toContainText("$385.46/mo");
+  await expect(row.getByText("Official",{exact:true})).toBeVisible();
+  await toggle.press("Enter");
+  await expect(row).toContainText("$4,625.53/yr");
+  await expect(row).toContainText("$304.36/yr");
+  await expect(row).toContainText("COL-TEST");
+  await expect(row.getByRole("link",{name:"Synthetic Collier County Tax Collector"})).toHaveAttribute("href","https://county-taxes.net/fl-collier/property-tax");
+  await expect(taxInput(page)).toHaveValue("");
+
+  await row.getByRole("button",{name:"Refresh official county data"}).click();
+  await expect.poll(state.getTaxRequests).toBe(2);
+  await expect(toggle).toContainText("$360.10/mo");
+  await expect(toggle).toContainText("Est. · updating");
+  await page.clock.runFor(3000);
+  await expect.poll(state.getOfficialRequests).toBe(2);
+  await expect(toggle).toContainText("$360.10/mo");
+  await expect(row.getByText("Estimated",{exact:true})).toBeVisible();
+  await expect(row).toContainText("Fixture collector timed out");
+  await expect(row).toContainText("Official verification did not complete");
+  await expect(row).toContainText("Pending");
+  await expect(row.getByText("Official",{exact:true})).toHaveCount(0);
+  await expect(page.getByText("Monthly carrying cost (estimate)",{exact:true}).locator("xpath=..")).not.toContainText("Unavailable");
+  await taxInput(page).fill("0");
+  await expect(toggle).toContainText("$0.00/mo");
+  await expect(toggle).toContainText("Your bill");
+  await page.clock.runFor(180_000);
+  expect(state.getOfficialRequests()).toBe(2);
+  await expect(taxInput(page)).toHaveValue("0");
 });
 
 test("preserves a saved manual tax after reload and skips late hydration lookups", async ({
@@ -418,12 +536,12 @@ test("preserves a saved manual tax after reload and skips late hydration lookups
     zillowRequests += 1;
     return fulfillJson(route, { property: null });
   });
-  await page.route("**/api/property-tax/county", route => {
+  await page.route("**/api/property-tax/quick", route => {
     taxRequests += 1;
-    return fulfillJson(route, {
+    return fulfillTax(route, {
       annualTax: 4_321,
       source: "county-estimator",
-    });
+    }, "saved-manual-lookup");
   });
   await page.route("**/api/flood-zone**", route =>
     fulfillJson(route, {
@@ -439,9 +557,11 @@ test("preserves a saved manual tax after reload and skips late hydration lookups
   await page.goto(
     `/cash-buy?address=${encodeURIComponent(savedAddress)}&id=${savedId}`,
   );
-  await expect(page.getByText("Annual Property Taxes")).toBeVisible();
-  await expect(taxInput(page)).toHaveValue("12,000");
-  await expect(taxRow(page)).toContainText("Manual");
+  await expect(taxRow(page)).toBeVisible();
+  await expandTax(page);
+  await expect(taxRow(page).getByText("Annual property taxes",{exact:true})).toBeVisible();
+  await expect(taxInput(page)).toHaveValue("12000");
+  await expect(taxRow(page)).toContainText("Your bill");
   // Saved photos are present, but the legacy row has no exact Zillow year;
   // the completion path still runs and must not overwrite manual taxes.
   await expect.poll(() => zillowRequests).toBe(1);

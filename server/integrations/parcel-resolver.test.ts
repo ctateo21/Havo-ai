@@ -99,13 +99,13 @@ test("Lee queries by house number and strictly selects the matching parcel", asy
   assert.equal(result.justValue, 390344);
 });
 
-test("Collier uses the official ParcelJoin row and preserves millage area rates", async () => {
+test("Collier uses the replacement Parcel layer and preserves supplied evidence", async () => {
   const fetchImpl: typeof fetch = async (input) => {
     const url = new URL(String(input));
-    assert.match(url.pathname, /ParcelJoin\/FeatureServer\/0\/query/);
+    assert.match(url.pathname, /Parcel\/FeatureServer\/2\/query/);
     assert.equal(
       url.searchParams.get("where"),
-      "SiteStreetNumber=112 AND SiteStreetName LIKE 'PALMETTO DUNES%' AND SiteCity='NAPLES'",
+      "SiteStreetAddress LIKE '112 PALMETTO DUNES%' AND SiteCity='NAPLES'",
     );
     return new Response(
       JSON.stringify({
@@ -147,7 +147,7 @@ test("Collier query keeps suffix variants bounded and matches SiteUnit strictly"
     const url = new URL(String(input));
     assert.equal(
       url.searchParams.get("where"),
-      "SiteStreetNumber=112 AND SiteStreetName LIKE 'PALMETTO DUNES%' AND SiteCity='NAPLES'",
+      "SiteStreetAddress LIKE '112 PALMETTO DUNES%' AND SiteCity='NAPLES'",
     );
     return new Response(
       JSON.stringify({

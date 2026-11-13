@@ -25,6 +25,7 @@ import Dashboard from "./pages/dashboard";
 import Settings from "./pages/settings";
 import Insurance from "./pages/insurance";
 import InsuranceRebuildRates from "./pages/insurance-rebuild-rates";
+import PropertyTaxRates from "./pages/property-tax-rates";
 import Estimate from "./pages/estimate";
 import Refinance from "./pages/refinance";
 import SellerEstimate from "./pages/seller-estimate";
@@ -72,6 +73,7 @@ function App() {
                       <Route path="/agents" component={Agents} />
                       <Route path="/admin/agents" component={AgentsResults} />
                       <Route path="/admin/rebuild-cost-rates" component={InsuranceRebuildRates} />
+                      <Route path="/admin/property-tax-rates" component={PropertyTaxRates} />
                       <Route path="/education" component={Education} />
                       <Route path="/settings" component={Settings} />
                       <Route path="/subscribe" component={Subscribe} />
