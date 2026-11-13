@@ -47,6 +47,7 @@ export function ResultsCard({ results, refinanceType }: ResultsCardProps) {
             <p className={cn("text-3xl font-bold", hasSavings ? "text-green-600" : "text-amber-600")}>
               {formatCurrencyWithCents(Math.abs(results.monthlySavings))}
             </p>
+            <p className="text-sm mt-3">Matched remaining term ({results.matchedTermYears} years): {formatCurrencyWithCents(results.matchedTermPayment)}/mo; monthly difference {formatCurrencyWithCents(results.matchedTermSavings)}. Extending the term can lower the payment while increasing lifetime interest.</p>
           </div>
         </CardContent>
       </Card>

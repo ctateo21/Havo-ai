@@ -13,7 +13,7 @@ export default function SmsTerms() {
 
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 mb-6">
             <p className="text-amber-900 text-sm font-medium">
-              By providing your phone number and checking the SMS
+              Marketing permission is optional and unchecked by default. We save your choice, the exact wording, timestamp, IP address and user agent. Providing a number alone does not grant marketing consent. Transactional verification messages are separate. Where SMS verification is unavailable, saved phone numbers remain unverified. By providing your phone number and checking the SMS
               consent box on any form, you agree to receive text
               messages as described below. Consent is never required
               to purchase any product or service.

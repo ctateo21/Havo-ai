@@ -1,0 +1,2 @@
+export const MARKETING_CONSENT_VERSION = "2026-11-12";
+export const MARKETING_CONSENT_TEXT = "I agree to receive marketing calls and texts from Havo and Christian Tateo at the number provided, including using automated technology or prerecorded messages. Consent is not required to purchase any goods or services. Message frequency varies; message and data rates may apply. Reply STOP to opt out or HELP for help.";

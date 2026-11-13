@@ -43,12 +43,12 @@ export default function Home() {
         {/* Keep link-share previews (iMessage, Slack, social) branded. Apple's
             preview crawler runs JS, so these must mirror the static tags in
             index.html or the homepage title/image gets overridden. */}
-        <meta property="og:title" content="Havo | Every Step Home" />
+        <meta property="og:title" content="Havo | The full monthly cost of a Florida home" />
         <meta property="og:description" content="One home journey. Everyone together." />
-        <meta property="og:image" content="https://havofl.com/havo-og-v1.png" />
-        <meta name="twitter:title" content="Havo | Every Step Home" />
+        <meta property="og:image" content="https://havofl.com/havo-cost-preview.png" />
+        <meta name="twitter:title" content="Havo | The full monthly cost of a Florida home" />
         <meta name="twitter:description" content="One home journey. Everyone together." />
-        <meta name="twitter:image" content="https://havofl.com/havo-og-v1.png" />
+        <meta name="twitter:image" content="https://havofl.com/havo-cost-preview.png" />
       </Helmet>
       <HeroSection />
     </>

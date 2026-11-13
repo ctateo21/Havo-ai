@@ -21,7 +21,7 @@ The application follows a monorepo structure with clear separation between clien
 - **UI Framework**: shadcn/ui components built on Radix UI primitives
 - **Routing**: Wouter for client-side routing
 - **Form Handling**: React Hook Form with Zod validation
-- **Styling**: Tailwind CSS with custom design tokens matching Tateo & Co branding
+- **Styling**: Havo branding: teal #007f77, coral, navy and cream. Keep “Real-time carrier rates via Tateo & Co” on insurance quotes and retain licensed-entity disclosures.
 
 ### Backend Architecture
 - **API Structure**: RESTful Express.js server with modular route handlers

@@ -2,6 +2,7 @@
 // Worksheet / Loan Estimate". Rendered from the shared fee-worksheet
 // model so every figure stays in lockstep with the estimate page calc.
 import { useEffect, useRef, useState } from "react";
+import {MortgageCompliance} from "./mortgage-compliance";
 import {
   Dialog,
   DialogContent,
@@ -452,6 +453,7 @@ export function FeeWorksheetDialog({
           Note: this worksheet itemizes estimated fees line by line, so its totals may differ slightly from the
           simplified "Estimated Closing Costs (~3%)" figure shown on the estimate page.
         </p>
+        <MortgageCompliance/>
         <p className="text-[10px] text-muted-foreground leading-relaxed">
           This estimate is provided for illustrative and informational purposes only based on the loan scenario provided.
           This is not a loan approval or commitment to lend. Rates are subject to change. Annual Percentage Rate (APR) is an

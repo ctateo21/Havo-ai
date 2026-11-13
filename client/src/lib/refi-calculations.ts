@@ -25,6 +25,9 @@ export interface RefinanceInput {
 }
 
 export interface RefinanceResult {
+  matchedTermPayment:number;
+  matchedTermSavings:number;
+  matchedTermYears:number;
   newLoanAmount: number;
   totalClosingCosts: number;
   monthlyPaymentCurrent: number;
@@ -61,7 +64,8 @@ export function calculateRefinance(input: RefinanceInput): RefinanceResult {
   const breakEvenMonths = monthlySavings > 0 ? Math.ceil(totalClosingCosts / monthlySavings) : 0;
   const ltvRatio = (newLoanAmount / appraisedValue) * 100;
 
-  return { newLoanAmount, totalClosingCosts, monthlyPaymentCurrent, monthlyPaymentNew, monthlySavings, totalInterestCurrent, totalInterestNew, totalSavings, breakEvenMonths, ltvRatio, cashOutAvailable, cashOutExceedsMax };
+  const matchedTermPayment=calculateMonthlyPayment(newLoanAmount,newInterestRate,currentTermRemainingYears);
+  return {matchedTermPayment,matchedTermSavings:monthlyPaymentCurrent-matchedTermPayment,matchedTermYears:currentTermRemainingYears, newLoanAmount, totalClosingCosts, monthlyPaymentCurrent, monthlyPaymentNew, monthlySavings, totalInterestCurrent, totalInterestNew, totalSavings, breakEvenMonths, ltvRatio, cashOutAvailable, cashOutExceedsMax };
 }
 
 export function amortizeBalance(balance: number, annualRatePct: number, monthlyPI: number, months: number): number {

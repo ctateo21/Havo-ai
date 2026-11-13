@@ -1,4 +1,5 @@
 import express, { type Express } from "express";
+import {PUBLIC_APP_ROUTES} from "../shared/public-routes";
 import fs from "fs";
 import path from "path";
 import { createServer as createViteServer, createLogger } from "vite";
@@ -58,7 +59,7 @@ export async function setupVite(app: Express, server: Server) {
         `src="/src/main.tsx?v=${nanoid()}"`,
       );
       const page = await vite.transformIndexHtml(url, template);
-      res.status(200).set({ "Content-Type": "text/html" }).end(page);
+      res.status(PUBLIC_APP_ROUTES.has(req.originalUrl.split("?")[0].replace(/\/$/,"")||"/")?200:404).set({ "Content-Type": "text/html" }).end(page);
     } catch (e) {
       vite.ssrFixStacktrace(e as Error);
       next(e);
@@ -79,6 +80,6 @@ export function serveStatic(app: Express) {
 
   // fall through to index.html if the file doesn't exist
   app.use("*", (_req, res) => {
-    res.sendFile(path.resolve(distPath, "index.html"));
+    res.status(PUBLIC_APP_ROUTES.has(_req.originalUrl.split("?")[0].replace(/\/$/,"")||"/")?200:404).sendFile(path.resolve(distPath, "index.html"));
   });
 }

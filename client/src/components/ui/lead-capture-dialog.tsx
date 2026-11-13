@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Mail, Phone, KeyRound, CheckCircle2, Loader2, User, Users } from "lucide-react";
 import { getStoredReferralSource } from "@/components/referral-source-dialog";
+import {MARKETING_CONSENT_TEXT} from "@shared/marketing-consent";
 
 // ─── Agent config ──────────────────────────────────────────────────────────
 
@@ -60,9 +61,9 @@ export default function LeadCaptureDialog({
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [marketingConsent,setMarketingConsent]=useState(false);
 
   const [code, setCode] = useState("");
-  const [devCode, setDevCode] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [countdown, setCountdown] = useState(0);
@@ -78,7 +79,8 @@ export default function LeadCaptureDialog({
       setStep("info");
       setAgentId(null);
       setFirstName(""); setLastName(""); setEmail(""); setPhone("");
-      setCode(""); setDevCode(null); setError(""); setCountdown(0);
+      setMarketingConsent(false);
+      setCode(""); setError(""); setCountdown(0);
     }
   }, [open]);
 
@@ -129,8 +131,8 @@ export default function LeadCaptureDialog({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to send code");
 
-      if (!data.smsEnabled && data.autoCode) {
-        // Twilio not configured — auto-verify silently, skip the verify step
+      if (!data.smsEnabled) {
+        // Save explicitly unverified, without a fabricated verification code.
         const agentName = AGENTS.find(a => a.id === agentId)?.name ?? DEFAULT_AGENT_NAME;
         const verifyRes = await fetch("/api/leads/verify", {
           method: "POST",
@@ -138,7 +140,7 @@ export default function LeadCaptureDialog({
           body: JSON.stringify({
             firstName, lastName, email,
             phone: digits,
-            code: data.autoCode,
+            marketingConsent,
             address,
             agent: agentName,
             scenarioDetails,
@@ -174,7 +176,6 @@ export default function LeadCaptureDialog({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to resend code");
-      if (data.devCode) setDevCode(data.devCode);
       startCountdown();
     } catch (err: any) {
       setError(err.message);
@@ -195,7 +196,7 @@ export default function LeadCaptureDialog({
         body: JSON.stringify({
           firstName, lastName, email,
           phone: phone.replace(/\D/g, ""),
-          code, address,
+          code, address, marketingConsent,
           agent: agentName,
           scenarioDetails,
           referral: getStoredReferralSource() ?? undefined,
@@ -333,6 +334,7 @@ export default function LeadCaptureDialog({
             </div>
 
             <div className="space-y-1.5">
+              <label className="flex gap-2 text-xs mb-3"><input type="checkbox" checked={marketingConsent} onChange={e=>setMarketingConsent(e.target.checked)}/><span>{MARKETING_CONSENT_TEXT}</span></label>
               <Label htmlFor="lc-phone" className="text-sm">Cell Phone Number</Label>
               <p className="text-xs text-muted-foreground">We'll text you a 6-digit code to verify your number.</p>
               <div className="relative">
@@ -364,9 +366,6 @@ export default function LeadCaptureDialog({
               <p className="text-xs text-muted-foreground">
                 Enter the 6-digit code sent to{" "}
                 <span className="font-medium text-foreground">{phone}</span>.
-                {devCode && (
-                  <span className="ml-1 text-amber-600 font-semibold">[Dev — code: {devCode}]</span>
-                )}
               </p>
               <div className="relative">
                 <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
