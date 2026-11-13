@@ -135,9 +135,7 @@ export function buildImporterPayload(
     Client: {
       NameFirst: p.firstName || "Havo",
       NameLast: p.lastName || "Lead",
-      DOB: formatDateOfBirth(p.dateOfBirth),
       DateOfBirth: formatDateOfBirth(p.dateOfBirth),
-      Phone: p.phone || "",
       PhoneNumber: p.phone || "",
       PhoneCell: p.phone || "",
       PhoneOther: "",
@@ -154,7 +152,7 @@ export function buildImporterPayload(
       Zip: p.zip,
       County: p.county || "",
       International: false,
-      AssumedCreditScore: process.env.QUOTERUSH_ASSUMED_CREDIT_SCORE || "Excellent",
+      AssumedCreditScore: "Excellent",
       CreditPermission: "No",
       Assigned: assignedEmail,
       LeadSource: "Havo Platform",
@@ -173,14 +171,13 @@ export function buildImporterPayload(
       Zip: p.zip,
       County: p.county || "",
       NewPurchase: p.newPurchase || "No",
-      ...(p.purchaseDate ? { PurchaseDate: p.purchaseDate } : {}),
+      ...(p.purchaseDate ? { PurchaseDate: formatDateOfBirth(p.purchaseDate) } : {}),
       PurchasePrice: String(Math.round(p.purchasePrice)),
       UsageType: p.usageType || "Primary",
-      MonthsOccupied: p.monthsOccupied,
       MonthsOwnerOccupied: p.monthsOccupied,
       ...(p.rentalTerm ? { RentalTerm: p.rentalTerm } : {}),
       YearBuilt: String(p.yearBuilt),
-       PolicyEffectiveDate: p.policyEffectiveDate,
+       PolicyEffectiveDate: formatDateOfBirth(p.policyEffectiveDate),
       // Do not fabricate a square-footage value. Carrier data is only useful
       // when it is supplied by the user or a verified property source.
       ...(p.sqFt > 0 ? { SquareFeet: String(Math.round(p.sqFt)) } : {}),
@@ -411,7 +408,7 @@ export async function importAndSubmit(
   let importText: string;
   try {
     importRes = await fetch(
-      `https://importer.quoterush.com/Json/Import/${WEBID}?responseType=JSON`,
+      `https://importer.quoterush.com/Json/Import/${WEBID}`,
       {
         method: "POST",
         headers: {
@@ -442,10 +439,11 @@ export async function importAndSubmit(
   console.log("[quoterush] importer diagnostics", inspection.diagnostics);
 
   if (!importRes.ok || inspection.rejected) {
+    if (inspection.leadId) await hooks.onLeadCreated?.(inspection.leadId);
     return {
-      leadId: 0,
+      leadId: inspection.leadId ?? 0,
       submitted: false,
-      error: `Import failed (${importRes.status}): ${inspection.error}`,
+      error: `Import failed (${importRes.status})${inspection.leadId ? `; LeadId ${inspection.leadId}` : ""}: ${inspection.error}`,
         ...(rawPropertyData ? { rawPropertyData } : {}),
     };
   }

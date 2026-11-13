@@ -8,7 +8,7 @@ description: How Havo's live insurance quoting talks to QuoteRUSH — manual tri
 ## Current insurance decisions (2026-11-12; supersede older shared-cache notes below)
 
 **Rule:** Never pull or ask permission to pull credit; send CreditPermission No.
-Use an assumed score (default Excellent), clearly disclosed.
+Use the fixed assumed score Excellent, clearly disclosed; no environment override.
 Coverage A comes only from confirmed area and administrator-configured county
 rebuild rates, or an explicit manual value—never market value. Rates start NULL.
 Roof year is explicitly entered/selected, integer 2000–2027, never inferred age.

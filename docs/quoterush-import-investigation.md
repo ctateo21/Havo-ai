@@ -1,4 +1,4 @@
-# Import investigation — 2026-11-13
+# Import investigation — updated 2026-11-14
 
 No live importer retry, carrier submission, migration, merge or publish was performed.
 
@@ -11,21 +11,41 @@ confidence). The exact rejecting field is unknown: the original response body wa
 not retained. Parser incompatibility is a proven separate defect, but does not
 explain an absent lead by itself.
 
-## Complete importer request diff: before 3358616 versus this branch
+## Historical success attribution (read-only)
+
+Production managed database: latest non-null LeadId 841, triggered September 11,
+2026 at 14:00:35.133 UTC, status failed; older ID 745 July 16, status failed.
+These prove stored IDs, not newly created leads. Historical logs are outside
+30-day retention. Within retention, the only importer completion is November 13
+12:33:21.819 UTC HTTP 200; no LeadId or GetNewLeads entries were found.
+
+The nearest earlier repository checkpoint is
+`6da559cede6ee81d2ab4c7ed683860e8a6b4884d` (September 10, 22:08:40 UTC).
+Its entire quoterush.ts is byte-identical to `3358616^` (SHA256
+6a2899191e9582f6ea3c142b911be385e89ed8721a0ceea2b4fdd03c3cc9fdb5).
+The preceding deployment completed September 10 22:08:36 UTC, but deployment
+metadata does not expose a commit SHA. **This is a comparison baseline, not a
+confirmed last-known-good deployed commit.** Neither ID's importer-response vs
+unsafe GetNewLeads fallback provenance can be established. The synthetic
+historical contract fixture is explicitly not a captured successful request.
+
+## Complete importer request diff: historical baseline versus this branch
 
 | Field or transport | Before | Now | Rejection assessment |
 |---|---|---|---|
-| URL query | none | responseType=JSON | Explicitly supported by importer docs; low suspicion |
-| Client.DateOfBirth | absent | same MM/DD/YYYY as retained DOB | Documented field; corrects missing documented name |
-| Client.PhoneNumber | absent | same string as retained Phone/PhoneCell | Documented field; requires a usable contact value |
-| HO.MonthsOwnerOccupied | absent | same string as retained MonthsOccupied | Documented field; enum must be supported (example: `9 months or more`) |
+| URL query | none | none | Removed optional JSON query to restore original transport |
+| Client.DOB → DateOfBirth | DOB only | DateOfBirth only, MM/DD/YYYY | Single documented key; no duplicate |
+| Client.Phone → PhoneNumber | Phone plus PhoneCell | PhoneNumber plus PhoneCell | Single documented primary phone key; cell field unchanged |
+| HO.MonthsOccupied → MonthsOwnerOccupied | MonthsOccupied | MonthsOwnerOccupied | Single documented key; value unchanged |
+| HO.PurchaseDate | date passed through, possibly YYYY-MM-DD | MM/DD/YYYY | Normalize at outgoing boundary |
+| HO.PolicyEffectiveDate | date passed through, possibly YYYY-MM-DD | MM/DD/YYYY | Normalize at outgoing boundary |
 | Client.CreditPermission | Yes | No | Intentional no-credit rule; provider acceptance with assumed score remains unverified |
-| Client.AssumedCreditScore | literal Excellent | QUOTERUSH_ASSUMED_CREDIT_SCORE or Excellent | Default unchanged; an unsupported configured enum could reject |
+| Client.AssumedCreditScore | literal Excellent | literal Excellent | Override removed from payload, assumption API and email |
 | fetch timeout | no explicit timeout | 30 seconds | Local failure boundary, not request payload |
 
 All other importer payload keys, formats and conditional inclusion rules are
 unchanged from that parent, including DOB conversion, phone string formatting,
-purchase price/year/coverage numeric strings, purchase/effective date forwarding,
+purchase price/year/coverage numeric strings,
 claims, wind answers, and new-purchase defaults. POST, JSON Content-Type and
 webpassword authentication header are unchanged. No required-field schema changed
 in the payload builder. PR13's preflight now rejects missing name/phone before import.
@@ -37,9 +57,18 @@ in error text and never that fallback. Carrier discovery, Carriers and callbackU
 were added to the later submission stage; they cannot explain rejection before a
 LeadId exists.
 
-Unknown aliases (DOB, Phone, MonthsOccupied) remain alongside documented names.
-The docs do not promise unknown-key tolerance, so alias conflict remains possible,
-but there is no captured error proving it. No speculative payload changes made.
+Deductible strings, UsageType and FormType mappings are unchanged. Mixed
+construction still sends ConstructionType=Mixed, Construction=selected masonry
+subtype (or Mixed if absent); it was already this way in the September baseline.
+No evidence supports inventing different enum values. CreditPermission is NOT
+the sole difference: the documented key names and normalized dates also differ.
+No + Excellent acceptance remains unverified; never revert permission to Yes.
+
+Response inspection now ignores zero/false/empty error fields, accepts deeply
+nested and array LeadIds, strips exact applicant/secret values before rejection
+keyword checks, and preserves safe field-name diagnostics. An explicit rejection
+still blocks carriers even with a LeadId; that ID is persisted through the same
+generation-guarded hook and included in the sales review reason.
 
 ## Documentation checked
 
@@ -59,7 +88,7 @@ to change No to Yes or invent a companion field.
 ## Proposed controlled retry (NOT executed)
 
 Exactly one POST to
-`https://importer.quoterush.com/Json/Import/<QUOTERUSH_WEBID>?responseType=JSON`,
+`https://importer.quoterush.com/Json/Import/<QUOTERUSH_WEBID>`,
 Content-Type application/json, webpassword from QUOTERUSH_WEBID_PASSWORD.
 No EndpointKey, callback token, carrier list or Agency credential is in this
 import request. No automatic retry. It can create a real agency lead.
@@ -76,8 +105,8 @@ Field manifest (angle-bracket values are redacted/unconfirmed, not defaults):
 ```text
 Client:
  NameFirst=<confirmed first name>; NameLast=<confirmed last name>
- DOB=DateOfBirth=<private DOB, MM/DD/YYYY>
- Phone=PhoneNumber=PhoneCell=<confirmed phone string>; PhoneOther=""
+ DateOfBirth=<private DOB, MM/DD/YYYY>
+ PhoneNumber=PhoneCell=<confirmed phone string>; PhoneOther=""
  EmailAddress=<confirmed email>; Assigned=<QUOTERUSH_ASSIGNED_EMAIL>
  Address=<street>; City=<city>; State="FL"; Zip=<five-digit string>; County=<county>
  EntityType="Individual"; Gender="Male"; MaritalStatus="Single"
@@ -89,10 +118,10 @@ Client:
 HO:
  FormType="HO-3: Home Owners Policy"
  Address=<street>; City=<city>; State="FL"; Zip=<ZIP>; County=<county>
- NewPurchase="Yes"; PurchaseDate=<confirmed date string, if present>
+ NewPurchase="Yes"; PurchaseDate=<confirmed MM/DD/YYYY date, if present>
  PurchasePrice="300000"; UsageType=<confirmed use>
- MonthsOccupied=MonthsOwnerOccupied=<confirmed enum>; RentalTerm=<if supplied>
- YearBuilt=<confirmed year string>; PolicyEffectiveDate=<confirmed date string>
+ MonthsOwnerOccupied=<confirmed enum>; RentalTerm=<if supplied>
+ YearBuilt=<confirmed year string>; PolicyEffectiveDate=<confirmed MM/DD/YYYY date>
  SquareFeet=<positive confirmed sq ft, rounded string>
  ConstructionType=<confirmed type>; Construction=<confirmed subtype>
  MasonryConstruction=<confirmed subtype or empty>

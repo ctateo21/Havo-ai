@@ -1,0 +1,23 @@
+{
+  "baseline": "6da559cede6ee81d2ab4c7ed683860e8a6b4884d",
+  "evidence": "Synthetic contract from historical builder, not a captured successful production request",
+  "Client": {
+    "DOB": "01/02/1980",
+    "Phone": "5555555555",
+    "AssumedCreditScore": "Excellent",
+    "CreditPermission": "Yes"
+  },
+  "HO": {
+    "MonthsOccupied": "9 months or more",
+    "FormType": "HO-3: Home Owners Policy",
+    "ConstructionType": "Mixed",
+    "Construction": "Concrete Block",
+    "MasonryConstruction": "Concrete Block",
+    "UsageType": "Primary",
+    "AllOtherPerilsDeductible": "$1,000",
+    "HurricaneDeductible": "5%",
+    "WindHailDeductible": "5%",
+    "PurchaseDate": "2026-12-01",
+    "PolicyEffectiveDate": "2026-12-01"
+  }
+}

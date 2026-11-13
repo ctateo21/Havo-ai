@@ -15,6 +15,7 @@ import {
 } from "./quoterush-start-request";
 import { resolveQuoteRushPropertyDefaults } from "@shared/quoterush-property-defaults";
 import { resolvePurchasePriceProvenance } from "@shared/purchase-price-provenance";
+import {redactImporterText} from "./quoterush-import-response";
 // Explicitly answered property fixture shared by the legacy contract tests.
 const prepareQuoteRushStartRequest=(body:any,...rest:any[])=>prepareRawQuoteRushStartRequest({
   policyType:"HO3",yearBuilt:1958,roofYear:2020,sqFt:1166,sqFtConfirmed:true,
@@ -58,6 +59,27 @@ const params: QuoteRushParams = {
   phone: "5555555555",
   creditPermissionGranted: true,
 };
+test("historical payload contract retains enums with documented single keys and normalized dates",()=>{
+  const old=JSON.parse(readFileSync(new URL("./test-fixtures/quoterush-pre-regression-contract.json",import.meta.url),"utf8"));
+  const current=buildImporterPayload({...params,dateOfBirth:"1980-01-02",purchaseDate:"2026-12-01",policyEffectiveDate:"2026-12-01"},"agent@example.test");
+  assert.equal(current.Client.DateOfBirth,old.Client.DOB);
+  assert.equal(current.Client.PhoneNumber,old.Client.Phone);
+  assert.equal(current.HO.MonthsOwnerOccupied,old.HO.MonthsOccupied);
+  for(const key of ["FormType","ConstructionType","Construction","MasonryConstruction","UsageType","AllOtherPerilsDeductible","HurricaneDeductible","WindHailDeductible"])
+    assert.equal(current.HO[key],old.HO[key]);
+  assert.equal(current.HO.PurchaseDate,"12/01/2026");
+  assert.equal(current.HO.PolicyEffectiveDate,"12/01/2026");
+  assert.equal(current.Client.CreditPermission,"No");
+  assert.equal(current.Client.AssumedCreditScore,"Excellent");
+});
+test("every emitted payload key survives diagnostic redaction",()=>{
+  const payload=buildImporterPayload({...params,priorClaims:1,claimRecords:[{claimDetail:"Other",lossDate:"2020-01-01",amount:1,priorResidence:"No",paid:"Yes"}],newPurchase:"Yes",rentalTerm:"Annual",hasMortgage:true},"agent@example.test");
+  const visit=(value:any)=>{for(const [key,child] of Object.entries(value)){
+    if(!Array.isArray(value))assert.equal(redactImporterText(key),key);
+    if(child&&typeof child==="object")visit(child);
+  }};
+  visit(payload);
+});
 
 test("importer payload retains exact property answers, mixed construction, and both deductibles", () => {
   const payload = buildImporterPayload(params, "agent@example.com");
@@ -77,7 +99,7 @@ test("importer payload retains exact property answers, mixed construction, and b
       aop: payload.HO.AllOtherPerilsDeductible,
       usageType: payload.HO.UsageType,
       rentalTerm: payload.HO.RentalTerm,
-      monthsOccupied: payload.HO.MonthsOccupied,
+      monthsOccupied: payload.HO.MonthsOwnerOccupied,
       newPurchase: payload.HO.NewPurchase,
       purchaseDate: payload.HO.PurchaseDate,
       purchasePrice: payload.HO.PurchasePrice,
@@ -161,10 +183,12 @@ test("six zero-cost policy payload sanity cases stay normalized", () => {
 
 test("importer always sends the agency-confirmed credit permission value", () => {
   const payload=buildImporterPayload(params,"agent@example.com");
-  assert.equal(payload.Client.DateOfBirth,payload.Client.DOB);
-  assert.equal(payload.Client.PhoneNumber,payload.Client.Phone);
-  assert.equal(payload.HO.MonthsOwnerOccupied,payload.HO.MonthsOccupied);
-  assert.equal(payload.Client.AssumedCreditScore,process.env.QUOTERUSH_ASSUMED_CREDIT_SCORE||"Excellent");
+  assert.equal(payload.Client.DOB,undefined);
+  assert.equal(payload.Client.Phone,undefined);
+  assert.equal(payload.HO.MonthsOccupied,undefined);
+  assert.equal(payload.Client.PhoneNumber,params.phone);
+  assert.equal(payload.HO.MonthsOwnerOccupied,params.monthsOccupied);
+  assert.equal(payload.Client.AssumedCreditScore,"Excellent");
   assert.equal(
     buildImporterPayload(
       { ...params, creditPermissionGranted: true },
@@ -1125,15 +1149,21 @@ test("HTTP 200 validation rejection never reaches carriers and retains enrichmen
   const old = keys.map(key=>process.env[key]);
   keys.forEach(key=>{process.env[key]="synthetic-test-credential";});
   let calls=0;
+  let persistedId:number|undefined;
   globalThis.fetch = (async (url) => {
     calls++;
     if(String(url).includes("GetPropertyData")) return new Response('{"SquareFeet":1999}');
-    if(String(url).includes("/Json/Import/")) return new Response('{"LeadID":12345,"Error":"Invalid PhoneNumber test@example.com"}',{status:200,headers:{"content-type":"application/json"}});
+    if(String(url).includes("/Json/Import/")) {
+      assert.ok(!String(url).includes("responseType"));
+      return new Response('{"LeadID":12345,"Error":"Invalid PhoneNumber test@example.com"}',{status:200,headers:{"content-type":"application/json"}});
+    }
     throw Error("Unexpected carrier request");
   }) as typeof fetch;
   try {
-    const result=await importAndSubmit(params);
-    assert.equal(calls,2);assert.equal(result.leadId,0);assert.equal(result.submitted,false);
+    const result=await importAndSubmit(params,{onLeadCreated:async id=>{persistedId=id;}});
+    assert.equal(calls,2);assert.equal(result.leadId,12345);assert.equal(result.submitted,false);
+    assert.equal(persistedId,12345);
+    assert.match(result.error!,/LeadId 12345/);
     assert.match(result.error!,/Invalid PhoneNumber/);assert.ok(!result.error!.includes("test@example.com"));
     assert.deepEqual(result.rawPropertyData,{SquareFeet:1999});
   } finally {

@@ -484,7 +484,7 @@ export function quoteRushResultsContent(args: {
   const quotes = args.quotes.filter(q=>q.annualPremium>0).sort((a,b)=>a.annualPremium-b.annualPremium).slice(0, 3);
   const license="Quotes provided by Tateo Insurance Corp (License #L132640) · Agent Paul Christian Tateo (W142842) · Real-time carrier rates via Tateo & Co.";
   const binder="These are preliminary quotes, not a binder or proof of insurance. Coverage is not in force until a carrier accepts an application and issues a binder or policy. Premiums can change after underwriting and inspections.";
-  const assumptions=[`Assumed credit: ${process.env.QUOTERUSH_ASSUMED_CREDIT_SCORE||"Excellent"} (no credit check performed)`,...(args.assumptions??[])];
+  const assumptions=[`Assumed credit: Excellent (no credit check performed)`,...(args.assumptions??[])];
   const rawSchedule=process.env.SCHEDULE_CALL_URL??"https://calendar.app.google/bGd2q1fVCsmzPgPb6";
   let schedule="";try{const u=new URL(rawSchedule);if(u.protocol==="https:")schedule=u.toString();}catch{/* No unsafe link. */}
   const noQuotes="Our agents are finishing your quotes manually and will contact you.";

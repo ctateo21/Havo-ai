@@ -138,7 +138,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   registerFastPropertyTaxRoutes(app);
   registerPropertyTaxRatesAdmin(app);
   startFloodRechecks();
-  app.get("/api/insurance/quote-assumptions",(_req,res)=>res.json({assumedCreditScore:process.env.QUOTERUSH_ASSUMED_CREDIT_SCORE||"Excellent"}));
+  app.get("/api/insurance/quote-assumptions",(_req,res)=>res.json({assumedCreditScore:"Excellent"}));
   registerQuoteCallbackAndImports(app,async(row,params,reason)=>createFollowUpBossContact({
     firstName:params.firstName??"",lastName:params.lastName??"",email:row.emailRecipient??"",
     phone:params.phone??"",address:row.addressDisplay,source:"havofl.com - INSURANCE LIVE QUOTE",
