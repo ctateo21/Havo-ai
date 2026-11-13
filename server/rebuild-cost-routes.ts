@@ -3,6 +3,7 @@ import {z} from "zod";
 import {supabaseAdmin} from "./supabase";
 import {requireInterestAdmin} from "./b2b-interest-routes";
 import {geocodeAddress} from "./integrations/geocode";
+import {authenticatedQuoteUser,hasAnonymousQuoteFor} from "./anonymous-quote";
 export const rebuildRateUpdate=z.object({
   frame_cost_per_sqft:z.number().finite().positive().nullable(),
   masonry_cost_per_sqft:z.number().finite().positive().nullable(),
@@ -30,11 +31,9 @@ export function registerRebuildCostRoutes(app:Express){
   });
   app.get("/api/insurance/rebuild-rate",async(req,res)=>{
     try{
-      const token=/^Bearer\s+(.+)$/i.exec(req.headers.authorization??"")?.[1];
-      if(!token||!supabaseAdmin)return res.sendStatus(403);
-      const {data,error:authError}=await supabaseAdmin.auth.getUser(token);
-      if(authError||!data.user)return res.sendStatus(403);
       const address=z.string().min(5).max(500).parse(req.query.address);
+      if(!supabaseAdmin)return res.sendStatus(503);
+      if(!await authenticatedQuoteUser(req)&&!hasAnonymousQuoteFor(req,address))return res.status(401).json({code:"SIGN_UP_REQUIRED",error:"Start your free quote or sign in"});
       const geo=await geocodeAddress(address);if(!geo)return res.status(422).json({error:"Unavailable — county could not be verified"});
       const {data:rate,error}=await supabaseAdmin.from("rebuild_cost_rates").select("county_slug,county_name,county_fips,frame_cost_per_sqft,masonry_cost_per_sqft,source_note,updated_at").eq("county_fips",geo.countyFips).maybeSingle();
       if(error||!rate)throw Error("Rates unavailable");

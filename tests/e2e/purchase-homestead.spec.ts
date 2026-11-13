@@ -1,4 +1,4 @@
-import {test,expect} from "@playwright/test";
+import {test,expect} from "./quote-access-fixture";
 import {blockLiveNetwork} from "./mock-network";
 test("blank property use blocks tax lookup; explicit selections send the right flag",async({page})=>{
   const flags:boolean[]=[];

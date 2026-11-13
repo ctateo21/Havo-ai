@@ -6,6 +6,7 @@ export async function blockLiveNetwork(page: Page) {
     const url = new URL(route.request().url());
     if (url.pathname.startsWith("/api/")) {
       const defaults: Record<string, unknown> = {
+        "/api/anonymous-quote/start": { allowed: true },
         "/api/zillow-property-lookup": { property: null },
         "/api/flood-zone": { zone: "X", subtype: "minimal", requiresFloodInsurance: false },
         "/api/mortgage-rates": { conventional: 6.5, fha: 6, va: 6, usda: 6, source: "synthetic browser fixture" },

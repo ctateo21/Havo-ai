@@ -1527,6 +1527,34 @@ function enqueueWrite(key: string, fn: () => Promise<void>): Promise<void> {
   return next;
 }
 
+/**
+ * Await the existing serialized write even for legacy void save helpers.
+ * Those helpers report provider failures via notifyError rather than throwing.
+ * Draft promotion must observe both channels before discarding local data.
+ */
+export async function confirmScenarioPersistence(
+  table: string,
+  save: () => void | Promise<void>,
+): Promise<void> {
+  const userId = _session?.id;
+  if (!userId) throw new Error("Sign in before saving your draft.");
+  let failure: string | null = null;
+  const unsubscribe = subscribePersistenceError(error => {
+    if (error.table === table) failure = error.message;
+  });
+  try {
+    const result = save();
+    const queued = _writeChains[table];
+    await result;
+    if (!queued) throw new Error("Your draft has not been queued for saving.");
+    await queued;
+    if (_session?.id !== userId) throw new Error("Your session changed before the draft finished saving.");
+    if (failure) throw new Error(failure);
+  } finally {
+    unsubscribe();
+  }
+}
+
 async function loadProfile(userId: string): Promise<AuthUser | null> {
   const baseColumns =
     "id,name,email,phone,agent,invited_user,created_at";
@@ -2029,6 +2057,7 @@ export async function register(
   }
   const profileResponse = await fetch("/api/profile/complete-registration", {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       userId: data.user.id,

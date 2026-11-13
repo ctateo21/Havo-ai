@@ -1,6 +1,9 @@
 import { useMemo, useState, useRef, useEffect } from "react";
 import { useSearch, useLocation } from "wouter";
 import ScenarioActions from "@/components/scenario-actions";
+import { useQuoteAccess } from "@/context/quote-access-context";
+import { useAnonymousDraft, useAnonymousDraftRef } from "@/hooks/use-anonymous-draft";
+import { rememberAnonymousAccountDraft, confirmAnonymousAccountDraftSaved, hasPendingAnonymousAccountDraft } from "@/lib/anonymous-account-draft";
 import {
   getInsuranceScenarios, saveInsuranceScenarios, type InsuranceScenario,
   getPurchaseScenarios, getCashBuyScenarios, getTrackedLoans,
@@ -406,10 +409,15 @@ function YearInputRow({ label, value, onChange, testId }: {
 
 export default function InsuranceDashboard() {
   const { user } = useAuth();
+  const isAuthenticated = !!user;
+  const { authorize, requireAccount } = useQuoteAccess();
   const search = useSearch();
   const [, setLocation] = useLocation();
   const params = new URLSearchParams(search);
   const addressParam = params.get("address") || "";
+  // An account arriving while this anonymous draft is mounted must not replace
+  // the buyer's edits with empty (or older) account values.
+  const anonymousDraftAddress = useRef(!user || hasPendingAnonymousAccountDraft() ? addressParam : null);
   const priceParam = params.get("price");
   const physicalPropertyType = resolvePhysicalPropertyTypeForAddress(addressParam);
   const normalizedPhysicalPropertyType = physicalPropertyType
@@ -446,10 +454,10 @@ export default function InsuranceDashboard() {
   const { toast } = useToast();
 
   // ── Scenario state ───────────────────────────────────────────────────────
-  const [scenarios, setScenarios] = useState<Scenario[]>([
+  const [scenarios, setScenarios] = useAnonymousDraft<Scenario[]>("scenarios", [
     { id: "sc0", address: addressParam, savedSettings: null },
   ]);
-  const [activeScenarioId, setActiveScenarioId] = useState("sc0");
+  const [activeScenarioId, setActiveScenarioId] = useAnonymousDraft("activeScenarioId", "sc0");
   const [showAddressPrompt, setShowAddressPrompt] = useState(false);
   const [newScenarioAddress, setNewScenarioAddress] = useState("");
   const { bindInputRef: newScenarioInputRef } = useGooglePlaces({
@@ -466,15 +474,15 @@ export default function InsuranceDashboard() {
   }, [addressParam]);
 
   // ── Settings state ───────────────────────────────────────────────────────
-  const [regionKey, setRegionKey] = useState<RegionKey>(getRegionFromAddress(addressParam));
-  const [rebuild, setRebuild] = useState(initialRebuild);
-  const manualCoverageA = useRef(initialRebuild > 0);
-  const manualRoofYear = useRef(false);
-  const [sqFtConfirmed, setSqFtConfirmed] = useState(false);
-  const [floodZoneUnknown, setFloodZoneUnknown] = useState(false);
-  const [fieldSources, setFieldSources] = useState<PropertyEvidence>({});
-  const [constructionSourced, setConstructionSourced] = useState(false);
-  const [constructionConfirmed, setConstructionConfirmed] = useState(false);
+  const [regionKey, setRegionKey] = useAnonymousDraft<RegionKey>("regionKey", getRegionFromAddress(addressParam));
+  const [rebuild, setRebuild] = useAnonymousDraft("rebuild", initialRebuild);
+  const manualCoverageA = useAnonymousDraftRef("manualCoverageA", initialRebuild > 0);
+  const manualRoofYear = useAnonymousDraftRef("manualRoofYear", false);
+  const [sqFtConfirmed, setSqFtConfirmed] = useAnonymousDraft("sqFtConfirmed", false);
+  const [floodZoneUnknown, setFloodZoneUnknown] = useAnonymousDraft("floodZoneUnknown", false);
+  const [fieldSources, setFieldSources] = useAnonymousDraft<PropertyEvidence>("fieldSources", {});
+  const [constructionSourced, setConstructionSourced] = useAnonymousDraft("constructionSourced", false);
+  const [constructionConfirmed, setConstructionConfirmed] = useAnonymousDraft("constructionConfirmed", false);
   const [roofPermits, setRoofPermits] = useState<RoofSuggestion[]>([]);
   const [rebuildRate, setRebuildRate] = useState<{
     county: string; countyName: string; frame_cost_per_sqft: number | null;
@@ -506,11 +514,12 @@ export default function InsuranceDashboard() {
     }
     return null;
   }
-  const [manualAnnualPremium, setManualAnnualPremium] = useState<number | null>(
+  const [manualAnnualPremium, setManualAnnualPremium] = useAnonymousDraft<number | null>("manualAnnualPremium",
     resolveManualPremiumFor(addressParam)
   );
   // Re-hydrate from saved state when the address switches.
   useEffect(() => {
+    if (anonymousDraftAddress.current === addressParam) return;
     const v = resolveManualPremiumFor(addressParam);
     setManualAnnualPremium(v);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -524,8 +533,8 @@ export default function InsuranceDashboard() {
   // (Resolution logic lives in the module-level `resolvePolicyTypeForAddress`
   // so Rebuild Cost seeding and this component stay in lockstep.)
   const initialPolicy = resolvePolicyTypeForAddress(addressParam);
-  const [policyType, setPolicyType] = useState<InsurancePolicyType | "">(initialPolicy.policyType);
-  const [policyTypeSource, setPolicyTypeSource] = useState<"default_rule" | "manual" | null>(
+  const [policyType, setPolicyType] = useAnonymousDraft<InsurancePolicyType | "">("policyType", initialPolicy.policyType);
+  const [policyTypeSource, setPolicyTypeSource] = useAnonymousDraft<"default_rule" | "manual" | null>("policyTypeSource",
     initialPolicy.source
   );
   // Re-hydrate from the new address's own saved/default state whenever
@@ -535,6 +544,7 @@ export default function InsuranceDashboard() {
   // InsuranceScenario for this address (preserving manual overrides
   // saved to Supabase) before falling back to the rule helper.
   useEffect(() => {
+    if (anonymousDraftAddress.current === addressParam) return;
     const next = resolvePolicyTypeForAddress(addressParam);
     setPolicyType(next.policyType);
     setPolicyTypeSource(next.source);
@@ -593,29 +603,29 @@ export default function InsuranceDashboard() {
     };
   }
   const initialFactors = resolveFactorsFor(addressParam);
-  const [hurrIdx, setHurrIdx]     = useState(initialFactors.hurr);
-  const [constIdx, setConstIdx]   = useState(initialFactors.cons);
-  const [roofYear, setRoofYear] = useState(initialFactors.roofYear);
-  const [yearBuilt, setYearBuilt] = useState(initialFactors.yearBuilt);
-  const [squareFeet, setSquareFeet] = useState(0);
+  const [hurrIdx, setHurrIdx]     = useAnonymousDraft("hurrIdx", initialFactors.hurr);
+  const [constIdx, setConstIdx]   = useAnonymousDraft("constIdx", initialFactors.cons);
+  const [roofYear, setRoofYear] = useAnonymousDraft("roofYear", initialFactors.roofYear);
+  const [yearBuilt, setYearBuilt] = useAnonymousDraft("yearBuilt", initialFactors.yearBuilt);
+  const [squareFeet, setSquareFeet] = useAnonymousDraft("squareFeet", 0);
   const [propertyCharacteristicsNote, setPropertyCharacteristicsNote] =
     useState("");
-  const propertyCharacteristicLocksRef = useRef({
+  const propertyCharacteristicLocksRef = useAnonymousDraftRef("propertyCharacteristicLocks", {
     floodZone: false,
     yearBuilt: false,
     squareFeet: false,
     construction: false,
   });
-  const [openingProtectionIdx, setOpeningProtectionIdx] = useState(initialFactors.openingProtection);
-  const [roofShapeIdx, setRoofShapeIdx] = useState(initialFactors.roofShape);
-  const [swrIdx, setSwrIdx] = useState(initialFactors.swr);
+  const [openingProtectionIdx, setOpeningProtectionIdx] = useAnonymousDraft("openingProtectionIdx", initialFactors.openingProtection);
+  const [roofShapeIdx, setRoofShapeIdx] = useAnonymousDraft("roofShapeIdx", initialFactors.roofShape);
+  const [swrIdx, setSwrIdx] = useAnonymousDraft("swrIdx", initialFactors.swr);
   const roofIdx = roofFactorIndex(roofYear);
   const yearIdx = yearBuiltFactorIndex(yearBuilt);
   const windIdx = windMitigationIndex(openingProtectionIdx, roofShapeIdx, swrIdx);
-  const [hasClaims, setHasClaims] = useState<boolean | null>(null);
-  const [claimRecords, setClaimRecords] = useState<Array<{
+  const [hasClaims, setHasClaims] = useAnonymousDraft<boolean | null>("hasClaims", null);
+  const [claimRecords, setClaimRecords] = useAnonymousDraft<Array<{
     lossDate: string; claimDetail: string; amount: number | ""; paid: boolean | null; priorResidence: boolean | null;
-  }>>([]);
+  }>>("claimRecords", []);
   const claimsIdx = hasClaims ? Math.min(3, claimRecords.length) : 0;
 
   // AOP deductible uses the existing `user_answer_sources` jsonb scratch map.
@@ -632,7 +642,7 @@ export default function InsuranceDashboard() {
     };
   }
   const initialExtras = resolveExtrasFor(addressParam);
-  const [aopDeductible, setAopDeductible] = useState<number>(initialExtras.aop);
+  const [aopDeductible, setAopDeductible] = useAnonymousDraft<number>("aopDeductible", initialExtras.aop);
 
   function resolveQuotePropertyAnswersFor(addr: string): {
     newPurchase: boolean | null;
@@ -719,30 +729,30 @@ export default function InsuranceDashboard() {
   const [initialQuotePropertyAnswers] = useState(() =>
     resolveQuotePropertyAnswersFor(addressParam),
   );
-  const [newPurchase, setNewPurchase] = useState<boolean | null>(
+  const [newPurchase, setNewPurchase] = useAnonymousDraft<boolean | null>("newPurchase",
     initialQuotePropertyAnswers.newPurchase,
   );
-  const [purchaseDate, setPurchaseDate] = useState(
+  const [purchaseDate, setPurchaseDate] = useAnonymousDraft("purchaseDate",
     initialQuotePropertyAnswers.purchaseDate,
   );
   const [ho6ResidenceUse, setHo6ResidenceUse] =
-    useState<QuoteRushResidenceUse | "">(
+    useAnonymousDraft<QuoteRushResidenceUse | "">("ho6ResidenceUse",
       initialQuotePropertyAnswers.ho6ResidenceUse,
     );
   const [ho6RentalTerm, setHo6RentalTerm] =
-    useState<QuoteRushRentalTerm | "">(
+    useAnonymousDraft<QuoteRushRentalTerm | "">("ho6RentalTerm",
       initialQuotePropertyAnswers.ho6RentalTerm,
     );
-  const [purchasePrice, setPurchasePrice] = useState(
+  const [purchasePrice, setPurchasePrice] = useAnonymousDraft("purchasePrice",
     initialQuotePropertyAnswers.purchasePrice,
   );
-  const [purchasePriceSource, setPurchasePriceSource] = useState<
+  const [purchasePriceSource, setPurchasePriceSource] = useAnonymousDraft<
     QuoteRushPurchasePrice["source"] | ""
-  >(initialQuotePropertyAnswers.purchasePriceSource);
-  const [currentlyInsured, setCurrentlyInsured] = useState<boolean | null>(
+  >("purchasePriceSource", initialQuotePropertyAnswers.purchasePriceSource);
+  const [currentlyInsured, setCurrentlyInsured] = useAnonymousDraft<boolean | null>("currentlyInsured",
     initialQuotePropertyAnswers.currentlyInsured,
   );
-  const [currentCarrier, setCurrentCarrier] = useState(
+  const [currentCarrier, setCurrentCarrier] = useAnonymousDraft("currentCarrier",
     initialQuotePropertyAnswers.currentCarrier,
   );
   const [currentPolicyExpirationDate, setCurrentPolicyExpirationDate] =
@@ -755,7 +765,7 @@ export default function InsuranceDashboard() {
     Promise.resolve(true),
   );
   const currentPolicyExpirationDirtyRef = useRef(false);
-  const windMitigationLocksRef = useRef({
+  const windMitigationLocksRef = useAnonymousDraftRef("windMitigationLocks", {
     openingProtection: false,
     secondaryWaterResistance: false,
   });
@@ -825,8 +835,8 @@ export default function InsuranceDashboard() {
 
   // Flood zone resolved from FEMA (or a previously-saved value). Empty
   // string = unknown / still resolving (the UI shows "—").
-  const [floodZone, setFloodZone]             = useState<string>("");
-  const [floodZoneSource, setFloodZoneSource] = useState<string>("");
+  const [floodZone, setFloodZone]             = useAnonymousDraft<string>("floodZone", "");
+  const [floodZoneSource, setFloodZoneSource] = useAnonymousDraft<string>("floodZoneSource", "");
 
   // ── QuoteRUSH live quotes ──────────────────
   const [qrLeadId, setQrLeadId] =
@@ -889,6 +899,7 @@ export default function InsuranceDashboard() {
   // switching between scenario tabs restores each property's saved
   // dropdown picks.
   useEffect(() => {
+    if (anonymousDraftAddress.current === addressParam) return;
     if (qrPollRef.current)
       clearInterval(qrPollRef.current);
     if (qrTimerRef.current)
@@ -994,7 +1005,8 @@ export default function InsuranceDashboard() {
     inputRef: addressInputElementRef,
   } = useGooglePlaces({
     enabled: isEditingAddress || showEmptyAddInput,
-    onPlaceSelected: place => {
+    onPlaceSelected: async place => {
+      if (!await authorize("insurance", place.formatted_address)) return;
       setIsEditingAddress(false);
       setShowEmptyAddInput(false);
       setLocation(`/insurance?address=${encodeURIComponent(place.formatted_address)}`);
@@ -1026,12 +1038,9 @@ export default function InsuranceDashboard() {
     ) {
       setFloodZone(savedZone.trim());
       setFloodZoneSource("Manual entry");
-    } else {
+    } else if (!propertyCharacteristicLocksRef.current.floodZone) {
       setFloodZone(""); setFloodZoneSource("");
     }
-    const hasAuth =
-      typeof window !== "undefined" && localStorage.getItem("tateo_auth") === "1";
-    if (!hasAuth) return () => { cancelled = true; };
     async function fallbackFlood() {
       try {
         const response = await authedFetch(`/api/flood-zone?address=${encodeURIComponent(addr)}`, { credentials: "include" });
@@ -1112,7 +1121,7 @@ export default function InsuranceDashboard() {
     let cancelled = false;
     setRebuildRate(null);
     setRateError("");
-    if (!address || !user) return;
+    if (!address) return;
     authedFetch(`/api/insurance/rebuild-rate?address=${encodeURIComponent(address)}`, { credentials: "include" })
       .then(async response => {
         if (!response.ok) throw new Error("County rebuild rates could not be loaded. Enter Coverage A manually or retry.");
@@ -1125,7 +1134,7 @@ export default function InsuranceDashboard() {
   const [assumedCreditScore,setAssumedCreditScore]=useState("Excellent");
   useEffect(()=>{
     let active=true;
-    fetch("/api/insurance/quote-assumptions").then(async r=>{
+    authedFetch("/api/insurance/quote-assumptions").then(async r=>{
       if(!r.ok)throw Error("Assumptions unavailable");
       const data=await r.json();if(active)setAssumedCreditScore(data.assumedCreditScore||"Excellent");
     }).catch(()=>{if(active)setAssumedCreditScore("Unavailable");});
@@ -1214,9 +1223,10 @@ export default function InsuranceDashboard() {
     setShowAddressPrompt(true);
   }
 
-  function confirmNewScenario() {
+  async function confirmNewScenario() {
     const addr = newScenarioAddress.trim();
     if (!addr) return;
+    if (!await authorize("insurance", addr)) return;
     const newId = `sc_${Date.now()}`;
     setScenarios(prev => [
       ...prev.map(s => s.id === activeScenarioId ? { ...s, savedSettings: currentSettings() } : s),
@@ -1240,9 +1250,6 @@ export default function InsuranceDashboard() {
   // ── Share / Save ─────────────────────────────────────────────────────────
   const [leadDialogOpen, setLeadDialogOpen] = useState(false);
   const [leadDialogAction, setLeadDialogAction] = useState<"share" | "save">("share");
-  const [isAuthenticated, setIsAuthenticated] = useState(() =>
-    typeof window !== "undefined" && localStorage.getItem("tateo_auth") === "1"
-  );
   useEffect(() => {
     let active = true;
     setAgentVerification([]);
@@ -1477,8 +1484,6 @@ export default function InsuranceDashboard() {
   }
 
   function handleLeadSuccess() {
-    setIsAuthenticated(true);
-    localStorage.setItem("tateo_auth", "1");
     if (leadDialogAction === "share") {
       navigator.clipboard.writeText(window.location.href).catch(() => {});
       toast({ title: "Link copied!", description: "Share the URL with anyone to show this estimate." });
@@ -1540,7 +1545,6 @@ export default function InsuranceDashboard() {
   }, [addressParam]);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
     if (!insuranceHydratedRef.current) return;
     const addr = (address ?? "").trim();
     if (!addr) return;
@@ -1686,7 +1690,11 @@ export default function InsuranceDashboard() {
       const next = match
         ? existing.map(s => (s.id === match.id ? updated : s))
         : [...existing, updated];
-      saveInsuranceScenarios(next).catch(err => {
+      if (!getSession()) {
+        rememberAnonymousAccountDraft("insurance", updated);
+        return;
+      }
+      confirmAnonymousAccountDraftSaved("insurance", () => saveInsuranceScenarios(next)).catch(err => {
         console.debug("[insurance-user-save] upsert error", err?.message ?? err);
       });
       // New scenario only (!match fires once): notify the assigned agent
@@ -1965,7 +1973,8 @@ export default function InsuranceDashboard() {
   }
 
   async function startQuoteRush(): Promise<void> {
-    if (!address || !rebuild || !isAuthenticated)
+    if (!getSession() && !await requireAccount()) return;
+    if (!address || !rebuild)
       return;
 
     try {
@@ -2374,10 +2383,10 @@ export default function InsuranceDashboard() {
                       type="text"
                       value={editAddressVal}
                       onChange={e => setEditAddressVal(e.target.value)}
-                      onKeyDown={e => {
+                      onKeyDown={async e => {
                         if (e.key === "Enter") {
                           const val = editAddressVal.trim();
-                          if (val) setLocation(`/insurance?address=${encodeURIComponent(val)}`);
+                          if (val && await authorize("insurance", val)) setLocation(`/insurance?address=${encodeURIComponent(val)}`);
                           setIsEditingAddress(false);
                         } else if (e.key === "Escape") {
                           setIsEditingAddress(false);
@@ -2523,7 +2532,7 @@ export default function InsuranceDashboard() {
                   const next = match
                     ? existing.map(s => (s.id === match.id ? updated : s))
                     : [...existing, updated];
-                  await saveInsuranceScenarios(next);
+                  await confirmAnonymousAccountDraftSaved("insurance", () => saveInsuranceScenarios(next));
                 }}
               />
             </div>
@@ -2735,12 +2744,11 @@ export default function InsuranceDashboard() {
                         <Button
                           size="sm"
                           onClick={startQuoteRush}
-                          disabled={
+                          disabled={isAuthenticated && (
                             !address ||
                             !rebuild ||
-                            !isAuthenticated ||
                             quoteValidationMessages.length > 0
-                          }
+                          )}
                         >
                           Get Live Quotes
                         </Button>
@@ -2771,7 +2779,7 @@ export default function InsuranceDashboard() {
                         <Button
                           size="sm"
                           onClick={startQuoteRush}
-                          disabled={quoteValidationMessages.length > 0 || !isAuthenticated}
+                          disabled={isAuthenticated && quoteValidationMessages.length > 0}
                         >
                           Re-run
                         </Button>

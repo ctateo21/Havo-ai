@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { authedFetch } from "@/lib/authed-fetch";
 import type { OfficialTaxBreakdown } from "@shared/official-tax";
 import { CurrentBillDisclosure } from "./current-bill-disclosure";
 import { parseOfficialTaxBreakdown } from "@/lib/official-property-tax";
@@ -540,7 +541,7 @@ function requestCurrentPropertyTaxBill(address: string) {
   const key = address.trim().toLowerCase();
   const existing = taxLookupRequests.get(key);
   if (existing) return existing;
-  const request = fetch("/api/refinance/property-tax/current", {
+  const request = authedFetch("/api/refinance/property-tax/current", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",

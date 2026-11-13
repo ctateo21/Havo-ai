@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { geocodeAddress } from "./integrations/geocode";
 import {getFloodState,startFloodRechecks} from "./integrations/flood-rechecks";
 import {registerRebuildCostRoutes} from "./rebuild-cost-routes";
+import {registerAnonymousQuoteRoutes, hasAnonymousQuoteFor} from "./anonymous-quote";
 import {registerFastPropertyTaxRoutes} from "./fast-property-tax-routes";
 import {registerPropertyTaxRatesAdmin} from "./property-tax-rates-admin";
 import {quoteAnswerIdentity,canReuseAnsweredQuote,issueQuoteAccess,verifyQuoteAccess} from "./integrations/quote-answer-identity";
@@ -132,6 +133,7 @@ import {
 } from "./integrations/quoterush-background";
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  registerAnonymousQuoteRoutes(app);
   registerInterestRoutes(app);
   registerRebuildCostRoutes(app);
   registerFastPropertyTaxRoutes(app);
@@ -1132,8 +1134,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/insurance/property-characteristics", async (req, res) => {
     const user = await optionalUser(req);
-    if (!user) return res.status(401).json({ error: "Sign in required" });
     const address = String(req.query.address ?? "").trim();
+    if (!user && !hasAnonymousQuoteFor(req,address)) return res.status(401).json({ code:"SIGN_UP_REQUIRED",error: "Start your free quote or sign in" });
     if (!address) return res.status(400).json({ error: "address required" });
     const countyName = await resolveCountyForAddress(address);
     const county = countyName.toLowerCase() as CountySlug;

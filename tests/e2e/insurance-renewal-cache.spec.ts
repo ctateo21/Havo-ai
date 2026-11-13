@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Page, type Route } from "./quote-access-fixture";
 
 const ADDRESS = "123 Renewal Way, Tampa, FL 33602";
 const FIRST_EXPIRATION = "2026-10-15";

@@ -31,12 +31,12 @@ export default function Home() {
             {
               "@type": "Question",
               "name": "Is Havo free to use?",
-              "acceptedAnswer": { "@type": "Answer", "text": "Yes. Seeing the real cost of a home on Havo is free. Your first home requires no account at all, and quoting more homes only takes a free account — no charge and no credit card required." },
+              "acceptedAnswer": { "@type": "Answer", "text": "Run your first quote free, no sign-up needed. Edits and return visits to that quote are included. Another address or quote type requires a free account — no charge and no credit card required." },
             },
             {
               "@type": "Question",
               "name": "Do I need to create an account or share personal information?",
-              "acceptedAnswer": { "@type": "Answer", "text": "No account or personal information is needed to see your first home's full cost estimate — just type an address and results appear in seconds. To quote additional homes or save your numbers, you can create a free account." },
+              "acceptedAnswer": { "@type": "Answer", "text": "No account or personal information is needed for your first quote. Create a free account for another address or quote type, or to save, download, share, email, or request live carrier quotes." },
             },
           ],
         })}</script>
