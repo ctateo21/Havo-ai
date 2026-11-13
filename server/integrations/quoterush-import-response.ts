@@ -3,7 +3,7 @@
 const vocabulary = new Set(("error errors message status validation invalid missing required failed failure rejected unauthorized forbidden authentication agency not found unable to process lead success successful created added client namefirst namelast dateofbirth dob phonenumber phone emailaddress creditpermission assumedcreditscore excellent yes no webid password webpassword endpointkey token address city state zip county ho data result id leadid must be a valid value format please provide cannot empty null false true").split(" "));
 export function redactImporterText(value: string): string {
   return value.replace(/https?:\/\/\S+|\S+@\S+/gi, "[redacted]")
-    .replace(/[A-Za-z0-9_+./@%-]+/g, word => vocabulary.has(word.toLowerCase()) ? word : "[redacted]")
+    .replace(/[\p{L}\p{M}\p{N}_+./@%-]+/gu, word => vocabulary.has(word.toLowerCase()) ? word : "[redacted]")
     .replace(/[\r\n\t]+/g, " ").slice(0, 600);
 }
 function positiveId(value: unknown): number | null {

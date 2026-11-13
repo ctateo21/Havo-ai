@@ -32,11 +32,11 @@ test("reject unrelated integers and invalid IDs without reviving GetNewLeads fal
     assert.equal(parseLeadId(body),null);
 });
 test("diagnostics preserve field/rejection vocabulary but not PII or credentials",()=>{
-  const body=JSON.stringify({Error:"Invalid PhoneNumber for Jane Example jane@example.test 2025550123; password secret-abc-123", "Jane Example":"hidden"});
+  const body=JSON.stringify({Error:"Invalid PhoneNumber for Jane Example jane@example.test 2025550123; password secret-abc-123 José 王小明", "Jane Example":"hidden"});
   const result=inspectImporterResponse(body,"application/json; charset=utf-8",["Jane","Example","secret-abc-123"]);
   const output=JSON.stringify(result.diagnostics)+result.error;
   assert.match(output,/Invalid PhoneNumber/);
-  for(const forbidden of ["Jane","Example","jane@","2025550123","secret-abc-123","hidden"]) assert.ok(!output.includes(forbidden));
+  for(const forbidden of ["Jane","Example","jane@","2025550123","secret-abc-123","hidden","José","王小明"]) assert.ok(!output.includes(forbidden));
   assert.equal(result.diagnostics.length,Buffer.byteLength(body));
   assert.equal(inspectImporterResponse("12345","text/plain").diagnostics.onlyDigits,true);
 });
