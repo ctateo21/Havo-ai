@@ -19,6 +19,7 @@ export interface OfficialCache {
   county: CountySlug; parcelId: string; taxYear: number;
   bill?: OfficialBill;
   estimator?: EstimatorOutput;
+  purchaseResults?: Record<string, EstimatorOutput>;
 }
 export async function readOfficialCache(county: CountySlug, parcelId: string, taxYear: number, now = new Date()): Promise<OfficialCache | null> {
   if (!supabaseAdmin) return null;
@@ -28,6 +29,7 @@ export async function readOfficialCache(county: CountySlug, parcelId: string, ta
   const value: OfficialCache = {county,parcelId,taxYear};
   let metadata:any;
   try {metadata=JSON.parse(r.raw_snapshot??"{}");} catch {metadata={};}
+  value.purchaseResults=metadata.purchaseResults;
   const cents = (v:unknown) => v!==null && v!==undefined && Number.isFinite(Number(v)) && Number(v)>=0 ? Math.round(Number(v)*100) : null;
   const av=cents(r.bill_ad_valorem_total),nav=cents(r.nav_total),total=cents(r.bill_combined_total);
   if (av!==null && nav!==null && total===av+nav && r.bill_url && r.bill_queried_at && Array.isArray(r.nav_lines) && (county!=="pinellas" || metadata.situsAddress)) {
@@ -62,6 +64,9 @@ export async function writeOfficialCache(value: OfficialCache): Promise<void> {
     row.estimator_source=MANATEE_RATES_SOURCE;
     row.raw_snapshot=JSON.stringify({bill:b?.snapshot.slice(0,9000),estimator:e.snapshot.slice(0,9000),rateYear:e.rateYear,sourceLabel:e.sourceLabel,estimatorNavCents:e.estimatorNavCents});
   }
+  const metadata=JSON.parse(row.raw_snapshot as string);
+  if(value.purchaseResults) metadata.purchaseResults=value.purchaseResults;
+  row.raw_snapshot=JSON.stringify(metadata);
   const {error}=await supabaseAdmin.from("property_tax_cache").upsert(row,{onConflict:"county,parcel_id,tax_year"});
   if(error) throw new Error("Official tax cache write failed");
 }

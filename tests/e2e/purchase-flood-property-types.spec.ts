@@ -137,6 +137,7 @@ test("purchase excludes separate flood charges for every covered property type i
   test.setTimeout(60_000);
   await installApiMocks(page);
   await openUnlockedEstimate(page);
+  await page.getByRole("button", {name:"primary",exact:true}).click();
 
   await page.getByRole("button", { name: /^Next/ }).click();
   await page.getByRole("button", { name: /^Next/ }).click();

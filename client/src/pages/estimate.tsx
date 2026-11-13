@@ -1,6 +1,7 @@
 import { useMemo, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import ScenarioActions from "@/components/scenario-actions";
 import { officialTaxRequestKey, parseOfficialPropertyTaxResponse, resolvePurchasePropertyTaxSource } from "@/lib/official-property-tax";
+import { purchaseHomestead } from "@shared/purchase-homestead";
 import type { OfficialTaxBreakdown } from "@shared/official-tax";
 import { OfficialTaxDisclosure } from "@/components/official-tax-disclosure";
 import { buildScenarioFileName } from "@/lib/scenario-pdf";
@@ -314,6 +315,7 @@ type PurchasePriceSource =
 
 interface Inputs {
   occupancy: "primary" | "secondary" | "investment";
+  propertyUseSelected?: boolean;
   purchasePrice: number;
   /** Provenance of `purchasePrice`. Defaults to "default" on a new scenario. */
   purchasePriceSource?: PurchasePriceSource;
@@ -855,10 +857,11 @@ function PhotoCarousel({
 }: {
   photos: string[]; primary?: string; status: "idle" | "loading" | "loaded" | "error";
 }) {
+  const [failedPhotos, setFailedPhotos] = useState<string[]>([]);
   const all = useMemo(() => {
     const list = [primary, ...photos].filter((p): p is string => !!p);
-    return Array.from(new Set(list));
-  }, [photos, primary]);
+    return Array.from(new Set(list)).filter(src => !failedPhotos.includes(src));
+  }, [photos, primary, failedPhotos]);
 
   if (status === "loading" && all.length === 0) {
     return (
@@ -878,7 +881,7 @@ function PhotoCarousel({
   if (all.length === 1) {
     return (
       <div className="rounded-xl overflow-hidden border bg-muted/20">
-        <img src={all[0]} alt="" className="w-full aspect-[16/9] object-cover" />
+        <img src={all[0]} alt="Property exterior" onError={() => setFailedPhotos(p => [...p, all[0]])} className="w-full aspect-[16/9] object-cover" />
       </div>
     );
   }
@@ -888,7 +891,7 @@ function PhotoCarousel({
         {all.map((src, i) => (
           <CarouselItem key={`${i}-${src}`}>
             <div className="rounded-xl overflow-hidden border bg-muted/20">
-              <img src={src} alt="" className="w-full aspect-[16/9] object-cover" />
+              <img src={src} alt="Property photo" onError={() => setFailedPhotos(p => [...p, src])} className="w-full aspect-[16/9] object-cover" />
             </div>
           </CarouselItem>
         ))}
@@ -2279,6 +2282,7 @@ export default function Estimate() {
         ),
         // ── Page 1 borrower-level carry-forward ──
         occupancy: source.occupancyType ?? base.occupancy,
+        propertyUseSelected: ["primary","secondary","investment"].includes(source.occupancyType ?? ""),
         monthlyDebts:
           typeof source.monthlyDebts === "number" ? source.monthlyDebts : base.monthlyDebts,
         creditScore:
@@ -2358,6 +2362,7 @@ export default function Estimate() {
       // Phase 2: restore the user's saved Occupancy / Property Use so
       // refresh/logout/login round-trips it and the Insurance default
       // rule (HO3 / HO6 / DP3) re-evaluates from the correct value.
+      propertyUseSelected: ["primary","secondary","investment"].includes(saved.occupancyType ?? ""),
       occupancy:
         saved.occupancyType === "primary" ||
         saved.occupancyType === "secondary" ||
@@ -2569,6 +2574,8 @@ export default function Estimate() {
   const taxRequestKey = JSON.stringify([
     officialTaxRequestKey(activeScenarioId, activeTaxAddress, inputs.purchasePrice, inputs.occupancy === "primary"),
     address,
+    inputs.propertyUseSelected === true,
+    inputs.occupancy,
   ]);
   const currentTaxRequest = taxRequest?.key === taxRequestKey ? taxRequest : null;
 
@@ -2579,8 +2586,13 @@ export default function Estimate() {
       s => s.id === activeScenarioId
     )?.address || address;
     const price = inputs.purchasePrice;
-    const isPrimary = inputs.occupancy === "primary";
+    const isPrimary = purchaseHomestead(inputs.propertyUseSelected ? inputs.occupancy : undefined);
 
+    if (isPrimary === null) {
+      setHcpaTax(null);
+      setTaxRequest({key:taxRequestKey,loading:false,reason:"Select Property Use to calculate property tax."});
+      return;
+    }
     if (!activeAddr || activeAddr === "Unknown Address" || !Number.isFinite(price) || price <= 0) {
       setHcpaTax(null);
       setTaxRequest({ key: taxRequestKey, loading: false, reason: "Enter a property address and purchase price" });
@@ -2767,6 +2779,7 @@ export default function Estimate() {
   }
 
   function taxSource(value: Inputs = inputs): "manual" | "official" | "unavailable" {
+    if(!value.propertyUseSelected) return "unavailable";
     return resolvePurchasePropertyTaxSource(
       value.annualTaxes, value.userAnswerSources?.annual_taxes,
       taxRequestKey, currentTaxRequest,
@@ -2788,7 +2801,7 @@ export default function Estimate() {
   // and purchase-scenario persistence remain owned by this page.
   const [insurancePolicyType, setInsurancePolicyType] = useState<InsurancePolicyType>(() =>
     getDefaultInsurancePolicyType({
-      occupancyType: inputs.occupancy,
+      occupancyType: inputs.propertyUseSelected ? inputs.occupancy : undefined,
       propertyType: inputs.propertyType,
     }) ?? "HO3",
   );
@@ -2819,7 +2832,7 @@ export default function Estimate() {
     userTouchedInsuranceSimRef.current = false;
     setInsurancePolicyType(
       getDefaultInsurancePolicyType({
-        occupancyType: nextInputs.occupancy,
+        occupancyType: nextInputs.propertyUseSelected ? nextInputs.occupancy : undefined,
         propertyType: nextInputs.propertyType,
       }) ?? "HO3",
     );
@@ -2862,7 +2875,7 @@ export default function Estimate() {
   useEffect(() => {
     if (insurancePolicyTouchedRef.current) return;
     const nextPolicy = getDefaultInsurancePolicyType({
-      occupancyType: inputs.occupancy,
+      occupancyType: inputs.propertyUseSelected ? inputs.occupancy : undefined,
       propertyType: inputs.propertyType,
     });
     if (nextPolicy) setInsurancePolicyType(nextPolicy);
@@ -3067,6 +3080,7 @@ export default function Estimate() {
 
   function setOccupancy(occ: "primary" | "secondary" | "investment") {
     setInputs((p) => {
+      p = {...p, propertyUseSelected:true};
       // Investment is limited to Conventional + DSCR (spec). Only
       // DSCR survives the occupancy switch as an "alt" — a previously
       // selected Bank Statement falls through and is replaced by
@@ -3993,7 +4007,7 @@ export default function Estimate() {
     loanType: inputs.loanType,
     propertyType: inputs.propertyType,
     propertyTypeSource: inputs.propertyTypeSource,
-    occupancyType: inputs.occupancy,
+    occupancyType: inputs.propertyUseSelected ? inputs.occupancy : undefined,
     monthlyIncome: inputs.monthlyIncome,
     monthlyIncomeSource: inputs.monthlyIncomeSource ?? "default",
     monthlyDebts: inputs.monthlyDebts,
@@ -4763,14 +4777,14 @@ export default function Estimate() {
                 <CardContent className="space-y-5">
                   {/* Occupancy Type */}
                   <div>
-                    <p className="text-xs text-muted-foreground mb-2">Property Use</p>
+                    <p className="text-xs text-muted-foreground mb-2">Property Use (required)</p>
                     <div className="flex gap-2">
                       {(["primary", "secondary", "investment"] as const).map((occ) => (
                         <button
                           key={occ}
                           onClick={() => setOccupancy(occ)}
                           className={`flex-1 py-1.5 rounded-md text-xs font-semibold border capitalize transition-colors ${
-                            inputs.occupancy === occ
+                            inputs.propertyUseSelected && inputs.occupancy === occ
                               ? "bg-primary text-white border-primary"
                               : "border-border text-muted-foreground hover:border-primary"
                           }`}
@@ -4779,7 +4793,8 @@ export default function Estimate() {
                         </button>
                       ))}
                     </div>
-                    {inputs.occupancy !== "primary" && (
+                    {!inputs.propertyUseSelected && <p className="text-xs mt-2 text-muted-foreground">Select Property Use to calculate property tax.</p>}
+                    {inputs.propertyUseSelected && inputs.occupancy !== "primary" && (
                       <p className="text-[11px] mt-1.5 text-amber-600 font-medium">
                         {inputs.occupancy === "secondary"
                           ? "Secondary home requires minimum 10% down"
@@ -4953,7 +4968,7 @@ export default function Estimate() {
 
             {step === 1 && (
               <div className="flex justify-end pt-2">
-                <Button onClick={() => { setStep(2); scrollToTop(); }} className="gap-2">
+                <Button disabled={!inputs.propertyUseSelected} onClick={() => { setStep(2); scrollToTop(); }} className="gap-2">
                   Next <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
@@ -5700,7 +5715,7 @@ export default function Estimate() {
                         ? "Manually entered, not county verified. Price, address, and property-use changes will not overwrite this bill."
                         : "Only complete official county data or an explicitly entered manual bill is used. No county-rate guess is shown."}
                     </p>
-                    <OfficialTaxDisclosure breakdown={currentTaxRequest?.breakdown}
+                    <OfficialTaxDisclosure propertyUse={inputs.propertyUseSelected ? inputs.occupancy : undefined} breakdown={currentTaxRequest?.breakdown}
                       loading={currentTaxRequest?.loading ?? (!!activeTaxAddress && activeTaxAddress !== "Unknown Address")}
                       reason={currentTaxRequest?.reason} />
                     <Button type="button" size="sm" variant="outline" disabled={currentTaxRequest?.loading}
@@ -5818,7 +5833,7 @@ export default function Estimate() {
                 <Button variant="outline" onClick={() => setStep(2)} className="gap-2">
                   <ChevronLeft className="h-4 w-4" /> Back
                 </Button>
-                <Button onClick={() => { setStep(4); scrollToTop(); }} className="gap-2">
+                <Button disabled={!inputs.propertyUseSelected} onClick={() => { setStep(4); scrollToTop(); }} className="gap-2">
                   See My Estimate <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
@@ -6285,7 +6300,7 @@ export default function Estimate() {
                     sub={calc.taxComplete ? `${fmt(inputs.annualTaxes)}/yr (${taxSource()})` : "Enter annual bill manually"}
                     link={address && address !== "Unknown Address" ? getCountyTaxLink(address) ?? undefined : undefined}
                   />
-                  <OfficialTaxDisclosure breakdown={currentTaxRequest?.breakdown}
+                  <OfficialTaxDisclosure propertyUse={inputs.propertyUseSelected ? inputs.occupancy : undefined} breakdown={currentTaxRequest?.breakdown}
                     loading={currentTaxRequest?.loading ?? (!!activeTaxAddress && activeTaxAddress !== "Unknown Address")}
                     reason={currentTaxRequest?.reason} />
                   {!currentTaxRequest?.loading && <Button type="button" size="sm" variant="outline"

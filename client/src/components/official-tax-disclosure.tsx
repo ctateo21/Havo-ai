@@ -42,7 +42,8 @@ function Part({ label, part, provenance = true }: { label: string; part?: TaxPar
   );
 }
 
-export function OfficialTaxDisclosure({ breakdown, loading, reason }: {
+export function OfficialTaxDisclosure({ breakdown, loading, reason, propertyUse }: {
+  propertyUse?: "primary" | "secondary" | "investment";
   breakdown?: OfficialTaxBreakdown;
   loading: boolean;
   reason?: string | null;
@@ -50,6 +51,7 @@ export function OfficialTaxDisclosure({ breakdown, loading, reason }: {
   return (
     <section aria-label="Official property tax breakdown" aria-busy={loading} className="space-y-2 rounded-md border border-border p-3" data-testid="official-tax-breakdown">
       <p className="text-xs font-semibold">Official county tax disclosures</p>
+      {propertyUse && <p className="text-xs">Homestead: {propertyUse==="primary" ? "yes (primary residence)" : propertyUse==="secondary" ? "no (second home)" : "no (investment property)"}</p>}
       {loading && <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
         <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />Checking official county sources…
       </p>}
