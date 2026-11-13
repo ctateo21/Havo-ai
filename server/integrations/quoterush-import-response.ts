@@ -42,7 +42,7 @@ export function inspectImporterResponse(text: string, contentType: string | null
       if (/error|message|status|validation/i.test(key)) {
         const raw = typeof child === "string" ? child : JSON.stringify(child);
         messages.push(safeText(raw ?? ""));
-        if (/\b(error|invalid|missing|required|failed|failure|rejected|unauthorized|forbidden|unable|cannot|not found)\b/i.test(raw ?? "")) rejected = true;
+        if (/\b(error|invalid|missing|required|failed|failure|rejected|denied|unsuccessful|unauthorized|forbidden|unable|cannot|not found)\b/i.test(raw ?? "")) rejected = true;
       }
       visit(child, depth + 1);
     }
@@ -50,7 +50,12 @@ export function inspectImporterResponse(text: string, contentType: string | null
   visit(json);
   if (typeof json === "string" || json === undefined) {
     const raw = typeof json === "string" ? json : text;
-    if (/\b(error|invalid|missing|required|failed|failure|rejected|unauthorized|forbidden|unable|cannot|not found)\b/i.test(raw)) {
+    if (/\b(error|invalid|missing|required|failed|failure|rejected|denied|unsuccessful|unauthorized|forbidden|unable|cannot|not found)\b/i.test(raw)) {
+      rejected = true; messages.push(safeText(raw));
+    }
+    // Even unfamiliar provider rejection wording must be diagnosable. A
+    // non-ID text response is never success; retain only sanitized vocabulary.
+    if (!rejected && !positiveId(raw.trim()) && !/\bLead\s*#\s*[1-9]\d*\b/i.test(raw) && raw.trim()) {
       rejected = true; messages.push(safeText(raw));
     }
   }

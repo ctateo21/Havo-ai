@@ -21,7 +21,7 @@ test("HTTP 200 errors override even a plausible lead ID",()=>{
     '{"LeadId":12345,"Error":"Invalid DateOfBirth"}',
     '{"Result":{"LeadID":12345,"ValidationErrors":["PhoneNumber required"]}}',
     '{"Success":false,"Id":12345}',"Error 401: agency not found",
-    '{"Status":"Unable to process lead","Id":12345}',
+    '{"Status":"Unable to process lead","Id":12345}',"Agency could not be found",
   ]) {
     const result=inspectImporterResponse(body,"application/json");
     assert.equal(result.rejected,true);assert.equal(result.leadId,null);
