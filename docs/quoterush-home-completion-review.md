@@ -155,8 +155,10 @@ Mapping updates:
   Existing-home current-carrier answers remain unchanged.
 
 ### Revised support question
-Our imported lead succeeds, but SubmitQuoteRequest returns 403. Please confirm premium
-activation, Agency/EndpointKey, host and Submitter authorization. Does SubmitQuoteRequest
+Our earlier submission returned 403; the separately approved November 16 main-code
+test subsequently imported successfully, discovered 20 carriers, submitted with HTTP
+200 and returned a positive premium. These new wind fields have not been live-tested.
+Please confirm Agency/EndpointKey, host and Submitter authorization requirements. Does SubmitQuoteRequest
 route to a **cloud QuoteBot** or our **desktop BOT Manager**? Can an API request trigger
 **Send To BOT** for an already imported lead, equivalent to Add VIP Carriers > Execute
 with Run RCE checked? Must BOT Manager and Chrome remain running on our agency PC?
