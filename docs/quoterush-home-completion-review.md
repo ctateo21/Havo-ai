@@ -103,3 +103,9 @@ Call QuoteRush **1-800-601-3541** or have the agency administrator contact billi
 Do not email raw credentials; use QuoteRush's approved secure verification channel.
 OPENROUTER_API_KEY was confirmed present in development and production configuration
 (existence only). No secret addition is currently needed.
+
+The existing app startup logs also report AI usage accounting unavailable. The new
+enrichment uses that existing fail-closed usage guard and the durable job owner's
+identity; it does not bypass accounting. If that condition persists, AI suggestions
+remain unavailable while sourced fields/defaults still import. No accounting migration
+was applied or live OpenRouter call made to test this.
