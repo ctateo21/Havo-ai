@@ -12,6 +12,30 @@ async function readyLiveQuote(page:Page){
   await page.getByTestId("input-roof-year").fill("2018");
   await page.getByTestId("confirm-square-footage").check();
 }
+test("partial previous address is omitted and wind report values are explicitly transcribed",async({page})=>{
+  const calls=await fixture(page,{rate:250});
+  await readyLiveQuote(page);
+  await page.getByLabel("Street and unit",{exact:true}).fill("100 Example Street");
+  await page.getByRole("button",{name:"Get Live Quotes",exact:true}).click();
+  await expect.poll(()=>calls.find(x=>x.path==="/api/insurance/qr-start")).toBeTruthy();
+  const first=calls.find(x=>x.path==="/api/insurance/qr-start")!.body!;
+  expect(first.previousAddress).toBeUndefined();
+  expect((first.windAnswers as any).reportAvailable).toBe(false);
+  await page.getByLabel("Yes, I can enter its values").check();
+  await expect(page.getByRole("button",{name:"Get Live Quotes",exact:true})).toBeDisabled();
+  await page.getByLabel("Report reference",{exact:true}).fill("EXAMPLE REPORT");
+  await page.getByLabel("Inspection date",{exact:true}).fill("2026-01-01");
+  await page.getByLabel("Report: roof-to-wall attachment",{exact:true}).selectOption("Clips");
+  await page.getByLabel("Report: roof deck attachment",{exact:true}).selectOption("C");
+  await page.getByLabel("Report: secondary water resistance",{exact:true}).selectOption("Yes");
+  await page.getByLabel("Report: opening protection code",{exact:true}).selectOption("B");
+  await page.getByLabel("Report: roof shape",{exact:true}).selectOption("Hip");
+  await page.getByRole("checkbox",{name:/I copied these values/i}).check();
+  await page.getByRole("button",{name:"Get Live Quotes",exact:true}).click();
+  await expect.poll(()=>calls.filter(x=>x.path==="/api/insurance/qr-start").length).toBe(2);
+  const second=calls.filter(x=>x.path==="/api/insurance/qr-start")[1].body!;
+  expect((second.windAnswers as any).report.transcribedFromReport).toBe(true);
+});
 test("missing contact prompts before carrier import; details can be saved",async({page})=>{
   await fixture(page,{rate:250});
   await page.route("**/api/insurance/qr-start",route=>route.fulfill({status:428,json:{code:"CONTACT_REQUIRED"}}));

@@ -15,8 +15,11 @@
 import type { QuoteRushPropertyDefaults } from "@shared/quoterush-property-defaults";
 import { quoteRushFetch as fetch } from "./quoterush-pause";
 import { importerHomeExtras, homeFieldNotes, APPLY_DEFAULT_NOTES, type HomeFields } from "./quoterush-home-fields";
+import {windNotes,type WindAnswers,type WindResult} from "../../shared/wind-mitigation";
 
 export interface QuoteRushParams {
+  windAnswers?:WindAnswers;
+  windEvidence?:WindResult;
   previousAddress?: {Address:string; City:string; State:string; Zip:string};
   homeFields?: HomeFields;
   streetAddress: string;
@@ -165,8 +168,9 @@ export function buildImporterPayload(
       LeadSource: "Havo Platform",
       LeadStatus: "New Lead",
       OverviewNotes: [...APPLY_DEFAULT_NOTES, ...homeFieldNotes(p.homeFields ?? {}),
+        ...(p.windEvidence?windNotes(p.windEvidence):[]),
         ...(!p.previousAddress && p.newPurchase==="Yes" ? ["Agent required: collect buyer's current home address before carrier execution."]:[]),
-        "No verified wind mitigation form supplied; obtain actual report and inspection date before applying form credits.",
+        ...(p.windEvidence?.haveReport?["Wind report values transcribed by user; agent must verify against report."]:["No verified wind mitigation form supplied; obtain actual report and inspection date before applying form credits."]),
         "System update years unknown; verify with 4-point inspection."].join("\n"),
       Lob_Home: true,
       Lob_Auto: false,
@@ -207,7 +211,7 @@ export function buildImporterPayload(
       MasonryConstruction:
         p.masonryConstruction || "",
       FoundationType: "Slab",
-      RoofShape: p.roofShape || "Gable",
+      RoofShape: p.windEvidence?.fields.shape.value || p.roofShape || "Gable",
       RoofMaterial: "Architectural Shingles",
       UpdateRoofYear: String(p.roofYear),
       UpdateRoofType: "Full",
@@ -248,8 +252,14 @@ export function buildImporterPayload(
              // Lapse and policy details are omitted for existing homes until verified.
            }),
       Claims: p.priorClaims > 0 ? "Yes" : "No",
-      // No reviewed upload exists yet. Inferred credits are not a supplied form.
-      HaveWindMitForm: false,
+      HaveWindMitForm: !!(p.windEvidence?.haveReport && p.windAnswers?.reportAvailable && p.windAnswers.report?.transcribedFromReport),
+      ...(p.windEvidence ? {
+        ...(p.windEvidence.fields.roofToWall.value!=="Unknown"?{RoofWallConnection:p.windEvidence.fields.roofToWall.value}:{}),
+        ...(p.windEvidence.fields.roofDeck.value!=="Unknown"?{RoofDeckAttachment:`Level ${p.windEvidence.fields.roofDeck.value}`} : {}),
+        SecondaryWaterResistance:p.windEvidence.fields.swr.value==="Yes"?"Yes":"No",
+        OpeningProtection:["A","B"].includes(p.windEvidence.fields.opening.value)?"Hurricane Protection":"None",
+        ...(p.windEvidence.haveReport && p.windAnswers?.report?{WindMitigationInspectionDate:formatDateOfBirth(p.windAnswers.report.inspectionDate)}:{}),
+      }:{}),
       Terrain: "Exposure B",
       BurglarAlarm: "None",
       FireAlarm: "None",

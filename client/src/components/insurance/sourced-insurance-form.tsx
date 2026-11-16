@@ -5,6 +5,7 @@ export type FieldEvidence = { value: unknown; source: string; sourceUrl?: string
 export type PropertyEvidence = Partial<Record<"yearBuilt" | "squareFeetLiving" | "constructionLabel" | "floodZone", FieldEvidence>>;
 export type RoofSuggestion = { year?: number; roofYear?: number; permitDate?: string; source?: string; sourceUrl?: string };
 type Props = ComponentProps<typeof InsuranceEstimateForm> & {
+  hideWindQuestions?:boolean;
   fieldSources: PropertyEvidence;
   fieldLocks: { yearBuilt: boolean; squareFeet: boolean; construction: boolean; floodZone: boolean };
   constructionKnown: boolean;
@@ -84,9 +85,9 @@ export function SourcedInsuranceForm(p: Props) {
       const year = permit.year ?? permit.roofYear ?? Number(permit.permitDate?.slice(0, 4));
       return validRoofYear(year) ? <button key={i} type="button" className="mr-2 rounded border border-primary/30 px-3 py-1 text-xs text-primary" onClick={() => p.onRoofYearChange(year)}>Use {year}{permit.source ? ` · ${permit.source}` : ""}</button> : null;
     })}</div>}
-    {numericSelect("Hurricane impact-rated doors and windows or shutters?", p.openingProtection, p.onOpeningProtectionChange, [[0, "No"], [1, "Yes"]])}
+    {!p.hideWindQuestions && <>{numericSelect("Hurricane impact-rated doors and windows or shutters?", p.openingProtection, p.onOpeningProtectionChange, [[0, "No"], [1, "Yes"]])}
     {numericSelect("Roof shape", p.roofShape, p.onRoofShapeChange, [[0, "Hip roof"], [3, "Gable roof"], [2, "Not sure — Gable default, confirm before quoting"], [1, "Flat roof"]])}
-    {numericSelect("Second Water Resistance Layer (SWR)?", p.swr, p.onSwrChange, [[2, "Yes"], [0, "No"], [1, "Unsure"]])}
+    {numericSelect("Second Water Resistance Layer (SWR)?", p.swr, p.onSwrChange, [[2, "Yes"], [0, "No"], [1, "Unsure"]])}</>}
     {numericSelect("Hurricane deductible", p.hurricaneDeductible, p.onHurricaneDeductibleChange, [[0, "2% of dwelling — standard"], [1, "5% of dwelling"], [2, "10% of dwelling"]])}
     {numericSelect("Construction Type", p.construction, p.onConstructionChange, [[0, "Concrete Block"], [2, "Frame"], [1, "Mix"]])}
     {!p.constructionKnown && <div className="space-y-2 text-xs"><p className="text-destructive">Assumed — confirm. Select or confirm construction before estimating Coverage A.</p>{[0, 1, 2].includes(p.construction) && <button type="button" className="rounded border border-primary/30 px-3 py-1.5 text-primary" onClick={() => p.onConstructionChange(p.construction)}>Confirm construction type: {["Concrete Block", "Mix", "Frame"][p.construction]}</button>}</div>}

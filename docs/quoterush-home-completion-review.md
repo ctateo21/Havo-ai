@@ -1,5 +1,113 @@
 # QuoteRush home completion and automatic carrier submission
 
+## November 16 evidence and worker-safety update (supersedes older wind notes)
+
+- Incomplete optional previous addresses are omitted on both client and server.
+  They never reject a quote; the existing agent-completion note remains.
+- Quote-path AI enrichment has a 20-second overall optional budget and an abortable
+  provider request. Timeouts continue without AI. Worker claimed_at refreshes every
+  20 seconds; the sweeper uses the observed timestamp and generation as a compare-
+  and-set condition before quarantining a stale job. Ambiguous imports are never retried.
+- ProtectionClass and BCEG are no longer AI fields, including cached AI reuse.
+  Coverage A and flood remain never-AI. Single Entry requires an explicit gated answer.
+- The report-first form supports **manual transcription from a real report** (the
+  permitted alternative to upload): reference, inspection date, all six answers,
+  and explicit unchecked attestation. Invalid report drafts block live submission;
+  selecting no report discards report values at the server boundary.
+  This is user transcription, not professional verification. No PDF extraction or
+  file upload was added. Report values override estimates and alone enable
+  HaveWindMitForm; a standalone legacy windMitForm boolean does not.
+- User-confirmed Gable and uncertain/default Gable have distinct evidence. Hip is
+  used only from an explicit answer or a transcribed report. Every resolved value
+  is displayed with its estimated/confirmed status and source and saved with the
+  quote provenance and lead notes. Report-bearing quote identities are owner-bound.
+
+### Standards implemented
+
+These are Christian's requested **preliminary estimation rules**, not assertions
+that a particular home complies with OIR-B1-1802. Carriers/inspectors verify credits.
+
+| Evidence | Preliminary result without report |
+|---|---|
+| Built 2003+ in any county | Roof-to-wall Clips maximum |
+| Pinellas, Manatee, Sarasota, Lee, Collier built 1996+ | Clips maximum |
+| Hillsborough, Pasco, Hernando, Polk built 1997+ | Clips maximum |
+| Built 1987–1995 and verified inside coastal building zone | Clips maximum |
+| Older / uncertain coastal evidence | Unknown, no connection credit |
+| Re-roof/roof permit after October 1, 2007 | Deck C, estimated |
+| No qualifying permit; built 2002+ original roof or newer user roof year | Deck B maximum, estimated |
+| Pre-2002 original roof | Unknown |
+| Roof year 2021+ | SWR Yes, estimated from user roof year |
+| Roof year 2008–2020 | Yes only when user confirms peel-and-stick/seam tape |
+| Otherwise | SWR Unknown, no credit |
+| All openings confirmed, plus opening-protection permit | Opening B, estimated |
+| All openings claimed, no permit | N, unverified; no protection credit sent |
+| Partial/unsure | X/Unknown; permit number in notes |
+
+County connection cutoffs live in shared/wind-mitigation.ts. Estimated connections
+never become Single/Double Wraps. Opening protection never derives from building age.
+Permit roof year is click-to-confirm, not silently substituted.
+
+### Coastal geography: conservative limitation
+
+FDEP public layer inspected November 16:
+https://ca.dep.state.fl.us/arcgis/rest/services/OpenData/COASTAL_ENV_PERM/MapServer/2
+
+It is a **polyline CCCL layer**, not a 1986 Coastal Building Zone polygon and not a
+barrier-island/landward classifier. The implementation queries on-demand around
+coordinates, computes nearest-line distance in feet, and stores source and distance.
+The classifier supports verified mainland 1,500-ft and barrier-island 5,000-ft
+landward thresholds (and verified whole narrow islands), but **no authoritative
+landward/barrier-island classification has been integrated**. Live ambiguous
+classifications therefore remain Unknown and cannot grant Clips for older homes.
+Hillsborough/Pasco/Hernando/Polk follow the requested no-CCCL exclusion; no unverified
+FEMA V-zone exception is invented. Tests cover inside/outside using explicit
+geography fixtures, unavailable geometry and uncertain geography.
+
+### Permit adapters: actually verified
+
+| Adapter | Live read-only result, November 16 | Scope |
+|---|---|---|
+| HCPA ParcelData permitInfo | Nassau sample returned one pool permit, June 12, 2020; no invented roof/opening permit | Hillsborough appraiser records, including City of Tampa |
+| PCPAO property-details tblPermit | St. Petersburg sample returned roof permit 18-02000050, February 1, 2018 | Pinellas appraiser records |
+
+Both adapter functions were run end-to-end with public HTTP and no paid service.
+PCPAO requires the identifying Havo User-Agent; its identity lookup uses the existing
+strict matching resolver. The permit page's own address is checked again.
+HCPA matches an exact normalized street and city before reading ParcelData.
+There is a shared one-second admission pace, short network cap, bounded queue,
+in-flight deduplication, and cached successes/failures. Supporting property evidence
+is retained in existing property-characteristics field sources; no new table needed.
+The UI checks asynchronously; live quotes use only immediately available supporting
+evidence and never wait for portal completion.
+
+No direct Accela, Click2Gov or EnerGov portal adapters are claimed as working.
+The two appraiser adapters are the requested initial easier alternatives. Other
+counties return unsupported rather than invented records. Collier CityView is
+explicitly skipped due to CAPTCHA. No CAPTCHA or access restriction is bypassed.
+
+### QuoteRush mapping
+
+Public importer example inspected without calling the authenticated API:
+https://api-docs.quoterush.com/api/collections/9908457/2sAYX6pMfX?segregateAuth=true&versionTag=latest
+
+| Evidence | Import key |
+|---|---|
+| Connection | HO.RoofWallConnection, unknown omitted |
+| Deck letter | HO.RoofDeckAttachment, Level A/B/C; unknown omitted |
+| SWR | HO.SecondaryWaterResistance Yes; unknown sends No/no credit |
+| Opening A/B | HO.OpeningProtection Hurricane Protection; other codes None/no credit; exact evidence code retained in notes |
+| Shape | HO.RoofShape |
+| Actual report available | HO.HaveWindMitForm and HO.WindMitigationInspectionDate |
+
+The public example confirms these keys and example values, but is not a complete
+enum catalogue. Exact carrier acceptance of Level B/C, Clips and desktop/report
+options remains unverified without a separately approved live test. Do not claim
+that OIR codes are the provider's enum strings; notes retain exact source codes.
+No live QuoteRush or OpenRouter calls were made for this update. Credit stays
+No/Excellent. Consent and attribution are unchanged. **No migrations are needed
+or applied.**
+
 ## Desktop recording update — supersedes earlier mapping limitations below
 
 Christian's normal run is **Run Quotes > Add VIP Carriers > Execute**, with Run RCE

@@ -1133,6 +1133,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return null;
   }
 
+  app.get("/api/insurance/wind-evidence", async (req,res)=>{
+    const address=String(req.query.address??"").trim(),user=await optionalUser(req);
+    if(!user&&!hasAnonymousQuoteFor(req,address))return res.status(401).json({code:"SIGN_UP_REQUIRED"});
+    if(address.length<5||address.length>500)return res.status(400).json({error:"Address required"});
+    const {supportingWind}=await import("./integrations/wind-supporting-evidence");
+    const {boundedOptional}=await import("./integrations/quote-job-safety");
+    const evidence=await boundedOptional(()=>supportingWind(address),null,1500);
+    res.json({status:evidence?"ready":"checking",evidence});
+  });
   app.get("/api/insurance/property-characteristics", async (req, res) => {
     const user = await optionalUser(req);
     const address = String(req.query.address ?? "").trim();
@@ -1865,7 +1874,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           constIdx: characteristicValues.constIdx,
         });
 
+        const {resolveWind}=await import("../shared/wind-mitigation");
+        const {supportingWind}=await import("./integrations/wind-supporting-evidence");
+        const {boundedOptional}=await import("./integrations/quote-job-safety");
+        const windSupporting=await boundedOptional(()=>supportingWind(b.address),null,250);
+        const windEvidence=resolveWind({county,yearBuilt:b.yearBuilt,roofYear:b.roofYear,answers:b.windAnswers,
+          permits:windSupporting?.permits.permits,coastal:windSupporting?.coastal});
         const params: QuoteRushParams = {
+          windAnswers:b.windAnswers,windEvidence,
           ...(b.previousAddress ? {previousAddress:b.previousAddress}:{}),
           streetAddress,
           city,

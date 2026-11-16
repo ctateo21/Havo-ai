@@ -10,6 +10,8 @@ import {quoteRushPaused} from "./quoterush-pause";
 import {enrichQuoteRushHome} from "./quoterush-home-enrichment";
 import {homeFieldNotes,APPLY_DEFAULT_NOTES} from "./quoterush-home-fields";
 import {withAiUser} from "../ai-usage";
+import {boundedOptional,jobHeartbeat} from "./quote-job-safety";
+import {windNotes} from "../../shared/wind-mitigation";
 let crmAlert:((row:QuoteCacheRow,params:Partial<QuoteRushParams>,reason:string)=>Promise<unknown>)|undefined;
 export async function notifyInsuranceCrm(row:QuoteCacheRow,params:Partial<QuoteRushParams>,reason:string){
   try{await crmAlert?.(row,params,reason);}catch{console.warn("[insurance] CRM operational alert needs retry");}
@@ -47,26 +49,36 @@ export async function runInsuranceImport(id:number){
   const [row]=await readQuoteCache({id},1);
   if(!row||row.triggeredAt.toISOString()!==new Date(job.generation).toISOString()||row.status!=="pending"||row.leadId)return;
   let reviewReason = "QuoteRush import or submission unconfirmed";
+  const lease=jobHeartbeat(async()=>{
+    const {data,error}=await supabaseAdmin!.from("insurance_quote_import_jobs")
+      .update({claimed_at:new Date().toISOString()}).eq("cache_id",id)
+      .eq("generation",job.generation).eq("status","running").select("cache_id").maybeSingle();
+    return !error&&!!data;
+  });
   try{
     const profile=await readPrivateProfile(job.owner_user_id);
     if(!profile?.dateOfBirth)throw Error("Private applicant profile unavailable");
-    const homeFields = await withAiUser(job.owner_user_id,()=>enrichQuoteRushHome(row.addressDisplay, {
+    const homeFields = await boundedOptional(signal=>withAiUser(job.owner_user_id,()=>enrichQuoteRushHome(row.addressDisplay, {
       yearBuilt:job.params.yearBuilt, sqFt:job.params.sqFt,
       constructionType:job.params.constructionType, policyType:job.params.policyType,
-    }));
-    const notes = homeFieldNotes(homeFields);
+    },undefined,signal)),{});
+    lease.assertOwned();
+    const notes = [...homeFieldNotes(homeFields),...(job.params.windEvidence?windNotes(job.params.windEvidence):[])];
     const saved = await updateQuoteCache(id, {
       propertyDataSnapshot:{...row.propertyDataSnapshot, homeFields},
-      propertyDataProvenance:{...row.propertyDataProvenance, homeFields},
+      propertyDataProvenance:{...row.propertyDataProvenance, homeFields,windMitigation:job.params.windEvidence??null,
+        windMitigationReportConfirmed:job.params.windEvidence?.haveReport===true},
       agencyDefaultSnapshot:{...row.agencyDefaultSnapshot,
         fieldsRequiringVerification:[...((row.agencyDefaultSnapshot as any)?.fieldsRequiringVerification ?? []),
           ...APPLY_DEFAULT_NOTES, ...notes]},
       assumptions:[...(row.assumptions ?? []), ...APPLY_DEFAULT_NOTES, ...notes],
     }, {triggeredAt:row.triggeredAt,leadId:null,expectedStatus:"pending"});
     if(!saved)throw Error("Quote run superseded before import");
+    lease.assertOwned();
     const result=await importAndSubmit({...job.params,homeFields,dateOfBirth:profile.dateOfBirth},{
       callbackUrl:`https://havofl.com/api/insurance/qr-callback?token=${encodeURIComponent(job.callback_token)}`,
       onLeadCreated:async leadId=>{
+        lease.assertOwned();
         const updated=await updateQuoteCache(id,{leadId},{triggeredAt:row.triggeredAt,leadId:null,expectedStatus:"pending"});
         if(!updated)throw Error("Cannot persist imported lead safely");
       },
@@ -99,6 +111,8 @@ export async function runInsuranceImport(id:number){
       // informs the team; the browser sees a terminal state immediately.
     }
     await alertAgent(row,job.params,reviewReason);
+  }finally{
+    lease.stop();
   }
 }
 let sweeper:ReturnType<typeof setInterval>|undefined;
@@ -129,7 +143,11 @@ export function registerQuoteCallbackAndImports(app:Express,notify?:typeof crmAl
       for(const job of data??[]){
         if(job.status==="queued")void runInsuranceImport(job.cache_id).catch(()=>{});
         else if(Date.parse(job.claimed_at)<Date.now()-180000){
-          await supabaseAdmin.from("insurance_quote_import_jobs").update({status:"manual-review",params:{},callback_token:""}).eq("cache_id",job.cache_id).eq("generation",job.generation).eq("status","running");
+          const {data:expired,error:expireError}=await supabaseAdmin.from("insurance_quote_import_jobs")
+            .update({status:"manual-review",params:{},callback_token:""}).eq("cache_id",job.cache_id)
+            .eq("generation",job.generation).eq("status","running").eq("claimed_at",job.claimed_at)
+            .select("cache_id").maybeSingle();
+          if(expireError||!expired)continue;
           const [row]=await readQuoteCache({id:job.cache_id},1);
           if(row&&row.triggeredAt.toISOString()===new Date(job.generation).toISOString()){
             await updateQuoteCache(row.id,{status:"error",assumptions:[...(row.assumptions??[]),"Agent review required: interrupted import must be reconciled."]},{triggeredAt:row.triggeredAt,leadId:row.leadId,expectedStatus:"pending"});

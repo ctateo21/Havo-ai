@@ -14,6 +14,8 @@ export async function completeWithOpenRouter(input: {
   purpose: "document" | "market";
   pdf?: boolean;
   webSearch?: boolean;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<{ text: string; citations: AiCitation[] }> {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) throw new Error("OpenRouter API key is not configured.");
@@ -39,7 +41,10 @@ export async function completeWithOpenRouter(input: {
   let usage: Usage | null = null;
   let success = false;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120_000);
+  const abort=()=>controller.abort();
+  input.signal?.addEventListener("abort",abort,{once:true});
+  if(input.signal?.aborted)controller.abort();
+  const timeout = setTimeout(() => controller.abort(), Math.min(input.timeoutMs??120_000,120_000));
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -106,6 +111,7 @@ export async function completeWithOpenRouter(input: {
     throw new Error("OpenRouter connection failed. Please try again.");
   } finally {
     clearTimeout(timeout);
+    input.signal?.removeEventListener("abort",abort);
     try { await aiUsageStore.finish(reservation, input.purpose, usage, success); }
     catch { console.warn("[ai-usage] Accounting finalization failed; admission remains counted."); }
   }

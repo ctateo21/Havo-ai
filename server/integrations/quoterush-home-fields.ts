@@ -8,8 +8,6 @@ export const HOME_FIELD_RULES = {
   FullBathCount: "area",
   ScreenedEnclosureSquareFeet: "area",
   ScreenedCoverage: "money",
-  ProtectionClass: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
-  BCEG: ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"],
 } as const;
 export type HomeField = keyof typeof HOME_FIELD_RULES;
 export type HomeEvidence = {
@@ -51,7 +49,7 @@ export const APPLY_DEFAULT_NOTES = [
   "Agency defaults — verify: Families 1; Electrical Circuit Breakers; Heat Electric; Plumbing PVC; roof renovation Full.",
   "Agency defaults — verify: Burglar/Fire Alarm None; station Within 5 Miles; hydrant Within 1000 Feet; Sprinklers None; BusinessOnPremises No; FireExtinguisher true.",
   "Agency coverage defaults: B 2%, C 25%, D 10%, liability $300,000; HO3 medical $5,000; LossAssessment $1,000; roof settlement Replacement Cost. User deductibles and occupancy take precedence.",
-  "Agency default — verify: GatedCommunity Single Entry. Water heater location importer field requires QuoteRush confirmation.",
+  "Gated community only when confirmed by user. Water heater location importer field requires QuoteRush confirmation.",
   "Roof shape: Gable is the preliminary fallback for an unsure answer; confirm before carrier execution.",
 ];
 
@@ -70,7 +68,7 @@ export function importerHomeExtras(p: QuoteRushParams): Record<string, unknown> 
     AdditionalLawOrdinance: "25%",
     OptionalPersonalPropertyReplacementCost: true,
     Sprinklers: "None",
-    GatedCommunity: "Single Entry",
+    ...(p.windAnswers?.gated ? {GatedCommunity:"Single Entry"}:{}),
     BusinessOnPremises: "No",
     ...(p.policyType === "HO6" ? {} : {LossAssessment: "$1,000"}),
     underwriting: {FireExtinguisher: true},

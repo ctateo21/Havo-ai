@@ -11,6 +11,9 @@ import {
 } from "@/lib/auth";
 import { notifyNewScenario } from "@/lib/notify-scenario";
 import { authedFetch } from "@/lib/authed-fetch";
+import { WindEvidenceForm } from "@/components/insurance/wind-evidence-form";
+import { resolveWind,windAnswersSchema,type WindAnswers,type CoastalEvidence,type PermitEvidence } from "@shared/wind-mitigation";
+import {completePreviousAddress} from "@shared/optional-previous-address";
 import { updateProfileContact } from "@/lib/auth";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -736,6 +739,8 @@ export default function InsuranceDashboard() {
     initialQuotePropertyAnswers.newPurchase,
   );
   const [currentHome,setCurrentHome]=useState({Address:"",City:"",State:"FL",Zip:""});
+  const [windAnswers,setWindAnswers]=useState<WindAnswers>(()=>windAnswersSchema.parse({}));
+  const [windSupporting,setWindSupporting]=useState<{permits:{permits:PermitEvidence[]};coastal:CoastalEvidence}|null>(null);
   const [homeMortgage,setHomeMortgage]=useState<string>("");
   const [purchaseDate, setPurchaseDate] = useAnonymousDraft("purchaseDate",
     initialQuotePropertyAnswers.purchaseDate,
@@ -1024,6 +1029,31 @@ export default function InsuranceDashboard() {
   });
 
   const address = scenarios.find(s => s.id === activeScenarioId)?.address || addressParam;
+  const windPreview=useMemo(()=>windAnswersSchema.safeParse(windAnswers).success?resolveWind({
+    county:rebuildRate?.county??getCountyName(address)??"",yearBuilt:Number(yearBuilt),roofYear:Number(roofYear),
+    answers:windAnswers,permits:windSupporting?.permits.permits,coastal:windSupporting?.coastal,
+  }):undefined,[windAnswers,windSupporting,rebuildRate?.county,address,yearBuilt,roofYear]);
+  useEffect(()=>{
+    if(!windPreview)return;
+    setOpeningProtectionIdx(["A","B"].includes(windPreview.fields.opening.value)?1:0);
+    setSwrIdx(windPreview.fields.swr.value==="Yes"?2:windPreview.fields.swr.value==="No"?0:1);
+    setRoofShapeIdx(windPreview.fields.shape.value==="Hip"?0:windPreview.fields.shape.value==="Flat"?1:windPreview.fields.shape.estimated?2:3);
+  },[windPreview]);
+  useEffect(()=>{
+    setWindAnswers(windAnswersSchema.parse({}));setWindSupporting(null);
+    if(!address)return;
+    let stopped=false,timer:ReturnType<typeof setTimeout>,attempt=0;
+    const read=async()=>{
+      try{
+        const r=await authedFetch(`/api/insurance/wind-evidence?address=${encodeURIComponent(address)}`);
+        if(!r.ok)return;
+        const data=await r.json();if(stopped)return;
+        if(data.evidence)setWindSupporting(data.evidence);
+        else if(++attempt<6)timer=setTimeout(read,3000);
+      }catch{/* Optional evidence never blocks the quote. */}
+    };
+    timer=setTimeout(read,1500);return()=>{stopped=true;clearTimeout(timer);};
+  },[address]);
 
   // ── Property-characteristics resolution ───────────────────────────────────
   // Resolve the FEMA flood zone for the active address. Priority:
@@ -1724,7 +1754,7 @@ export default function InsuranceDashboard() {
 
   // Quote results belong to an authenticated user AND the complete answer set.
   // Never hydrate an address-only local or shared cache. qr-start alone gates reuse.
-  const quoteIdentity = JSON.stringify([currentHome,homeMortgage,
+  const quoteIdentity = JSON.stringify([currentHome,homeMortgage,windAnswers,
     user?.id, address, rebuild, policyType, policyAnswered, roofYear, yearBuilt, constIdx, constructionKnown,
     openingProtectionIdx, roofShapeIdx, swrIdx, hurrIdx, aopDeductible,
     floodZone, floodZoneUnknown, squareFeet, sqFtConfirmed, newPurchase,
@@ -1737,6 +1767,7 @@ export default function InsuranceDashboard() {
   if (quoteIdentityRef.current !== quoteIdentity) quoteEpochRef.current += 1;
   quoteIdentityRef.current = quoteIdentity;
   const quoteValidationMessages = [
+    ...(!windAnswersSchema.safeParse(windAnswers).success?["Complete the values from your wind mitigation report, or select no report."]:[]),
     ...(!policyAnswered ? ["Select or confirm a policy type."] : []),
     ...(newPurchase === null ? ["Select whether this is a new purchase."] : []),
     ...(newPurchase && !purchaseDate ? ["Enter the confirmed closing date."] : []),
@@ -2061,6 +2092,7 @@ export default function InsuranceDashboard() {
           body: JSON.stringify({
             address,
             coverageA: rebuild,
+            windAnswers,
             policyType: policyType || "HO3",
             // Send the answers as entered. The index fields remain for
             // compatibility with older callers of this endpoint.
@@ -2098,7 +2130,7 @@ export default function InsuranceDashboard() {
                 }
               : {}),
             policyEffectiveDate: purchaseDate || undefined,
-            ...(newPurchase && currentHome.Address.trim() ? {previousAddress:currentHome}:{}),
+            ...(newPurchase && completePreviousAddress(currentHome) ? {previousAddress:completePreviousAddress(currentHome)}:{}),
             ...(homeMortgage ? {hasMortgage:homeMortgage==="yes"}:{}),
             ...(ho6ResidenceUse
               ? { usageType: ho6ResidenceUse }
@@ -2595,7 +2627,13 @@ export default function InsuranceDashboard() {
                 </p>
               </CardHeader>
               <CardContent className="space-y-5">
+                <WindEvidenceForm value={windAnswers} onChange={value=>{
+                  setWindAnswers(value);
+                  setRoofShapeIdx(value.shape==="Hip"?0:value.shape==="Flat"?1:value.shape==="Gable"?3:2);
+                }} permits={windSupporting?.permits.permits} onRoofYear={setRoofYear}
+                  result={windPreview}/>
                 <InsuranceEstimateForm
+                  hideWindQuestions
                   policyType={policyType}
                   onPolicyTypeChange={(value) => {
                     setPolicyType(value);
@@ -2675,7 +2713,10 @@ export default function InsuranceDashboard() {
                     setOpeningProtectionIdx(value);
                   }}
                   roofShape={roofShapeIdx}
-                  onRoofShapeChange={setRoofShapeIdx}
+                  onRoofShapeChange={value=>{
+                    setRoofShapeIdx(value);
+                    setWindAnswers(previous=>({...previous,shape:value===0?"Hip":value===1?"Flat":value===3?"Gable":"Not sure"}));
+                  }}
                   swr={swrIdx}
                   onSwrChange={(value) => {
                     windMitigationLocksRef.current.secondaryWaterResistance = true;
