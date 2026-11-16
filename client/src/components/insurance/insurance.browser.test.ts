@@ -29,7 +29,7 @@ test("an unconfirmed import stops pending polling with agent-review copy",async(
   await page.route("**/api/insurance/qr-cache?**",route=>route.fulfill({json:{found:true,status:"error",quotes:[]}}));
   await readyLiveQuote(page);
   await page.getByRole("button",{name:"Get Live Quotes",exact:true}).click();
-  await expect(page.getByText("An agent will finish your quotes. Carrier submission could not be confirmed; no carrier results are available.")).toBeVisible({timeout:20000});
+  await expect(page.getByText("Our Havo team will finish your quotes. Carrier submission could not be confirmed; no carrier results are available. Our team will reach out — or call/email us.")).toBeVisible({timeout:20000});
   await expect(page.getByText("Working…",{exact:true})).toHaveCount(0);
 });
 const user = {

@@ -15,5 +15,10 @@ export async function authedFetch(
     const token = data.session?.access_token;
     if (token) headers.set("Authorization", `Bearer ${token}`);
   }
-  return fetch(path, { ...init, credentials: "include", headers });
+  const response = await fetch(path, { ...init, credentials: "include", headers });
+  if (response.status === 401 && typeof window !== "undefined") {
+    const body = await response.clone().json().catch(() => null);
+    if (body?.code === "SIGN_UP_REQUIRED") window.dispatchEvent(new Event("havo:signup-required"));
+  }
+  return response;
 }

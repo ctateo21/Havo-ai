@@ -5964,7 +5964,7 @@ export default function Estimate() {
                 <p className="px-5 text-xs">Based on debt-to-income only. Not a prequalification or approval.</p>
                 {/* Metrics row */}
                 <div className="bg-primary/5 px-5 py-4">
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+                  <div className="grid grid-cols-1 min-[400px]:grid-cols-2 sm:grid-cols-3 gap-4 [&>div]:min-w-0 [&_p]:break-words">
                     <div className="text-center">
                       <p className="text-xs text-muted-foreground mb-1">New Monthly Mortgage Payment</p>
                       <p className="text-2xl font-bold text-primary">{calc.taxComplete ? fmt(calc.totalHousing) : "Incomplete"}</p>

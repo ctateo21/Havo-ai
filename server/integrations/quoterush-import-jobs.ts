@@ -6,6 +6,7 @@ import {readPrivateProfile} from "../managed-account-records";
 import {importAndSubmit,parseQuoteRushResponse,type QuoteRushParams} from "./quoterush";
 import {scheduleQuoteJob,topThreePositiveQuotes} from "./quoterush-background";
 import {sendLiveInsuranceLeadAlert} from "./live-insurance-lead-alert";
+import {quoteRushPaused} from "./quoterush-pause";
 let crmAlert:((row:QuoteCacheRow,params:Partial<QuoteRushParams>,reason:string)=>Promise<unknown>)|undefined;
 export async function notifyInsuranceCrm(row:QuoteCacheRow,params:Partial<QuoteRushParams>,reason:string){
   try{await crmAlert?.(row,params,reason);}catch{console.warn("[insurance] CRM operational alert needs retry");}
@@ -35,6 +36,7 @@ async function alertAgent(row:QuoteCacheRow,params:Partial<QuoteRushParams>,reas
     email:row.emailRecipient??"",phone:params.phone??"",reviewReason:reason,requestId:`${row.id} ${reason}`});
 }
 export async function runInsuranceImport(id:number){
+  if(quoteRushPaused())return;
   if(!supabaseAdmin)return;
   const {data:job,error}=await supabaseAdmin.from("insurance_quote_import_jobs").update({status:"running",claimed_at:new Date().toISOString()}).eq("cache_id",id).eq("status","queued").select("*").maybeSingle();
   if(error||!job)return;
@@ -101,6 +103,7 @@ export function registerQuoteCallbackAndImports(app:Express,notify?:typeof crmAl
   });
   if(sweeper)return;
   const resume=async()=>{
+    if(quoteRushPaused())return;
     if(!supabaseAdmin)return;
     try{
       const {data,error}=await supabaseAdmin.from("insurance_quote_import_jobs").select("cache_id,status,claimed_at,generation,params").in("status",["queued","running"]).limit(100);

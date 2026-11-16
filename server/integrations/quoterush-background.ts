@@ -16,6 +16,7 @@ import {
 } from "./quoterush";
 import { sendQuoteRushResultsEmail,sendInternalAlert } from "./property-alert-emails";
 import {sendLiveInsuranceLeadAlert} from "./live-insurance-lead-alert";
+import {quoteRushPaused} from "./quoterush-pause";
 
 export const QUOTE_POLL_INTERVAL_MS = 20_000;
 export const MAX_QUOTE_POLL_ATTEMPTS = 36;
@@ -207,6 +208,7 @@ export async function pollQuoteJob(
   leadIdOverride?: number,
   overrideTriggeredAt?: Date,
 ): Promise<QuoteJobOutcome> {
+  if (quoteRushPaused()) return "pending";
   const rows = await dependencies.readQuoteCache({ id: cacheId }, 1);
   let row = rows[0];
   if (!row) {
@@ -490,6 +492,7 @@ export function scheduleQuoteJob(
 /** Re-queue pending rows after a process restart and recover a successful row
  * whose email marker was still `sending` when the old process exited. */
 export async function resumePendingQuoteJobs(): Promise<void> {
+  if (quoteRushPaused()) return;
   try {
     const pending = await listPendingQuoteCaches();
     const now = new Date();

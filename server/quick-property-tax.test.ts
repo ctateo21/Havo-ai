@@ -89,5 +89,5 @@ test("official current-roll refresh never relabels a 2027 scenario as official",
  assert.equal(result.annualTax,calculateQuickTax(400000,true,rate(6.273,13.5615),{...params(.85,26411),amendment3_2027:true})+100);
  invalidateQuickTaxJobs();
  const expired=await fetch(`http://127.0.0.1:${a.port}/api/property-tax/official-status?key=${result.key}`);
- assert.equal(expired.status,401,"a guessed/expired key grants no anonymous access");
+ assert.equal(expired.status,404,"a missing key is not a lost guest allowance and reveals no data");
 });

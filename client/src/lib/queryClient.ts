@@ -3,8 +3,11 @@ import { authedFetch } from "@/lib/authed-fetch";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.code === "SIGN_UP_REQUIRED"
+      ? "Create a free account to continue. Your quote is still saved on this device."
+      : res.status === 404 ? "This lookup expired. Please refresh county data."
+      : "This lookup could not be completed. Please try again.");
   }
 }
 
