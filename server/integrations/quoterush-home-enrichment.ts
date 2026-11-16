@@ -22,7 +22,7 @@ export async function enrichQuoteRushHome(address: string, facts: {
     const evidence = profile?.fieldSources?.[`quoteRush.${key}`];
     const stored = evidence?.value as HomeFields[HomeField];
     if (stored && validateHomeValue(key, stored.value) !== null &&
-      (stored.source === "property data" || stored.source === "OpenRouter") &&
+      (stored.source === "property data" || stored.source === "OpenRouter" || stored.source === "agency default") &&
       typeof stored.confidence === "number" && stored.confidence >= 0 && stored.confidence <= 1) fields[key] = stored;
   }
   if (profile?.stories != null) {
@@ -48,7 +48,7 @@ export async function enrichQuoteRushHome(address: string, facts: {
   }
   // Christian's desktop default; do not claim that unknown means verified no pool.
   if(profile?.hasPool!==true && listing.hasPool!==true)fields.Pool={
-    value:"None",source:"property data",estimated:profile?.hasPool!==false&&listing.hasPool!==false,
+    value:"None",source:profile?.hasPool===false||listing.hasPool===false?"property data":"agency default",estimated:profile?.hasPool!==false&&listing.hasPool!==false,
     confidence:profile?.hasPool===false||listing.hasPool===false?1:0,fetchedAt:now.toISOString()};
   const missing = (Object.keys(HOME_FIELD_RULES) as HomeField[]).filter(key => !fields[key]);
   // Do not manufacture pool details when records affirm no pool. Unknown is not zero.
@@ -71,8 +71,8 @@ export async function enrichQuoteRushHome(address: string, facts: {
   if (profile) {
     const fieldSources = {...profile.fieldSources};
     for (const [key, evidence] of Object.entries(fields)) fieldSources[`quoteRush.${key}`] = {
-      value:evidence, source:evidence.estimated ? "OpenRouter — estimated" : "property data",
-      sourceUrl:evidence.estimated ? "https://openrouter.ai" : "",
+      value:evidence, source:`${evidence.source}${evidence.estimated ? " — estimated" : ""}`,
+      sourceUrl:evidence.source==="OpenRouter" ? "https://openrouter.ai" : "",
       fetchedAt:evidence.fetchedAt,
     };
     await deps.cache.write({...profile, fieldSources});

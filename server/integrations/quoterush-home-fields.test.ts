@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {importerHomeExtras,parseHomeEstimates,homeFieldNotes} from "./quoterush-home-fields";
 import {enrichQuoteRushHome} from "./quoterush-home-enrichment";
 import {buildImporterPayload,importAndSubmit,type QuoteRushParams} from "./quoterush";
+import {quoteAnswerIdentity} from "./quote-answer-identity";
 const p = {
   streetAddress:"100 Example St",city:"Tampa",zip:"33607",state:"FL",county:"Hillsborough",
   coverageA:331000,policyType:"HO3",yearBuilt:1958,roofYear:2018,sqFt:1166,
@@ -47,6 +48,8 @@ test("previous address and observed desktop enums map without changing protected
   assert.equal(out.HO.Pool,"Above Ground");
   assert.equal(out.HO.StructureType,"Duplex (2 Family)");
   assert.equal(out.HO.CoverageA,"331000");
+  assert.notEqual(quoteAnswerIdentity({...p,previousAddress},"owner-one").answerHash,
+    quoteAnswerIdentity({...p,previousAddress},"owner-two").answerHash);
 });
 test("AI is structured, allowlisted, estimated; cannot override Coverage A or flood",()=>{
   const fields=parseHomeEstimates(JSON.stringify({

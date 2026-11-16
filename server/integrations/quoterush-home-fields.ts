@@ -13,7 +13,7 @@ export const HOME_FIELD_RULES = {
 } as const;
 export type HomeField = keyof typeof HOME_FIELD_RULES;
 export type HomeEvidence = {
-  value: string; source: "property data" | "OpenRouter"; confidence: number;
+  value: string; source: "property data" | "OpenRouter" | "agency default"; confidence: number;
   estimated: boolean; fetchedAt: string;
 };
 export type HomeFields = Partial<Record<HomeField, HomeEvidence>>;
@@ -52,6 +52,7 @@ export const APPLY_DEFAULT_NOTES = [
   "Agency defaults — verify: Burglar/Fire Alarm None; station Within 5 Miles; hydrant Within 1000 Feet; Sprinklers None; BusinessOnPremises No; FireExtinguisher true.",
   "Agency coverage defaults: B 2%, C 25%, D 10%, liability $300,000; HO3 medical $5,000; LossAssessment $1,000; roof settlement Replacement Cost. User deductibles and occupancy take precedence.",
   "Agency default — verify: GatedCommunity Single Entry. Water heater location importer field requires QuoteRush confirmation.",
+  "Roof shape: Gable is the preliminary fallback for an unsure answer; confirm before carrier execution.",
 ];
 
 export function importerHomeExtras(p: QuoteRushParams): Record<string, unknown> {

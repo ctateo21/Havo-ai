@@ -32,6 +32,8 @@ Mapping updates:
   an optional current-home-address question. If supplied, all address components
   are validated; if omitted, an agent must complete it before carrier execution.
   It stays out of shared property evidence and OpenRouter prompts.
+  Quotes using this personal address are also isolated by owner in their answer
+  identity, preventing cross-user quote reuse.
 - FullBathCount is documented and uses an explicit full-bath count when present in
   cached listing data. Total fractional bathrooms are not treated as full bathrooms.
 - FormType remains HO-3: Home Owners Policy for HO3; discovery/submission LOB Home.

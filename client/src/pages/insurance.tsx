@@ -1724,7 +1724,7 @@ export default function InsuranceDashboard() {
 
   // Quote results belong to an authenticated user AND the complete answer set.
   // Never hydrate an address-only local or shared cache. qr-start alone gates reuse.
-  const quoteIdentity = JSON.stringify([
+  const quoteIdentity = JSON.stringify([currentHome,homeMortgage,
     user?.id, address, rebuild, policyType, policyAnswered, roofYear, yearBuilt, constIdx, constructionKnown,
     openingProtectionIdx, roofShapeIdx, swrIdx, hurrIdx, aopDeductible,
     floodZone, floodZoneUnknown, squareFeet, sqFtConfirmed, newPurchase,

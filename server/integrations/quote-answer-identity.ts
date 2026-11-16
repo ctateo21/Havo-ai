@@ -5,7 +5,11 @@ export function nonPersonalAnswerHash(request:Record<string,any>):string {
   return createHash("sha256").update(JSON.stringify(keys.map(k=>[k,stable(request[k]??null)]))).digest("hex");
 }
 export function quoteAnswerIdentity(request:Record<string,any>,userId:string){
-  const answerHash=nonPersonalAnswerHash(request);
+  const baseHash=nonPersonalAnswerHash(request);
+  // A buyer's previous home is personal underwriting data, never cross-user reuse.
+  const answerHash=request.previousAddress
+    ? createHash("sha256").update(JSON.stringify([baseHash,userId,request.previousAddress])).digest("hex")
+    : baseHash;
   const privateHash=createHash("sha256").update(JSON.stringify([userId,request.claimRecords??[],request.currentCarrier??null,request.currentlyInsured??null])).digest("hex");
   return {answerHash,ownerUserId:userId,runHadClaims:request.hasClaims===true,
     cacheScope:`answers-v1:${answerHash}:${request.hasClaims?privateHash:"no-claims"}`};
