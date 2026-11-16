@@ -2,9 +2,10 @@ import type { QuoteRushParams } from "./quoterush";
 
 /** Importer sample documents these keys. Never spread untrusted property/AI data. */
 export const HOME_FIELD_RULES = {
-  StructureType: ["Single Family"],
+  StructureType: ["Single Family", "Duplex (2 Family)", "Triplex (3 Family)", "Quadplex (4 Family)", "Rowhouse (Townhouse Center)", "Rowhouse (Townhouse End)", "Bi-Level", "Tri-Level"],
   Stories: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
-  Pool: ["Inground - 300 - 600 sq. ft."],
+  Pool: ["None", "Inground - small < 300 sq ft", "Inground - med 300-600 sq ft", "Inground - large > 600 sq ft", "Above Ground", "Indoor"],
+  FullBathCount: "area",
   ScreenedEnclosureSquareFeet: "area",
   ScreenedCoverage: "money",
   ProtectionClass: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
@@ -60,10 +61,13 @@ export function importerHomeExtras(p: QuoteRushParams): Record<string, unknown> 
     if (value !== null) fields[key] = value;
   }
   return {
-    Families: "1",
+    Families: String(({"Duplex (2 Family)":2,"Triplex (3 Family)":3,"Quadplex (4 Family)":4} as Record<string,number>)[String(fields.StructureType)] ?? 1),
+    ...(fields.Pool==="None" ? {PoolScreenedEnclosure:false}:{}),
     ElectricalType: "Circuit Breakers",
     PrimaryHeatSource: "Electric",
     PlumbingType: "PVC",
+    AdditionalLawOrdinance: "25%",
+    OptionalPersonalPropertyReplacementCost: true,
     Sprinklers: "None",
     GatedCommunity: "Single Entry",
     BusinessOnPremises: "No",

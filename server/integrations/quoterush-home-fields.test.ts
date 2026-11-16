@@ -25,6 +25,11 @@ test("documented home defaults preserve consumer coverage, occupancy, dates, cre
   assert.equal(payload.HO.UsageType,"Secondary");
   assert.equal(payload.HO.PolicyEffectiveDate,"12/09/2026");
   assert.equal(payload.HO.FloodZone,"X");
+  assert.equal(payload.HO.HaveWindMitForm,false);
+  assert.equal(payload.HO.OpeningProtection,undefined);
+  assert.equal(payload.HO.RoofMaterial,"Architectural Shingles");
+  assert.equal(payload.HO.UpdatePlumbingYear,undefined);
+  assert.equal(payload.HO.ConstructionType,"Masonry");
   assert.equal(payload.HO.ElectricalType,"Circuit Breakers");
   assert.equal(payload.HO.PrimaryHeatSource,"Electric");
   assert.equal(payload.HO.PlumbingType,"PVC");
@@ -32,6 +37,16 @@ test("documented home defaults preserve consumer coverage, occupancy, dates, cre
   assert.equal(payload.HO.LossAssessment,"$1,000");
   assert.equal(payload.HO.underwriting.FireExtinguisher,true);
   assert.match(payload.Client.OverviewNotes,/Agency defaults/);
+});
+test("previous address and observed desktop enums map without changing protected fields",()=>{
+  const previousAddress={Address:"200 Example Ave",City:"Tampa",State:"FL",Zip:"33607"};
+  const fields=parseHomeEstimates(JSON.stringify({Pool:{value:"Above Ground",confidence:.8},
+    StructureType:{value:"Duplex (2 Family)",confidence:.9}}));
+  const out=buildImporterPayload({...p,previousAddress,homeFields:fields},"agent@example.test");
+  assert.deepEqual(out.PreviousAddress,previousAddress);
+  assert.equal(out.HO.Pool,"Above Ground");
+  assert.equal(out.HO.StructureType,"Duplex (2 Family)");
+  assert.equal(out.HO.CoverageA,"331000");
 });
 test("AI is structured, allowlisted, estimated; cannot override Coverage A or flood",()=>{
   const fields=parseHomeEstimates(JSON.stringify({

@@ -17,6 +17,7 @@ import { quoteRushFetch as fetch } from "./quoterush-pause";
 import { importerHomeExtras, homeFieldNotes, APPLY_DEFAULT_NOTES, type HomeFields } from "./quoterush-home-fields";
 
 export interface QuoteRushParams {
+  previousAddress?: {Address:string; City:string; State:string; Zip:string};
   homeFields?: HomeFields;
   streetAddress: string;
   city: string;
@@ -135,6 +136,7 @@ export function buildImporterPayload(
     formTypeMap[p.policyType] ||
     "HO-3: Home Owners Policy";
   const payload: Record<string, any> = {
+    ...(p.previousAddress ? {PreviousAddress:p.previousAddress} : {}),
     Client: {
       NameFirst: p.firstName || "Havo",
       NameLast: p.lastName || "Lead",
@@ -162,7 +164,10 @@ export function buildImporterPayload(
       Assigned: assignedEmail,
       LeadSource: "Havo Platform",
       LeadStatus: "New Lead",
-      OverviewNotes: [...APPLY_DEFAULT_NOTES, ...homeFieldNotes(p.homeFields ?? {})].join("\n"),
+      OverviewNotes: [...APPLY_DEFAULT_NOTES, ...homeFieldNotes(p.homeFields ?? {}),
+        ...(!p.previousAddress && p.newPurchase==="Yes" ? ["Agent required: collect buyer's current home address before carrier execution."]:[]),
+        "No verified wind mitigation form supplied; obtain actual report and inspection date before applying form credits.",
+        "System update years unknown; verify with 4-point inspection."].join("\n"),
       Lob_Home: true,
       Lob_Auto: false,
       // FEMA flood-zone enrichment is property context only. A separate
@@ -203,7 +208,7 @@ export function buildImporterPayload(
         p.masonryConstruction || "",
       FoundationType: "Slab",
       RoofShape: p.roofShape || "Gable",
-      RoofMaterial: "Composite Shingle",
+      RoofMaterial: "Architectural Shingles",
       UpdateRoofYear: String(p.roofYear),
       UpdateRoofType: "Full",
       CoverageA: String(p.coverageA),
@@ -243,10 +248,8 @@ export function buildImporterPayload(
              // Lapse and policy details are omitted for existing homes until verified.
            }),
       Claims: p.priorClaims > 0 ? "Yes" : "No",
-      HaveWindMitForm: p.windMitForm,
-      OpeningProtection: p.openingProtection,
-      SecondaryWaterResistance:
-        p.secondaryWaterResistance,
+      // No reviewed upload exists yet. Inferred credits are not a supplied form.
+      HaveWindMitForm: false,
       Terrain: "Exposure B",
       BurglarAlarm: "None",
       FireAlarm: "None",

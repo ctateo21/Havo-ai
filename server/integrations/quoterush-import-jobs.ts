@@ -34,6 +34,7 @@ export async function enqueueInsuranceImport(row:QuoteCacheRow,params:QuoteRushP
   setImmediate(()=>void runInsuranceImport(row.id).catch(()=>console.warn("[insurance] Import queue deferred; durable recovery retained")));
 }
 async function alertAgent(row:QuoteCacheRow,params:Partial<QuoteRushParams>,reason:string){
+  if(!/quote requested/.test(reason))reason += " Manual follow-up: open the imported lead in QuoteRush; review missing fields and 4-point/wind-mit documents, then Run Quotes > Add VIP Carriers > Execute (Run RCE checked). Keep BOT Manager running on the agency PC; verify Overview > Quote History. Do not re-import an existing lead.";
   await notifyInsuranceCrm(row,params,reason);
   await sendLiveInsuranceLeadAlert({address:row.addressDisplay,name:`${params.firstName??""} ${params.lastName??""}`.trim(),
     email:row.emailRecipient??"",phone:params.phone??"",reviewReason:reason,requestId:`${row.id} ${reason}`});

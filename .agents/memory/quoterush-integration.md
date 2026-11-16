@@ -7,6 +7,18 @@ description: How Havo's live insurance quoting talks to QuoteRUSH — manual tri
 
 ## Ancillary home-field estimates (2026-11-16)
 
+Christian's desktop recording confirms Add VIP Carriers > Execute queues a local
+BOT Manager that opens carrier portals in Chrome. Do not call the API a cloud bot
+until QuoteRush confirms its routing. Human-review alerts must explain this desktop
+execution path. Wind-form availability must never be inferred from building year
+or protection answers; absent a supplied report, leave HaveWindMitForm unchecked.
+System update years are unknown, not year built; collect the 4-point evidence.
+
+**Why:** Desktop rating showed missing answers block execution, and defaults can
+misrepresent old homes or nonexistent inspection reports.
+**How to apply:** Preserve the imported lead, avoid duplicate imports, and distinguish
+documented importer fields from carrier-specific popup answers.
+
 Christian authorized OpenRouter best guesses for missing ancillary home fields,
 with structured allowed values, confidence, and explicit "estimated" labels in
 the admin view and lead notes. Verified records and user answers retain priority.

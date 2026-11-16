@@ -1,5 +1,63 @@
 # QuoteRush home completion and automatic carrier submission
 
+## Desktop recording update — supersedes earlier mapping limitations below
+
+Christian's normal run is **Run Quotes > Add VIP Carriers > Execute**, with Run RCE
+checked. "Lead Submitted to BOT!!!" queues the local BOT Manager, which opens Chrome
+on the agency PC, logs into carrier portals and writes premiums to Overview >
+Quote History. We must not assume the premium API executes remotely in the cloud.
+Agent-review alerts now give this manual sequence and warn against duplicate imports.
+An imported lead is retained on failure, but incomplete answers still require review;
+we cannot promise a popup-free run.
+
+Mapping updates:
+- StructureType now accepts the observed Single Family, Duplex (2 Family), Triplex
+  (3 Family), Quadplex (4 Family), Rowhouse (Townhouse Center), Rowhouse (Townhouse End),
+  Bi-Level and Tri-Level strings. Single-family listing types map directly; multifamily
+  records require unit count 2–4. Townhome center/end is never guessed from type alone.
+- ConstructionType preserves user construction, including Masonry for block, never
+  Apply Defaults' Frame for block. Mixed percentages need a verified split.
+- Pool accepts None, Inground - small < 300 sq ft, Inground - med 300-600 sq ft,
+  Inground - large > 600 sq ft, Above Ground, Indoor. No pool evidence uses Christian's
+  None default, explicitly marked estimated rather than verified absence.
+- RoofMaterial is Architectural Shingles. Existing user roof shape takes priority;
+  Gable remains the unconfirmed fallback. Renovation system years remain omitted;
+  UpdateRoofYear uses the user's roof year, never a fabricated year-built update.
+- AdditionalLawOrdinance is 25%; OptionalPersonalPropertyReplacementCost true;
+  existing dwelling replacement-cost setting remains true. Cov C remains 25%.
+  Existing chosen deductibles override defaults. HO3 medical stays $5,000.
+- HaveWindMitForm is false and inferred wind-form credits are omitted. Havo has no
+  verified wind-mit upload workflow; the agent must obtain/review the actual form.
+- PreviousAddress is a documented top-level importer object. New purchases now have
+  an optional current-home-address question. If supplied, all address components
+  are validated; if omitted, an agent must complete it before carrier execution.
+  It stays out of shared property evidence and OpenRouter prompts.
+- FullBathCount is documented and uses an explicit full-bath count when present in
+  cached listing data. Total fractional bathrooms are not treated as full bathrooms.
+- FormType remains HO-3: Home Owners Policy for HO3; discovery/submission LOB Home.
+  Carrier-specific Florida Peninsula HO3 confirmation is not documented as a
+  separately controllable popup.
+- WindMitigationInspectionDate exists in the importer example but no supplied report
+  date is available, so it is omitted; do not invent an Olympus inspection date.
+  Primary water-heater location and Copper wiring mappings still need API field names.
+- Mortgage now has an explicit Yes (financed purchase/refinance) / No (cash/outright)
+  question and is sent as Mortgage Yes/No. Unknown stays omitted, not invented.
+  Existing-home current-carrier answers remain unchanged.
+
+### Revised support question
+Our imported lead succeeds, but SubmitQuoteRequest returns 403. Please confirm premium
+activation, Agency/EndpointKey, host and Submitter authorization. Does SubmitQuoteRequest
+route to a **cloud QuoteBot** or our **desktop BOT Manager**? Can an API request trigger
+**Send To BOT** for an already imported lead, equivalent to Add VIP Carriers > Execute
+with Run RCE checked? Must BOT Manager and Chrome remain running on our agency PC?
+How are VIP carriers and Run RCE selected via API, and do results populate Overview >
+Quote History as well as GetQuotes/callbacks? Can PreviousAddress, FullBathCount,
+RoofShape and WindMitigationInspectionDate satisfy the respective carrier popups,
+or are Olympus inspection-date and Florida Peninsula HO3 answers separate?
+Please confirm the observed desktop StructureType/Pool strings are accepted by the
+importer, plus primary-water-heater location and copper-wiring field names.
+We require CreditPermission No / AssumedCreditScore Excellent. No credit pull.
+
 ## Review boundary
 New branch from GitHub main `53d1b2b7638fabaa3e8c0d8d2308167a83cec73b`.
 No merge, publishing, secret changes, migrations or live QuoteRush calls.

@@ -37,9 +37,22 @@ export async function enrichQuoteRushHome(address: string, facts: {
   if (["single_family","singleFamily","Single Family","Single Family Residence","SINGLE_FAMILY"].includes(String(listing.propertyType))) {
     fields.StructureType={value:"Single Family",source:"property data",estimated:false,confidence:1,fetchedAt:now.toISOString()};
   }
+  const units=profile?.livingUnits;
+  if (listing.propertyType === "Multifamily" && units && units>=2 && units<=4) {
+    fields.StructureType={value:({2:"Duplex (2 Family)",3:"Triplex (3 Family)",4:"Quadplex (4 Family)"} as Record<number,string>)[units],
+      source:"property data",estimated:false,confidence:1,fetchedAt:now.toISOString()};
+  }
+  if (typeof listing.fullBathCount==="number" && Number.isInteger(listing.fullBathCount)) {
+    const value=validateHomeValue("FullBathCount",listing.fullBathCount);
+    if(value)fields.FullBathCount={value,source:"property data",estimated:false,confidence:1,fetchedAt:now.toISOString()};
+  }
+  // Christian's desktop default; do not claim that unknown means verified no pool.
+  if(profile?.hasPool!==true && listing.hasPool!==true)fields.Pool={
+    value:"None",source:"property data",estimated:profile?.hasPool!==false&&listing.hasPool!==false,
+    confidence:profile?.hasPool===false||listing.hasPool===false?1:0,fetchedAt:now.toISOString()};
   const missing = (Object.keys(HOME_FIELD_RULES) as HomeField[]).filter(key => !fields[key]);
   // Do not manufacture pool details when records affirm no pool. Unknown is not zero.
-  const requested = missing.filter(key => !(profile?.hasPool === false &&
+  const requested = missing.filter(key => key!=="FullBathCount" && !(fields.Pool?.value === "None" &&
     ["Pool", "ScreenedEnclosureSquareFeet", "ScreenedCoverage"].includes(key)));
   if (deps.enabled && requested.length) {
     try {

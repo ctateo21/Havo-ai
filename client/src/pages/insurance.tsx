@@ -735,6 +735,8 @@ export default function InsuranceDashboard() {
   const [newPurchase, setNewPurchase] = useAnonymousDraft<boolean | null>("newPurchase",
     initialQuotePropertyAnswers.newPurchase,
   );
+  const [currentHome,setCurrentHome]=useState({Address:"",City:"",State:"FL",Zip:""});
+  const [homeMortgage,setHomeMortgage]=useState<string>("");
   const [purchaseDate, setPurchaseDate] = useAnonymousDraft("purchaseDate",
     initialQuotePropertyAnswers.purchaseDate,
   );
@@ -2096,6 +2098,8 @@ export default function InsuranceDashboard() {
                 }
               : {}),
             policyEffectiveDate: purchaseDate || undefined,
+            ...(newPurchase && currentHome.Address.trim() ? {previousAddress:currentHome}:{}),
+            ...(homeMortgage ? {hasMortgage:homeMortgage==="yes"}:{}),
             ...(ho6ResidenceUse
               ? { usageType: ho6ResidenceUse }
               : {}),
@@ -2362,6 +2366,19 @@ export default function InsuranceDashboard() {
             )}
           </div>
 
+          {newPurchase && <fieldset className="container mx-auto px-4 py-3">
+            <legend className="font-medium">Current home address</legend>
+            <p className="text-sm text-muted-foreground">Carriers may require this for a new purchase. Optional here; our team must complete it before running carriers if omitted.</p>
+            <div className="grid gap-2 sm:grid-cols-4">{(["Address","City","State","Zip"] as const).map(key=>
+              <label key={key} className="text-sm">{key === "Address" ? "Street and unit" : key}
+                <Input value={currentHome[key]} onChange={e=>setCurrentHome({...currentHome,[key]:e.target.value})} autoComplete="off" />
+              </label>)}</div>
+          </fieldset>}
+          <div className="container mx-auto px-4 py-2">
+            <label className="text-sm">Will this home have a mortgage? <select aria-label="Will this home have a mortgage?" value={homeMortgage} onChange={e=>setHomeMortgage(e.target.value)} className="border rounded p-2">
+              <option value="">Please select</option><option value="yes">Yes — financed purchase or refinance</option><option value="no">No — owned outright or cash purchase</option>
+            </select></label>
+          </div>
           {/* Address + action bar */}
           <div className="container mx-auto px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-3">

@@ -1866,6 +1866,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
 
         const params: QuoteRushParams = {
+          ...(b.previousAddress ? {previousAddress:b.previousAddress}:{}),
           streetAddress,
           city,
           state,
