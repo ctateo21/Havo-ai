@@ -998,6 +998,7 @@ test("property enrichment can supplement square footage but cannot overwrite exp
   const calls: Array<{ url: string; body?: unknown }> = [];
   globalThis.fetch = (async (url, init) => {
     calls.push({ url: String(url), body: init?.body });
+    if (String(url).includes("GetQuotableSitesForLead")) return Response.json({Sites:["Test Carrier"]});
     if (String(url).includes("GetPropertyData")) {
       return new Response(JSON.stringify({
         SquareFeet: 2600,
@@ -1076,6 +1077,7 @@ test("submit transport failure preserves the imported lead for reconciliation", 
     if (String(url).includes("importer.quoterush.com")) {
       return new Response(JSON.stringify({ LeadId: 654 }));
     }
+    if (String(url).includes("GetQuotableSitesForLead")) return Response.json({Sites:["Test Carrier"]});
     throw new TypeError("simulated connection reset");
   }) as typeof fetch;
 

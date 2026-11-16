@@ -5,6 +5,21 @@ description: How Havo's live insurance quoting talks to QuoteRUSH — manual tri
 
 # QuoteRUSH integration
 
+## Ancillary home-field estimates (2026-11-16)
+
+Christian authorized OpenRouter best guesses for missing ancillary home fields,
+with structured allowed values, confidence, and explicit "estimated" labels in
+the admin view and lead notes. Verified records and user answers retain priority.
+This supersedes the older blanket no-inference rule only for ancillary fields;
+never infer dwelling Coverage A below rebuild cost, flood zones, applicant facts,
+claims, credit permission or roof age.
+
+**Why:** Imports now work, but incomplete Home tabs still require manual work.
+**How to apply:** Cache property-only estimates separately from verified facts,
+preserve uncertainty, and leave unsupported importer values for agent review.
+Automatic carrier execution follows an explicit user quote request, not merely
+viewing an address. No live testing without Christian's approval.
+
 ## Current insurance decisions (2026-11-12; supersede older shared-cache notes below)
 
 **Rule:** Never pull or ask permission to pull credit; send CreditPermission No.

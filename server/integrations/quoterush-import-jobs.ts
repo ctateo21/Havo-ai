@@ -7,6 +7,8 @@ import {importAndSubmit,parseQuoteRushResponse,type QuoteRushParams} from "./quo
 import {scheduleQuoteJob,topThreePositiveQuotes} from "./quoterush-background";
 import {sendLiveInsuranceLeadAlert} from "./live-insurance-lead-alert";
 import {quoteRushPaused} from "./quoterush-pause";
+import {enrichQuoteRushHome} from "./quoterush-home-enrichment";
+import {homeFieldNotes,APPLY_DEFAULT_NOTES} from "./quoterush-home-fields";
 let crmAlert:((row:QuoteCacheRow,params:Partial<QuoteRushParams>,reason:string)=>Promise<unknown>)|undefined;
 export async function notifyInsuranceCrm(row:QuoteCacheRow,params:Partial<QuoteRushParams>,reason:string){
   try{await crmAlert?.(row,params,reason);}catch{console.warn("[insurance] CRM operational alert needs retry");}
@@ -46,7 +48,21 @@ export async function runInsuranceImport(id:number){
   try{
     const profile=await readPrivateProfile(job.owner_user_id);
     if(!profile?.dateOfBirth)throw Error("Private applicant profile unavailable");
-    const result=await importAndSubmit({...job.params,dateOfBirth:profile.dateOfBirth},{
+    const homeFields = await enrichQuoteRushHome(row.addressDisplay, {
+      yearBuilt:job.params.yearBuilt, sqFt:job.params.sqFt,
+      constructionType:job.params.constructionType, policyType:job.params.policyType,
+    });
+    const notes = homeFieldNotes(homeFields);
+    const saved = await updateQuoteCache(id, {
+      propertyDataSnapshot:{...row.propertyDataSnapshot, homeFields},
+      propertyDataProvenance:{...row.propertyDataProvenance, homeFields},
+      agencyDefaultSnapshot:{...row.agencyDefaultSnapshot,
+        fieldsRequiringVerification:[...((row.agencyDefaultSnapshot as any)?.fieldsRequiringVerification ?? []),
+          ...APPLY_DEFAULT_NOTES, ...notes]},
+      assumptions:[...(row.assumptions ?? []), ...APPLY_DEFAULT_NOTES, ...notes],
+    }, {triggeredAt:row.triggeredAt,leadId:null,expectedStatus:"pending"});
+    if(!saved)throw Error("Quote run superseded before import");
+    const result=await importAndSubmit({...job.params,homeFields,dateOfBirth:profile.dateOfBirth},{
       callbackUrl:`https://havofl.com/api/insurance/qr-callback?token=${encodeURIComponent(job.callback_token)}`,
       onLeadCreated:async leadId=>{
         const updated=await updateQuoteCache(id,{leadId},{triggeredAt:row.triggeredAt,leadId:null,expectedStatus:"pending"});

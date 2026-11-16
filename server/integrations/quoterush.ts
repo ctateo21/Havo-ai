@@ -14,8 +14,10 @@
 
 import type { QuoteRushPropertyDefaults } from "@shared/quoterush-property-defaults";
 import { quoteRushFetch as fetch } from "./quoterush-pause";
+import { importerHomeExtras, homeFieldNotes, APPLY_DEFAULT_NOTES, type HomeFields } from "./quoterush-home-fields";
 
 export interface QuoteRushParams {
+  homeFields?: HomeFields;
   streetAddress: string;
   city: string;
   state: string;
@@ -160,6 +162,7 @@ export function buildImporterPayload(
       Assigned: assignedEmail,
       LeadSource: "Havo Platform",
       LeadStatus: "New Lead",
+      OverviewNotes: [...APPLY_DEFAULT_NOTES, ...homeFieldNotes(p.homeFields ?? {})].join("\n"),
       Lob_Home: true,
       Lob_Auto: false,
       // FEMA flood-zone enrichment is property context only. A separate
@@ -167,6 +170,7 @@ export function buildImporterPayload(
       Lob_Flood: false,
     },
     HO: {
+      ...importerHomeExtras(p),
       FormType: formType,
       Address: p.streetAddress,
       City: p.city,
@@ -466,23 +470,35 @@ export async function importAndSubmit(
       ...(rawPropertyData ? { rawPropertyData } : {}),
     };
   }
-  console.log("[quoterush] LeadId:", leadId);
+  console.log("[quoterush] verified lead received");
   await hooks.onLeadCreated?.(leadId);
 
   // Step D: Submit quote request (triggers QuoteBot)
-  let carriers:unknown[]|undefined;
+  let carriers:string[]|undefined;
+  const sensitiveValues = [WEBID, WEBPASSWORD, ENDPOINT_KEY, AGENCY, ASSIGNED_EMAIL,
+    String(leadId), params.firstName, params.lastName, params.email, params.phone,
+    params.dateOfBirth, params.streetAddress, params.city, params.zip, hooks.callbackUrl ?? ""];
   try{
     const r=await fetch("https://api.quoterush.com/GetQuotableSitesForLead",{
       method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({EndpointKey:ENDPOINT_KEY,Agency:AGENCY,LeadId:leadId,LOB:"Home"}),
       signal:AbortSignal.timeout(10000),
     });
-    if(!r.ok)throw Error("Carrier discovery failed");
-    const result=await r.json();
-    if(!Array.isArray(result.Sites)||!result.Sites.length)throw Error("No carrier list");
-    carriers=result.Sites;
-  }catch{console.warn("[quoterush] Carrier discovery unavailable; submitting without Carriers");}
-  await hooks.onCarriers?.(carriers?.length??null,carriers?undefined:"Carrier discovery unavailable; submitted without a carrier list.");
+    const body = await r.text();
+    if(!r.ok) {
+      const diagnostics = inspectImporterResponse(body, r.headers.get("content-type"), sensitiveValues).diagnostics;
+      console.warn("[quoterush] carrier discovery rejected", {status:r.status,...diagnostics});
+      throw Error("Carrier discovery failed");
+    }
+    const result=JSON.parse(body);
+    if(!Array.isArray(result.Sites)||!result.Sites.length ||
+      result.Sites.some((site: unknown) => typeof site !== "string" || !site.trim())) throw Error("No carrier list");
+    carriers=[...new Set(result.Sites as string[])];
+  }catch{
+    await hooks.onCarriers?.(null,"Carrier discovery unavailable; no carrier submission attempted.");
+    return {leadId, submitted:false, error:"Carrier discovery unavailable. Agent review required; imported lead retained.", ...(rawPropertyData?{rawPropertyData}:{})};
+  }
+  await hooks.onCarriers?.(carriers.length);
   let submitRes: Response;
   let submitText: string;
   try {
@@ -499,7 +515,7 @@ export async function importAndSubmit(
           LeadId: leadId,
           LOB: "Home",
           Submitter: ASSIGNED_EMAIL,
-          ...(carriers?{Carriers:carriers}:{}),
+          Carriers:carriers,
           ...(hooks.callbackUrl?{callbackUrl:hooks.callbackUrl}:{}),
         }),
         signal: AbortSignal.timeout(30000),
@@ -520,11 +536,13 @@ export async function importAndSubmit(
   console.log(
     "[quoterush] SubmitQuoteRequest status:", submitRes.status
   );
+  const submitInspection = inspectImporterResponse(submitText, submitRes.headers.get("content-type"), sensitiveValues);
+  if (!submitRes.ok) console.warn("[quoterush] submission diagnostics", submitInspection.diagnostics);
 
   return {
     leadId,
     submitted: submitRes.ok,
-    error: submitRes.ok ? undefined : `Quote submission failed (${submitRes.status})`,
+    error: submitRes.ok ? undefined : `Quote submission failed (${submitRes.status}): ${submitInspection.diagnostics.messages.join("; ") || "No readable provider reason"}. Verify QuoteRush premium submission activation and agency authorization.`,
     ...(rawPropertyData ? { rawPropertyData } : {}),
   };
 }
