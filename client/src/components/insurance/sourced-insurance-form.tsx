@@ -85,7 +85,7 @@ export function SourcedInsuranceForm(p: Props) {
       return validRoofYear(year) ? <button key={i} type="button" className="mr-2 rounded border border-primary/30 px-3 py-1 text-xs text-primary" onClick={() => p.onRoofYearChange(year)}>Use {year}{permit.source ? ` · ${permit.source}` : ""}</button> : null;
     })}</div>}
     {numericSelect("Hurricane impact-rated doors and windows or shutters?", p.openingProtection, p.onOpeningProtectionChange, [[0, "No"], [1, "Yes"]])}
-    {numericSelect("Roof shape", p.roofShape, p.onRoofShapeChange, [[0, "Hip roof"], [1, "Flat roof"], [2, "Gable / not sure — confirm before quoting"]])}
+    {numericSelect("Roof shape", p.roofShape, p.onRoofShapeChange, [[0, "Hip roof"], [3, "Gable roof"], [2, "Not sure — Gable default, confirm before quoting"], [1, "Flat roof"]])}
     {numericSelect("Second Water Resistance Layer (SWR)?", p.swr, p.onSwrChange, [[2, "Yes"], [0, "No"], [1, "Unsure"]])}
     {numericSelect("Hurricane deductible", p.hurricaneDeductible, p.onHurricaneDeductibleChange, [[0, "2% of dwelling — standard"], [1, "5% of dwelling"], [2, "10% of dwelling"]])}
     {numericSelect("Construction Type", p.construction, p.onConstructionChange, [[0, "Concrete Block"], [2, "Frame"], [1, "Mix"]])}

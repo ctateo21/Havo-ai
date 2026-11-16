@@ -81,7 +81,7 @@ const REGIONS: Record<RegionKey, Region> = {
 
 const ROOF_ADJ  = [0.90, 1.00, 1.20, 1.38];
 const OPENING_PROTECTION_ADJ = [1.00, 0.92]; // no, yes
-const ROOF_SHAPE_ADJ = [0.92, 1.06, 1.00]; // hip, flat, other / unsure
+const ROOF_SHAPE_ADJ = [0.92, 1.06, 1.00, 1.00]; // hip, flat, unsure, confirmed gable
 const SWR_ADJ = [1.00, 1.00, 0.94]; // no, unsure, yes
 const HURR_ADJ  = [1.10, 1.05, 1.00];
 const CURRENT_YEAR = new Date().getFullYear();
@@ -2067,7 +2067,7 @@ export default function InsuranceDashboard() {
             yearBuilt,
             roofYear,
             openingProtection: openingProtectionIdx === 1,
-            roofShape: ["Hip", "Flat", "Gable"][roofShapeIdx] ?? "Gable",
+            roofShape: ["Hip", "Flat", "Gable", "Gable"][roofShapeIdx] ?? "Gable",
             secondaryWaterResistance:
               swrIdx === 2 ? "Yes" : swrIdx === 0 ? "No" : "Unknown",
             windMitigationLocks: windMitigationLocksRef.current,
@@ -2881,7 +2881,7 @@ export default function InsuranceDashboard() {
                     {openingProtectionIdx === 1
                       ? "impact protection"
                       : "no impact protection"}
-                    , {["hip", "flat", "gable (other / unsure)"][roofShapeIdx] ?? "gable"} roof,{" "}
+                    , {["hip", "flat", "gable (other / unsure)", "gable"][roofShapeIdx] ?? "gable"} roof,{" "}
                     SWR {swrIdx === 2 ? "yes" : swrIdx === 0 ? "no" : "needs confirmation"},{" "}
                     {["concrete block", "mixed masonry / frame", "frame"][constIdx] ?? "concrete block"} construction,{" "}
                     {["2%", "5%", "10%"][hurrIdx] ?? "2%"} hurricane deductible, and{" "}
