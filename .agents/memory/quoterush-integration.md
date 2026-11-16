@@ -5,6 +5,18 @@ description: How Havo's live insurance quoting talks to QuoteRUSH — manual tri
 
 # QuoteRUSH integration
 
+## Wind evidence boundary
+
+Christian requires report-backed, user-confirmed and estimated wind answers to
+remain distinct in the UI and stored evidence. Existing real report values override
+estimates; only a real report permits HaveWindMitForm. ProtectionClass and BCEG
+join Coverage A and flood zone as never-AI fields. Estimated roof-to-wall connections
+must never exceed Clips, and uncertain coastal geography must not justify Clips.
+
+**Why:** Preliminary carrier credits must not exceed their supporting evidence.
+**How to apply:** Preserve provenance through prompts, cached values and importer
+notes; exclude old AI jurisdiction-rating evidence as well as new inference.
+
 ## Ancillary home-field estimates (2026-11-16)
 
 Christian's desktop recording confirms Add VIP Carriers > Execute queues a local
