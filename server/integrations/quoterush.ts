@@ -446,6 +446,7 @@ export async function importAndSubmit(
     params.firstName, params.lastName, params.email, params.phone, params.dateOfBirth,
     formatDateOfBirth(params.dateOfBirth), params.streetAddress, params.city, params.zip,
     hooks.callbackUrl ?? "",
+    ...Object.values(params.previousAddress ?? {}),
   ]);
   console.log("[quoterush] importer diagnostics", inspection.diagnostics);
 
@@ -480,7 +481,8 @@ export async function importAndSubmit(
   let carriers:string[]|undefined;
   const sensitiveValues = [WEBID, WEBPASSWORD, ENDPOINT_KEY, AGENCY, ASSIGNED_EMAIL,
     String(leadId), params.firstName, params.lastName, params.email, params.phone,
-    params.dateOfBirth, params.streetAddress, params.city, params.zip, hooks.callbackUrl ?? ""];
+    params.dateOfBirth, params.streetAddress, params.city, params.zip, hooks.callbackUrl ?? "",
+    ...Object.values(params.previousAddress ?? {})];
   try{
     const r=await fetch("https://api.quoterush.com/GetQuotableSitesForLead",{
       method:"POST",headers:{"Content-Type":"application/json"},
