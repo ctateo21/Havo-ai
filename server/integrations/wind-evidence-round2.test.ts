@@ -19,9 +19,9 @@ test("portal records require exact property, number, date and verbatim work; URL
   const md="100 Example St, Tampa, FL 33607 PERMIT-001 01/02/2020 Replace impact windows";
   const record={number:"PERMIT-001",date:"2020-01-02",address:"100 Example St, Tampa, FL 33607",quote:"Replace impact windows"};
   const parse=(r:any)=>parsePortalPermits(JSON.stringify({permits:[r]}),md,"https://aca.tampagov.net/record","100 Example St, Tampa, FL 33607");
-  assert.equal(parse(record).length,1);
+  assert.equal(parse(record).length,0); // retired portal extraction must never return evidence
   for(const patch of [{number:"fake"},{date:"2020-01-03"},{address:"101 Example St"},{quote:"invented"}])assert.equal(parse({...record,...patch}).length,0);
-  assert.equal(allowedPortalUrl("https://aca-prod.accela.com/hcfl/record","https://aca-prod.accela.com/hcfl/"),true);
+  assert.equal(allowedPortalUrl("https://aca-prod.accela.com/hcfl/record","https://aca-prod.accela.com/hcfl/"),false);
   for(const url of ["https://aca-prod.accela.com.evil.test/hcfl/","https://aca-prod.accela.com/PASCO/","http://aca-prod.accela.com/hcfl/","https://user:pass@aca-prod.accela.com/hcfl/"])
     assert.equal(allowedPortalUrl(url,"https://aca-prod.accela.com/hcfl/"),false);
   assert.ok(!JSON.stringify(PERMIT_PORTALS).toLowerCase().includes("cityview"));
@@ -31,7 +31,7 @@ test("missing provider config degrades without network or guessed permits",async
   delete process.env.FIRECRAWL_API_KEY;
   try{
     const result=await lookupPortalPermits("collier","100 Example St",new AbortController().signal,async()=>{throw Error("network forbidden");});
-    assert.equal(result.permits.length,0);assert.equal(result.checks[0].status,"not_configured");
+    assert.equal(result.permits.length,0);assert.equal(result.checks[0].status,"disabled");
   }finally{if(previous!==undefined)process.env.FIRECRAWL_API_KEY=previous;}
 });
 test("browser permit fallback always stops its session and never bypasses a CAPTCHA",async()=>{
@@ -43,11 +43,24 @@ test("browser permit fallback always stops its session and never bypasses a CAPT
     return new Response(JSON.stringify({success:true,result:{url:"https://aca.tampagov.net/",text:"",blocked:true}}));
   };
   const result=await browserPermitSearch("https://aca.tampagov.net/","100 Example St",new AbortController().signal,http);
-  assert.equal(result?.blocked,true);assert.deepEqual(methods,["POST","POST","DELETE"]);
+  assert.equal(result?.blocked,true);assert.deepEqual(methods,[]);
   let calls=0;
   assert.equal((await browserPermitSearch("https://aca.tampagov.net/","100 Example St",new AbortController().signal,async()=>{
     calls++;return new Response(JSON.stringify({success:true,data:{markdown:"CAPTCHA verify you are human"}}));
-  }))?.blocked,true);assert.equal(calls,1);
+  }))?.blocked,true);assert.equal(calls,0);
+});
+test("explicit PA SWR evidence counts, garage-only never suggests all openings",()=>{
+  const permit={number:"PA-1",date:"2020-01-01",source:"County PA",sourceUrl:"https://example.test",
+    description:"Roof replacement with self-adhered underlayment",
+    classification:{kind:"roof_detail" as const,quote:"self-adhered underlayment",swr:true}};
+  const result=resolveWind({county:"pinellas",yearBuilt:1958,roofYear:2018,permits:[permit]});
+  assert.equal(result.fields.swr.value,"Yes");assert.equal(result.fields.swr.estimated,true);
+  assert.match(result.fields.swr.source,/PA-1.*self-adhered/);
+  const garage={...permit,classification:{kind:"garage_door" as const,quote:"garage door",swr:false}};
+  const g=resolveWind({county:"pinellas",yearBuilt:1958,roofYear:2018,permits:[garage],
+    answers:windAnswersSchema.parse({allOpenings:"all",openingsConfirmed:true})});
+  assert.equal(g.fields.opening.value,"N");
+  assert.equal(resolveWind({county:"pinellas",yearBuilt:1958,roofYear:2018,permits:[{...permit,classification:{...permit.classification,quote:"made up"}}]}).fields.swr.value,"Unknown");
 });
 test("Marco Gulf-side barrier fixture inside, inland Naples outside, bad data unknown",()=>{
   const marco={features:[{attributes:{COUNTY:"Collier",DEFINITION_SOURCE_TYPE:"Barrier Island",COASTAL_BARRIER_ISLAND_NAME:"Marco Island"}}]};

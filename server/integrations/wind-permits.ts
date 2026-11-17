@@ -50,7 +50,7 @@ export async function lookupWindPermits(county:string,address:string,http:typeof
   const key=`${county}:${address.toUpperCase().trim()}`,hit=cache.get(key);if(hit&&hit.expires>Date.now())return hit.value;
   if(pending.has(key))return pending.get(key)!;
   const adapter=permitAdapters.find(x=>x.county===county);
-  if(!adapter)return {status:"unsupported",permits:[],source:county==="collier"?"Collier CityView skipped — CAPTCHA":"No verified permit adapter",queriedAt:new Date().toISOString()};
+  if(!adapter)return {status:"unsupported",permits:[],source:"County PA permits section not verified — Unknown",queriedAt:new Date().toISOString()};
   const task=(async()=>{
     const now=Date.now(),wait=Math.max(0,nextSlot-now);nextSlot=Math.max(now,nextSlot)+1000;
     // Do not accumulate a long queue in the quote path.

@@ -42,7 +42,8 @@ export function permitKinds(p:PermitEvidence) {
   // Unclassified permit text must never confer a credit. In particular "ROOF"
   // alone does not establish a replacement rather than a repair/inspection.
   return {roof:p.classification?.kind==="reroof",
-    opening:p.classification?.kind==="openings"||p.classification?.kind==="garage_door"};
+    opening:p.classification?.kind==="openings",
+    garage:p.classification?.kind==="garage_door"};
 }
 export function resolveWind(input:{county:string; yearBuilt:number; roofYear:number; answers?:WindAnswers; permits?:PermitEvidence[]; coastal?:CoastalEvidence}):WindResult{
   const a=windAnswersSchema.parse(input.answers??{}), permits=input.permits??[];
@@ -58,12 +59,15 @@ export function resolveWind(input:{county:string; yearBuilt:number; roofYear:num
     (input.yearBuilt>=1987 && input.yearBuilt<=1995 && input.coastal?.status==="inside");
   const roofPermit=permits.find(p=>permitKinds(p).roof && Date.parse(p.date)>Date.parse("2007-10-01"));
   const openings=permits.filter(p=>permitKinds(p).opening);
+  const swrPermit=permits.find(p=>p.classification?.swr===true&&
+    p.description.includes(p.classification.quote)&&
+    /\b(peel.and.stick|self.adhered underlayment|seam tape)\b/i.test(p.classification.quote));
   const deck=roofPermit&&input.yearBuilt<2002?"C":input.roofYear>input.yearBuilt||input.yearBuilt>=2002?"B":"Unknown";
   const fields:WindResult["fields"]={
     roofToWall:fact(clips?"Clips":"Unknown",input.yearBuilt<1996&&clips?"coastal-zone check + year built":"year built"),
     roofDeck:fact(deck,roofPermit?`county permit ${roofPermit.number}`:"year built / user roof year"),
-    swr:fact(input.roofYear>=2021?"Yes":input.roofYear>=2008&&a.peelAndStick==="yes"?"Yes":"Unknown",
-      input.roofYear>=2021?"user roof year": "user answer"),
+    swr:fact(swrPermit||input.roofYear>=2021?"Yes":input.roofYear>=2008&&a.peelAndStick==="yes"?"Yes":"Unknown",
+      swrPermit?`county PA permit ${swrPermit.number}: "${swrPermit.classification!.quote}" (${swrPermit.sourceUrl})`:input.roofYear>=2021?"user roof year": "user answer"),
     opening:fact(a.allOpenings==="all"&&a.openingsConfirmed?(openings.length?"B":"N"):"X",openings.length?"county permit + user answer":"user answer"),
     shape:fact(a.shape==="Not sure"?"Gable":a.shape,a.shape==="Not sure"?"agency default — please confirm":"user answer",a.shape==="Not sure"),
   };

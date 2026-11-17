@@ -7,6 +7,12 @@ description: How Havo's live insurance quoting talks to QuoteRUSH — manual tri
 
 ## Wind evidence boundary
 
+Permit sources are county Property Appraiser parcel pages only. Never use city
+permit portals, Accela, Click2Gov, EnerGov or their browser fallbacks.
+**Why:** Christian explicitly replaced the portal approach with PA-only records.
+**How to apply:** Verify a real PA parcel permits section before enabling an adapter;
+unsupported counties stay Unknown. Garage-only permits cannot suggest all openings.
+
 Christian requires report-backed, user-confirmed and estimated wind answers to
 remain distinct in the UI and stored evidence. Existing real report values override
 estimates; only a real report permits HaveWindMitForm. ProtectionClass and BCEG

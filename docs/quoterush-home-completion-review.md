@@ -1,5 +1,42 @@
 # QuoteRush home completion and automatic carrier submission
 
+## PA-only source policy — current, supersedes ALL portal sections below
+
+All Accela, HillsGovHub, Tampa, Click2Gov, EnerGov and CityView permit paths
+are disabled. The compatibility module has no URLs and performs zero network
+calls. No Firecrawl browser-interact permit fallback remains. Old mixed-source
+cached evidence is invalidated by the new supporting-evidence version.
+
+Only HCPA and PCPAO currently have verified enabled PA adapters. Other counties
+return Unknown, not city-portal data. **The requested all-county expansion is
+not finished.** No new county adapter was enabled without verifying its parcel
+page and parser. Homepage permit text is not parcel verification.
+
+| County | PA URL inspected / existing source | Parcel permit section verified | Adapter returned records |
+|---|---|---|---|
+| Hillsborough | gis.hcpafl.org/CommonServices/property/search/ParcelData (existing exact-address/pin lookup) | Yes, existing verified integration | Yes, prior live check: pool permit |
+| Pinellas | pcpao.gov/property-details (existing exact-address/strap lookup) | Yes, existing verified integration | Yes, prior live check: 2018 ROOF |
+| Lee | leepa.org/Display/DisplayParcel.aspx?FolioID=10207619 | Yes: Building / Construction Permit Data section; rows still need verification | Not implemented |
+| Manatee | manateepao.gov/parcel/?parid=2051711709 | Unverified; page responds and mentions permits, rows not verified | Not implemented |
+| Pasco | search.pascopa.com/ | Unverified; homepage only | Not implemented |
+| Polk | polkpa.org/ | Unverified; homepage only | Not implemented |
+| Sarasota | sc-pa.com/ | Unverified; homepage only | Not implemented |
+| Hernando | hernandopa-fl.us/ | Unverified; homepage only | Not implemented |
+| Collier | collierappraiser.com/ | Unverified; homepage only | Not implemented |
+
+These checks did not use authenticated QuoteRush or bypass a CAPTCHA. No claim
+is made that an unverified site lacks a permits section.
+
+AI-classified explicit peel-and-stick/self-adhered underlayment/seam-tape evidence
+now gives estimated SWR Yes with PA permit number, verbatim quote and source URL.
+The quote must occur in the source description. Real reports still override.
+Garage-door-only records no longer trigger likely-all-opening suggestions or
+establish an all-openings permit credit. Window/door/shutter/impact-opening
+records still require the user's explicit all-openings confirmation.
+
+The 80-second pre-import cap, PA cache, user confirmation, private-report storage
+migration awaiting approval, and credit/privacy safeguards remain unchanged.
+
 ## November 17 permit/report/coastal round (supersedes the November 16 limitations below)
 
 ### Implemented behavior
