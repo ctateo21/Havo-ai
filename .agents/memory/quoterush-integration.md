@@ -21,7 +21,15 @@ that a reroof was issued after an underwriting cutoff.
 
 Christian requires report-backed, user-confirmed and estimated wind answers to
 remain distinct in the UI and stored evidence. Existing real report values override
-estimates; only a real report permits HaveWindMitForm. ProtectionClass and BCEG
+estimates. Christian's latest Apply Defaults decision supersedes the previous
+report-only checkbox rule: always send HaveWindMitForm=true and GatedCommunity
+Single Entry, but never change stored haveReport or invent an inspection date.
+Lead notes must state that these are agency defaults, not verified facts.
+Unknown SWR stays Unknown; absent opening evidence defaults to None. Optional
+IdentityTheft, PersonalInjuryCoverage and IncreaseReplacementCostOnDwelling are off.
+**Why:** Christian explicitly requested matching his desktop Apply Defaults state
+while preserving the provenance of actual wind evidence.
+ProtectionClass and BCEG
 join Coverage A and flood zone as never-AI fields. Estimated roof-to-wall connections
 must never exceed Clips, and uncertain coastal geography must not justify Clips.
 
@@ -42,8 +50,8 @@ notes; exclude old AI jurisdiction-rating evidence as well as new inference.
 Christian's desktop recording confirms Add VIP Carriers > Execute queues a local
 BOT Manager that opens carrier portals in Chrome. Do not call the API a cloud bot
 until QuoteRush confirms its routing. Human-review alerts must explain this desktop
-execution path. Wind-form availability must never be inferred from building year
-or protection answers; absent a supplied report, leave HaveWindMitForm unchecked.
+execution path. Real wind-form availability must never be inferred from building year
+or protection answers; the importer checkbox now follows the agency default above.
 System update years are unknown, not year built; collect the 4-point evidence.
 
 **Why:** Desktop rating showed missing answers block execution, and defaults can

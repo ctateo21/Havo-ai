@@ -1,5 +1,94 @@
 # QuoteRush home completion and automatic carrier submission
 
+## Current Apply Defaults override (supersedes earlier report-only/gated rules)
+
+Christian explicitly approved always setting `HO.HaveWindMitForm=true` and
+`HO.GatedCommunity="Single Entry"`. The checkbox is an **agency default**, not
+proof of an uploaded report: stored `windEvidence.haveReport` remains truthful,
+inspection dates are never fabricated, and lead notes distinguish default,
+estimated and confirmed answers. Real report values still override estimates.
+No live import was performed to verify the desktop rendering.
+
+Source checked: https://api-docs.quoterush.com/ — **Add Lead**, public JSON example.
+“Verified” below means the key/type/value appears in that example, NOT that a
+new live lead was tested. The example is not a complete enumeration reference
+and does not document an Apply Defaults API flag.
+
+| Desktop field | Import field | Value / source | Documentation status |
+|---|---|---|---|
+| Families | HO.Families | `"1"` default; mapped multi-family count when known | Verified |
+| Electrical | HO.ElectricalType | `"Circuit Breakers"` | Verified |
+| Heat | HO.PrimaryHeatSource | `"Electric"` | Verified |
+| Plumbing | HO.PlumbingType | `"PVC"` | Verified |
+| Water heater location | HO.PrimaryWaterHeaterLocation | `"Garage"` | **UNVERIFIED key and enum**; not in public example. Lead note flags it; may be ignored |
+| Terrain | HO.Terrain | `"Exposure B"` | Verified |
+| Sprinkler | HO.Sprinklers | `"None"` | Verified |
+| Business | HO.BusinessOnPremises | `"No"` | Verified |
+| Fire extinguisher | HO.underwriting.FireExtinguisher | `true` | Verified nesting and boolean |
+| Secured community | HO.GatedCommunity | `"Single Entry"` always | Key verified; **value UNVERIFIED by API**, observed by Christian in desktop |
+| Wind affidavit | HO.HaveWindMitForm | `true` always | Verified boolean; agency-default provenance in notes |
+| SWR | HO.SecondaryWaterResistance | evidence Yes/No; otherwise `"Unknown"` | Key/No verified; **Yes/Unknown UNVERIFIED enum** in example |
+| Openings | HO.OpeningProtection | `"Hurricane Protection"` for supported A/B evidence; otherwise `"None"` | Key/Hurricane Protection verified; **None UNVERIFIED enum** in example |
+| Roof-to-wall | HO.RoofWallConnection | evidence Clips/Toe Nails/Single Wraps/Double Wraps; Unknown omitted | Key/Single Wraps verified; other enums **UNVERIFIED** |
+| Deck | HO.RoofDeckAttachment | evidence `Level A/B/C/D`; Unknown omitted | Key/Level A verified; B/C/D **UNVERIFIED** |
+| Roof shape | HO.RoofShape | evidence/user; Gable fallback flagged | Key/Gable verified; Hip **UNVERIFIED** by example |
+| Inspection date | HO.WindMitigationInspectionDate | real report only, MM/DD/YYYY | Verified |
+| Burglar / fire alarm | HO.BurglarAlarm / HO.FireAlarm | `"None"` | Verified |
+| Increased dwelling replacement | HO.IncreaseReplacementCostOnDwelling | `false` | Key/boolean verified; unchecked per Christian |
+| Personal injury | HO.PersonalInjuryCoverage | `false` | Key/boolean verified; unchecked per Christian |
+| Identity theft | HO.IdentityTheft | `false` | Key/boolean verified; **desktop default unknown**, unchecked per Christian. Sample's true is not Apply Defaults evidence |
+| Structure type | HO.StructureType | property records/listing, then bounded OpenRouter | Key/Single Family verified; other desktop enums **UNVERIFIED** by API example |
+| Stories | HO.Stories | property data, then OpenRouter, numeric string | Key/`"1"` verified; other allowed story counts not enumerated |
+| Pool | HO.Pool | property evidence, then OpenRouter; None agency fallback | Key verified; desktop enums **UNVERIFIED** (example uses `Inground - 300 - 600 sq. ft.`) |
+| Dwelling Coverage Amount | HO.CoverageA | Havo Coverage A as numeric string, **never AI** | Verified |
+| Screened enclosure | HO.PoolScreenedEnclosure | **boolean**, property data then AI; area >0 also establishes true | Verified boolean. Fixed missing positive-enclosure mapping |
+| Enclosure area | HO.ScreenedEnclosureSquareFeet | property data then AI, numeric string | Verified |
+
+The five reported blank Home fields now have payload contracts with supplied
+property/AI evidence. No production UI acceptance is claimed without a live
+import. Structure/stories remain omitted if both records and optional AI fail:
+we do not silently invent these values to make a test pass. An absent pool uses
+the previously approved, labeled None default. Enclosure false is labeled an
+agency default when records do not establish it. Coverage A retains validation
+and is never replaced with an AI suggestion.
+
+### Sarasota official download research
+
+https://www.sarasotapropertyappraiser.gov/downloads/download-data provides
+`SCPA_Detailed_Data.zip` and a published layout:
+https://www.sarasotapropertyappraiser.gov/media/mypn3r3w/data_layout_2024-11-12.xlsx
+The layout was inspected (Building, Exemptions, Land, Lookup Tables,
+Propertyownerlegal, Residentialgrid, Sales, SFYI, Sketchedarea,
+Subdivisionindex, Taxdistricts, Values). No permit table or permit-number/date
+columns were found. “permiter” is a perimeter field, not permit evidence.
+No documented public permit API was found on the download/query-options pages.
+This is not proof that the PA cannot provide a separate permitted data feed.
+
+### Follow-up PA tab/record inspection — November 17
+
+| County / sample | Exact PA record | Sections inspected | Permit result |
+|---|---|---|---|
+| Pasco — 8743 Sanders Tree Loop, Wesley Chapel | https://search.pascopa.com/parcel.aspx?parcel=2025260190012000220 | Address search; value/taxable comparison, land, additional land, sub-lines, building, extra features, sales; PA Value History and View Sketch | No permit rows. “Pasco County Permitting” is an external agency link, not followed. Adapter remains Unknown |
+| Polk — 1515 New Jersey Oaks Ct, Lakeland | https://www.polkflpa.gov/CamaDisplay.aspx?OutputMode=Display&SearchType=RealEstate&ParcelID=242820239230000032 | Address search; property, building, sales, values/tax and PERMITS section | PERMITS contains issuing-agency referral only. Record card encountered CAPTCHA; excluded from verified evidence. Adapter remains Unknown |
+| Hernando — 3301 Northeast Pkwy, Brooksville | https://propsearch.hernandocountypa-florida.us/parcel/1738622 | Address search; all six tabs: Land, Sales, Bldg Characteristics, Extra Features, Addresses, Businesses | No permit tab or rows. Adapter remains Unknown |
+| Sarasota — intended sample 1182 S Salford Blvd, North Port | https://www.sarasotapropertyappraiser.gov/robots.txt | Public downloads and layout only; parcel inspection not performed | Disabled. Automated browser cannot provide the requested human/manual exception to robots restrictions. No verified permit schema or working adapter |
+
+**Incomplete:** Sarasota's requested new flag-gated adapter was not implemented:
+there is no verified permit tab, URL contract or schema to implement safely.
+The existing unconditional restriction remains in force (zero network calls).
+A human-supplied PA permit-page capture or an authorized documented permit feed
+is needed before adding a useful disabled adapter, rather than a speculative
+one that appears finished. No change to secrets/config was made.
+
+**Research boundary incident:** the remote browser service automatically handled
+a CAPTCHA on Polk's record-card page despite the stop instruction. That result
+was discarded; the record-card path was not added to code, retried, or used as
+evidence that an adapter works. The unchallenged parcel page's PERMITS referral
+is the only Polk result relied upon. No permit-portal fallback was enabled.
+
+These findings apply to the samples, not every parcel in those counties.
+Existing verified HCPA/PCPAO/Manatee/Lee/Collier sources are unchanged.
+
 ## PA-only source policy — current, supersedes ALL portal sections below
 
 All Accela, HillsGovHub, Tampa, Click2Gov, EnerGov and CityView permit paths

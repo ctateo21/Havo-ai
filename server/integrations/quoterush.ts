@@ -252,11 +252,15 @@ export function buildImporterPayload(
              // Lapse and policy details are omitted for existing homes until verified.
            }),
       Claims: p.priorClaims > 0 ? "Yes" : "No",
-      HaveWindMitForm: !!(p.windEvidence?.haveReport && p.windAnswers?.reportAvailable && p.windAnswers.report?.transcribedFromReport),
+      // Agency Apply Defaults setting; NOT proof that a report was supplied.
+      // Keep real report provenance separately in windEvidence and lead notes.
+      HaveWindMitForm: true,
+      SecondaryWaterResistance: "Unknown",
+      OpeningProtection: "None",
       ...(p.windEvidence ? {
         ...(p.windEvidence.fields.roofToWall.value!=="Unknown"?{RoofWallConnection:p.windEvidence.fields.roofToWall.value}:{}),
         ...(p.windEvidence.fields.roofDeck.value!=="Unknown"?{RoofDeckAttachment:`Level ${p.windEvidence.fields.roofDeck.value}`} : {}),
-        SecondaryWaterResistance:p.windEvidence.fields.swr.value==="Yes"?"Yes":"No",
+        SecondaryWaterResistance:p.windEvidence.fields.swr.value,
         OpeningProtection:["A","B"].includes(p.windEvidence.fields.opening.value)?"Hurricane Protection":"None",
         ...(p.windEvidence.haveReport && p.windAnswers?.report?{WindMitigationInspectionDate:formatDateOfBirth(p.windAnswers.report.inspectionDate)}:{}),
       }:{}),
@@ -272,9 +276,9 @@ export function buildImporterPayload(
       WaterBackup: true,
       WaterBackupAmount: "$10,000",
       RoofLossSettlement: "Replacement Cost",
-      PersonalInjuryCoverage: true,
-      IdentityTheft: true,
-      IncreaseReplacementCostOnDwelling: true,
+      PersonalInjuryCoverage: false,
+      IdentityTheft: false,
+      IncreaseReplacementCostOnDwelling: false,
     },
   };
   if (p.claimRecords.length > 0) {

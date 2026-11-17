@@ -113,9 +113,9 @@ test("importer payload retains exact property answers, mixed construction, and b
     {
       yearBuilt: "2007",
       roofYear: "2022",
-      openingProtection: undefined,
+      openingProtection: "None",
       roofShape: "Hip",
-      swr: undefined,
+      swr: "Unknown",
       constructionType: "Mixed",
       construction: "Concrete Block",
       masonry: "Concrete Block",

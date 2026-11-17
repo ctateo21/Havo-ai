@@ -11,5 +11,7 @@ export async function cachedQuoteRushListing(address:string):Promise<Record<stri
   const raw=data.raw as Record<string,any>|null;
   return {propertyType:value.propertyType,stories:value.stories??raw?.resoFacts?.stories,
     hasPool:value.hasPool??raw?.resoFacts?.hasPool,
+    poolScreenedEnclosure:value.poolScreenedEnclosure??raw?.resoFacts?.poolScreenedEnclosure,
+    screenedEnclosureSquareFeet:value.screenedEnclosureSquareFeet??raw?.resoFacts?.screenedEnclosureSquareFeet,
     fullBathCount:value.fullBathrooms??value.bathroomsFull??raw?.resoFacts?.bathroomsFull};
 }

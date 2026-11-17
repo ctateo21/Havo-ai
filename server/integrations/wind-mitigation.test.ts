@@ -87,7 +87,7 @@ test("AI deadline aborts and continues, heartbeat refreshes and detects lost own
 test("AI cannot supply jurisdiction ratings, Coverage A or flood",()=>{
   assert.deepEqual(parseHomeEstimates(JSON.stringify(Object.fromEntries(["ProtectionClass","BCEG","CoverageA","FloodZone"].map(k=>[k,{value:"1",confidence:1}])))),{});
 });
-test("payload sends evidence-based credits and user-gated community, never credit permission",()=>{
+test("payload sends evidence-based wind values with agency checkbox/community defaults, never credit permission",()=>{
   const p={...base,streetAddress:"100 Example St",city:"Tampa",state:"FL",zip:"33607",coverageA:300000,policyType:"HO3",sqFt:1200,
     constructionType:"Masonry",masonryConstruction:"Concrete Block",frameConstruction:"",priorClaims:0,claimRecords:[],
     firstName:"Example",lastName:"Applicant",dateOfBirth:"1980-01-01",phone:"5555550101",email:"example@example.test",
@@ -96,11 +96,11 @@ test("payload sends evidence-based credits and user-gated community, never credi
     openingProtection:"None",secondaryWaterResistance:"No",roofShape:"Gable",creditPermissionGranted:false,
     windAnswers:{...answers,gated:true},windEvidence:resolveWind({...base,yearBuilt:2003,roofYear:2022,permits:[permit]})} as QuoteRushParams;
   const payload=buildImporterPayload(p,"agent@example.test");
-  assert.equal(payload.HO.HaveWindMitForm,false);assert.equal(payload.HO.RoofDeckAttachment,"Level B");
+  assert.equal(payload.HO.HaveWindMitForm,true);assert.equal(payload.HO.RoofDeckAttachment,"Level B");
   assert.equal(payload.HO.RoofWallConnection,"Clips");assert.equal(payload.HO.SecondaryWaterResistance,"Yes");
   assert.equal(payload.HO.GatedCommunity,"Single Entry");assert.equal(payload.Client.CreditPermission,"No");
   assert.equal(payload.Client.AssumedCreditScore,"Excellent");assert.match(payload.Client.OverviewNotes,/estimated/);
-  assert.equal(buildImporterPayload({...p,windAnswers:answers},"agent@example.test").HO.GatedCommunity,undefined);
+  assert.equal(buildImporterPayload({...p,windAnswers:answers},"agent@example.test").HO.GatedCommunity,"Single Entry");
   const reportAnswers=windAnswersSchema.parse({...answers,reportAvailable:true,report:{reference:"Example Report",
     inspectionDate:"2026-01-01",transcribedFromReport:true,roofToWall:"Single Wraps",roofDeck:"A",swr:"No",opening:"B",shape:"Hip"}});
   const reportPayload=buildImporterPayload({...p,windAnswers:reportAnswers,windEvidence:resolveWind({...base,answers:reportAnswers})},"agent@example.test");

@@ -26,8 +26,9 @@ test("documented home defaults preserve consumer coverage, occupancy, dates, cre
   assert.equal(payload.HO.UsageType,"Secondary");
   assert.equal(payload.HO.PolicyEffectiveDate,"12/09/2026");
   assert.equal(payload.HO.FloodZone,"X");
-  assert.equal(payload.HO.HaveWindMitForm,false);
-  assert.equal(payload.HO.OpeningProtection,undefined);
+  assert.equal(payload.HO.HaveWindMitForm,true);
+  assert.equal(payload.HO.OpeningProtection,"None");
+  assert.equal(payload.HO.SecondaryWaterResistance,"Unknown");
   assert.equal(payload.HO.RoofMaterial,"Architectural Shingles");
   assert.equal(payload.HO.UpdatePlumbingYear,undefined);
   assert.equal(payload.HO.ConstructionType,"Masonry");
@@ -38,6 +39,34 @@ test("documented home defaults preserve consumer coverage, occupancy, dates, cre
   assert.equal(payload.HO.LossAssessment,"$1,000");
   assert.equal(payload.HO.underwriting.FireExtinguisher,true);
   assert.match(payload.Client.OverviewNotes,/Agency defaults/);
+});
+test("Apply Defaults fields are explicit without fabricating report provenance",()=>{
+  const out=buildImporterPayload({...p,windAnswers:{gated:false} as any},"agent@example.test");
+  assert.equal(out.HO.GatedCommunity,"Single Entry");
+  assert.equal(out.HO.HaveWindMitForm,true);
+  assert.equal(out.HO.Terrain,"Exposure B");
+  assert.equal(out.HO.Sprinklers,"None");
+  assert.equal(out.HO.BusinessOnPremises,"No");
+  assert.equal(out.HO.BurglarAlarm,"None");
+  assert.equal(out.HO.FireAlarm,"None");
+  assert.equal(out.HO.PrimaryWaterHeaterLocation,"Garage");
+  for(const key of ["PersonalInjuryCoverage","IdentityTheft","IncreaseReplacementCostOnDwelling"])
+    assert.equal(out.HO[key],false);
+  assert.match(out.Client.OverviewNotes,/NOT evidence of a real report/);
+  assert.equal(out.HO.WindMitigationInspectionDate,undefined);
+});
+test("five previously blank Home fields use documented keys and Coverage A never comes from AI",()=>{
+  const homeFields=parseHomeEstimates(JSON.stringify({
+    StructureType:{value:"Single Family",confidence:.8},Stories:{value:"2",confidence:.8},
+    Pool:{value:"Above Ground",confidence:.8},PoolScreenedEnclosure:{value:true,confidence:.8},
+    ScreenedEnclosureSquareFeet:{value:400,confidence:.8},CoverageA:{value:1,confidence:1},
+  }));
+  const {HO}=buildImporterPayload({...p,homeFields},"agent@example.test");
+  for(const key of ["StructureType","Stories","Pool","CoverageA","PoolScreenedEnclosure"])
+    assert.ok(HO[key]!==undefined && HO[key]!=="",key);
+  assert.equal(HO.PoolScreenedEnclosure,true);
+  assert.equal(HO.ScreenedEnclosureSquareFeet,"400");
+  assert.equal(HO.CoverageA,"331000");
 });
 test("previous address and observed desktop enums map without changing protected fields",()=>{
   const previousAddress={Address:"200 Example Ave",City:"Tampa",State:"FL",Zip:"33607"};

@@ -51,6 +51,13 @@ export async function enrichQuoteRushHome(address: string, facts: {
   if(profile?.hasPool!==true && listing.hasPool!==true)fields.Pool={
     value:"None",source:profile?.hasPool===false||listing.hasPool===false?"property data":"agency default",estimated:profile?.hasPool!==false&&listing.hasPool!==false,
     confidence:profile?.hasPool===false||listing.hasPool===false?1:0,fetchedAt:now.toISOString()};
+  for (const key of ["PoolScreenedEnclosure","ScreenedEnclosureSquareFeet"] as const) {
+    const raw=listing[key === "PoolScreenedEnclosure" ? "poolScreenedEnclosure" : "screenedEnclosureSquareFeet"];
+    const value=validateHomeValue(key,raw);
+    if(value!==null)fields[key]={value,source:"property data",estimated:false,confidence:1,fetchedAt:now.toISOString()};
+  }
+  if(!fields.PoolScreenedEnclosure && fields.Pool?.value==="None")fields.PoolScreenedEnclosure={
+    value:"false",source:"agency default",estimated:true,confidence:0,fetchedAt:now.toISOString()};
   const missing = (Object.keys(HOME_FIELD_RULES) as HomeField[]).filter(key => !fields[key]);
   // Do not manufacture pool details when records affirm no pool. Unknown is not zero.
   const requested = missing.filter(key => key!=="FullBathCount" && !(fields.Pool?.value === "None" &&
