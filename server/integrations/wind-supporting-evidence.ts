@@ -19,7 +19,7 @@ export async function supportingWind(address:string,userId?:string):Promise<Supp
     if(saved?.version===3&&(!userId||saved.aiAttempted)&&Date.now()-Date.parse(saved.fetchedAt)<(saved.permits.status==="available"?86400000*30:300000))return saved;
     const value=await boundedOptional(async signal=>{
       const [appraiser,coastal]=await Promise.all([
-        lookupWindPermits(profile.county,address),
+        lookupWindPermits(profile.county,address,fetch,signal),
         checkCoastalZone(profile.county,profile.latitude,profile.longitude),
       ]);
       const all=appraiser.permits;

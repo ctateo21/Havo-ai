@@ -66,12 +66,12 @@ test("report values override every estimate and require attested report details"
   assert.equal(result.fields.roofDeck.value,"A");assert.equal(result.fields.swr.value,"No");
   assert.equal(result.fields.roofDeck.estimated,false);
 });
-test("two permit parsers preserve identifiers, dates and source, Collier skipped",async()=>{
+test("two permit parsers preserve identifiers, dates and source; unresolved Collier stays Unknown",async()=>{
   assert.equal(parseHcpaPermits({permitInfo:[{permitNum:"EXAMPLE",descr:"IMPACT WINDOWS",issueDate:"1/2/2020"}]})[0].date,"2020-01-02");
   const html='<table id="tblPermit"><tbody><tr><td>EXAMPLE</td><td>ROOF</td><td>02/01/2018</td><td>0</td></tr></tbody></table>';
   assert.equal(parsePinellasPermits(html,"https://example.test")[0].date,"2018-02-01");
   assert.throws(()=>parsePinellasPermits("CAPTCHA","https://example.test"));
-  assert.equal((await lookupWindPermits("collier","100 Example St",async()=>{throw Error("must not fetch");})).status,"unsupported");
+  assert.equal((await lookupWindPermits("collier","100 Example St",async()=>{throw Error("mock unavailable");})).status,"unavailable");
 });
 test("AI deadline aborts and continues, heartbeat refreshes and detects lost ownership",async()=>{
   let aborted=false,beats=0,owned=true;

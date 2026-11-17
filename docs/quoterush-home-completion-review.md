@@ -7,25 +7,54 @@ are disabled. The compatibility module has no URLs and performs zero network
 calls. No Firecrawl browser-interact permit fallback remains. Old mixed-source
 cached evidence is invalidated by the new supporting-evidence version.
 
-Only HCPA and PCPAO currently have verified enabled PA adapters. Other counties
-return Unknown, not city-portal data. **The requested all-county expansion is
-not finished.** No new county adapter was enabled without verifying its parcel
-page and parser. Homepage permit text is not parcel verification.
+HCPA, PCPAO, Lee, Manatee and Collier now have verified PA permit sources.
+All seven remaining counties were investigated at parcel level where permitted.
+Pasco, Polk and Hernando expose no usable PA permit records on the tested pages;
+their adapters fail explicitly with a reason, never follow issuing-agency links.
+Sarasota is skipped because the PA expressly disallows automated parcel access.
 
 | County | PA URL inspected / existing source | Parcel permit section verified | Adapter returned records |
 |---|---|---|---|
 | Hillsborough | gis.hcpafl.org/CommonServices/property/search/ParcelData (existing exact-address/pin lookup) | Yes, existing verified integration | Yes, prior live check: pool permit |
 | Pinellas | pcpao.gov/property-details (existing exact-address/strap lookup) | Yes, existing verified integration | Yes, prior live check: 2018 ROOF |
-| Lee | leepa.org/Display/DisplayParcel.aspx?FolioID=10207619 | Yes: Building / Construction Permit Data section; rows still need verification | Not implemented |
-| Manatee | manateepao.gov/parcel/?parid=2051711709 | Unverified; page responds and mentions permits, rows not verified | Not implemented |
-| Pasco | search.pascopa.com/ | Unverified; homepage only | Not implemented |
-| Polk | polkpa.org/ | Unverified; homepage only | Not implemented |
-| Sarasota | sc-pa.com/ | Unverified; homepage only | Not implemented |
-| Hernando | hernandopa-fl.us/ | Unverified; homepage only | Not implemented |
-| Collier | collierappraiser.com/ | Unverified; homepage only | Not implemented |
+| Lee | https://www.leepa.org/Display/DisplayParcel.aspx?FolioID=10207619&PermitDetails=True | Yes | Yes: 2 records, 9793 Deerfoot Dr, Fort Myers; direct HTTP adapter, ~1.25 s |
+| Manatee | https://www.manateepao.gov/parcel/?parid=2051711709 | Yes, Permits tab | Yes: 5 records, 7755 Pine Trace Dr, Sarasota; PA `pao-model-permits.php?parid=` request discovered from `showPermits()`, ~4.39 s |
+| Pasco | https://search.pascopa.com/parcel.aspx?sec=26&twn=25&rng=20&sbb=0190&blk=01200&lot=0220&action=Submit | No records section on tested page; external permitting link only | No: 8743 Sanders Tree Loop, Wesley Chapel. Live adapter also failed strict parcel resolution, so it stopped before fetching the detail; separate read-only detail check found the external link only |
+| Polk | https://www.polkflpa.gov/CamaDisplay.aspx?OutputMode=Display&SearchType=RealEstate&ParcelID=242820239230000032 | Yes, but only directions to issuing agency | No: 1515 New Jersey Oaks Ct, Lakeland. Old polkpa.org domain migration discovered with Firecrawl; current PA page has no records |
+| Sarasota | https://www.sc-pa.com/robots.txt | Not inspected: access disallowed | Skipped: 1182 S Salford Blvd sample not scraped; rules disallow parcel/detail, Result and related paths |
+| Hernando | https://propsearch.hernandocountypa-florida.us/parcel/1738622 | No on tested page | No: 3301 Northeast Pkwy, Brooksville; Firecrawl terms/address search resolved exact detail; no permits section |
+| Collier | https://www.collierappraiser.com/Main_Search/ParcelDetail.html?FolioID=57647440005 | Yes, Detail tab | Yes: 6 dated records, 940 Montego Ct, Marco Island, ~9.87 s; undated seventh row excluded |
 
 These checks did not use authenticated QuoteRush or bypass a CAPTCHA. No claim
-is made that an unverified site lacks a permits section.
+is made that the tested absence of records proves absence for every parcel.
+
+### Implementation and remaining source limitations
+
+- Exact identity comes from existing county parcel resolution; address mismatch
+  or ambiguity prevents fetching permit records. Collier's rendered FolioID must
+  match the independently resolved parcel. Raw records also have a per-parcel
+  30-day cache; concurrent callers share a request. Supporting evidence continues
+  to persist through the existing property-characteristics cache.
+- Collier uses Firecrawl **only on PA pages**, accepts I Agree, searches the
+  supplied street, opens Detail and reads the permit table. It never requests PA
+  data addresses. New parcel starts are spaced ten seconds, with at most two
+  active sessions. Sessions are stopped in finally, including failed/CAPTCHA runs.
+- New direct-source operations have an 18-second cap; Collier has a 50-second
+  cap. The existing 75-second evidence / 80-second pre-import cap remains, with
+  cancellation propagated. AI classification remains at most 20 seconds.
+- Public permit descriptions alone enter the existing authenticated OpenRouter
+  classifier. Source URLs, dates and permit numbers are not generated by AI.
+  Its verbatim evidence validation and report-over-estimate priority are retained.
+  Live checks above verified PA records, **not authenticated live AI classification**;
+  classification mappings are fixture-tested.
+- Lee explicitly says its displayed date is when the PA **received** the record.
+  Store that qualification and do not use it to prove a reroof issue-date cutoff.
+- Missing issue dates are never replaced by completion dates. Generic `ROOF`
+  descriptions do not prove a replacement or SWR. No portal, CAPTCHA, robots or
+  source-policy bypass was used.
+- No migration is needed. Existing private report migration remains unapplied.
+- Four counties remain unavailable under the PA-only restriction for the reasons
+  above; this is a source limitation, not an assertion that they have no permits.
 
 AI-classified explicit peel-and-stick/self-adhered underlayment/seam-tape evidence
 now gives estimated SWR Yes with PA permit number, verbatim quote and source URL.

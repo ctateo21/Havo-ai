@@ -34,7 +34,7 @@ export const windAnswersSchema=z.preprocess(value=>{
 },windObjectSchema);
 export type WindAnswers = z.infer<typeof windAnswersSchema>;
 export type WindEvidence = {value:string; estimated:boolean; source:string};
-export type PermitEvidence = {number:string; description:string; date:string; source:string; sourceUrl:string;
+export type PermitEvidence = {number:string; description:string; date:string; source:string; sourceUrl:string;dateBasis?:"issued"|"received";
   classification?:{kind:"openings"|"garage_door"|"reroof"|"roof_detail"|"other";quote:string;swr:boolean}};
 export type CoastalEvidence = {status:"inside"|"outside"|"unknown"; distanceFeet:number|null; source:string; sourceUrl:string; reason?:string};
 export type WindResult = {haveReport:boolean; fields:Record<"roofToWall"|"roofDeck"|"swr"|"opening"|"shape",WindEvidence>; notes:string[]};
@@ -57,7 +57,7 @@ export function resolveWind(input:{county:string; yearBuilt:number; roofYear:num
   const cutoff=CLIP_YEAR[county]??2003;
   const clips=input.yearBuilt>=2003 || input.yearBuilt>=cutoff ||
     (input.yearBuilt>=1987 && input.yearBuilt<=1995 && input.coastal?.status==="inside");
-  const roofPermit=permits.find(p=>permitKinds(p).roof && Date.parse(p.date)>Date.parse("2007-10-01"));
+  const roofPermit=permits.find(p=>p.dateBasis!=="received" && permitKinds(p).roof && Date.parse(p.date)>Date.parse("2007-10-01"));
   const openings=permits.filter(p=>permitKinds(p).opening);
   const swrPermit=permits.find(p=>p.classification?.swr===true&&
     p.description.includes(p.classification.quote)&&

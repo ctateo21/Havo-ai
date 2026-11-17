@@ -13,6 +13,12 @@ permit portals, Accela, Click2Gov, EnerGov or their browser fallbacks.
 **How to apply:** Verify a real PA parcel permits section before enabling an adapter;
 unsupported counties stay Unknown. Garage-only permits cannot suggest all openings.
 
+Lee PA permit dates represent receipt of information, not verified issue dates.
+**Why:** The PA's Building / Construction Permit Data disclaimer expressly says
+the date may not represent issuance or completion.
+**How to apply:** Preserve that qualification; never use receipt dates to prove
+that a reroof was issued after an underwriting cutoff.
+
 Christian requires report-backed, user-confirmed and estimated wind answers to
 remain distinct in the UI and stored evidence. Existing real report values override
 estimates; only a real report permits HaveWindMitForm. ProtectionClass and BCEG
