@@ -13,6 +13,14 @@ estimates; only a real report permits HaveWindMitForm. ProtectionClass and BCEG
 join Coverage A and flood zone as never-AI fields. Estimated roof-to-wall connections
 must never exceed Clips, and uncertain coastal geography must not justify Clips.
 
+Deck attachment C estimates are limited to pre-2002 homes with explicit qualifying
+re-roof evidence. Homes built 2002+ stay B maximum without a report. Generic ROOF
+permit text is not proof of re-roof work. Uploaded reports are private to the user,
+and extraction remains an unconfirmed draft until the user reviews it.
+
+**Why:** Christian narrowed the deck rule and requires evidence, not broad keyword
+matches or automatic acceptance of document extraction.
+
 **Why:** Preliminary carrier credits must not exceed their supporting evidence.
 **How to apply:** Preserve provenance through prompts, cached values and importer
 notes; exclude old AI jurisdiction-rating evidence as well as new inference.

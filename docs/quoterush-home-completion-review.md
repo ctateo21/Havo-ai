@@ -1,5 +1,132 @@
 # QuoteRush home completion and automatic carrier submission
 
+## November 17 permit/report/coastal round (supersedes the November 16 limitations below)
+
+### Implemented behavior
+
+- Firecrawl search + scrape and bounded public-browser fallback are configured for
+  HillsGovHub, Tampa, Pasco/Polk/Pinellas/Manatee/Sarasota/Lee Accela,
+  St. Petersburg Click2Gov, Hernando/Cape Coral/Fort Myers/Marco Island EnerGov.
+  HCPA and PCPAO parcel-permit adapters remain primary independent sources.
+  Collier CityView is excluded. CAPTCHA/access-denied pages stop the adapter;
+  no login, CAPTCHA solving, stealth proxies or bulk harvesting.
+- Browser fallback only submits a visible address/search field. Multi-field
+  forms without that supported control remain unavailable; this is not a claim
+  that every jurisdiction's portal is operational.
+- Model extraction is server-side OpenRouter, with untrusted-content instructions,
+  schema checks and exact source matching. Permit identity, full property address,
+  number, date and verbatim quote must appear in source text. Classification uses
+  an existing record index, never model-created IDs/URLs. Broad `roof` matching
+  no longer confers re-roof credit. Missing AI/config/evidence gives no credit.
+  Classification records openings, garage doors, explicit re-roof, roof details
+  (including explicit SWR materials), and other work.
+- Authenticated AI is charged through existing per-user/global admission controls.
+  Guests can read cached evidence/appraiser facts; uncached AI work requires the
+  authenticated live-quote flow. Supporting evidence stays in the existing
+  address-bound parcel profile cache, not a new table. Success TTL 30 days;
+  unavailable results have short TTL. Per-process portal concurrency is two,
+  with one-second admission spacing; provider requests and overall work are capped.
+- qr-start waits up to 80 seconds; supporting evidence has a 75-second cap.
+  This runs **before the import job is enqueued/claimed**, not inside its lease.
+  The existing 20-second claimed_at heartbeat remains on the durable worker.
+  Timed-out enrichment returns no permit/coastal credits; existing user/report
+  evidence and separately labeled year-based rules remain unchanged.
+- UI displays “Checking county permits and records…”. Opening-permit clues
+  preselect likely-all only when untouched, never the explicit confirmation.
+  A user must confirm all openings before any opening credit is used.
+- Deck C is now limited to **pre-2002** homes with a classified re-roof permit
+  after 2007-10-01. Homes built 2002+ remain B maximum without an actual report.
+- Permit UA identifies `Havo/1.0` (not HavoPropertyTax); the direct
+  appraiser adapters retain the existing Mozilla-compatible wrapper required
+  by the PCPAO firewall.
+
+### Private report uploads — migration awaiting approval
+
+New migration, **written but NOT applied**:
+`supabase/migrations/2026_11_17_private_wind_reports.sql`.
+It creates the private `private-wind-reports` Supabase Storage bucket (8 MiB;
+PDF/PNG/JPEG) and a restrictive storage-object policy denying direct anon and
+authenticated client access to this bucket. It creates no application table.
+
+The authenticated server stores objects under verified-user-UUID/random-UUID,
+checks bucket privacy before upload, validates file signatures/type/size, and
+streams downloads only from the current user's prefix. No public or signed
+download URLs are returned. Responses are private/no-store. Upload IDs are checked
+for owner access again at qr-start. Files never enter shared property evidence.
+Until the migration is approved/applied, upload fails closed with manual entry
+available. No live upload or storage provisioning was performed in this round.
+
+OpenRouter uses the existing approved document model/provider policy with native
+PDF or image input. Extraction is an editable **unconfirmed draft**: inspection
+date, inspector, year built, roof covering, deck A/B/C/D, roof-to-wall, geometry,
+SWR, opening code. Missing/illegible fields remain null/Unknown. The user must
+explicitly confirm; editing a value clears confirmation. Saved files remain
+available privately if AI extraction fails. Manual transcription still works.
+Coverage A, flood, ProtectionClass and BCEG are never inferred.
+
+### Coastal evidence and its limits
+
+CCCL distance uses the requested FDEP line layer. Landward/island decisions use
+FDEP's published **Florida Coastal Building Zone** polygon layer:
+https://services1.arcgis.com/nRHtyn3uE1kyzoYc/ArcGIS/rest/services/Florida_Coastal_Building_Zone/FeatureServer/0
+
+Its metadata explicitly describes 1,500 feet landward for mainland and 5,000 feet
+landward or the entire narrower island for barrier islands; it supplies
+DEFINITION_SOURCE_TYPE and island name. Point-in-polygon avoids inventing an
+ocean-side bearing or classifying islands from street/city names.
+Inside matching Standard/Barrier Island polygons => estimated inside; an
+error-free empty result => outside; errors, unknown types, county mismatch or
+truncation => Unknown. The requested no-CCCL county exclusions remain unchanged.
+For 1987–1995 homes, inside supplies estimated Clips, never wraps.
+
+**Important:** FDEP describes these polygons as approximate/illustrative, not
+authoritative regulatory boundaries. This is a statutory-zone estimate, not proof
+of a parcel's exact 1986 historical boundary; that remains unverified. Source and
+this limitation are stored in evidence/lead notes. Do not call it a survey.
+Read-only checks in this round: Marco Gulf-side coordinate (25.92712,-81.72891)
+was inside a Barrier Island polygon, about 90.65 ft from CCCL; inland Naples
+(26.18,-81.75) was outside. Fixture tests exercise those response shapes and errors.
+
+### Exact QuoteRush importer fields and verification boundary
+
+Reference: public **Add Lead** JSON importer example:
+https://api-docs.quoterush.com/api/collections/9908457/2sAYX6pMfX?segregateAuth=true&versionTag=latest
+
+This documents examples, **not a complete enum contract**. No authenticated
+QuoteRush request was made to validate additional enum values in this round.
+
+| Field sent under HO | Values Havo sends / origin | Documentation evidence |
+|---|---|---|
+| RoofWallConnection | Clips from year/coastal estimates; Toe Nails/Clips/Single Wraps/Double Wraps from confirmed report; Unknown omitted | Key and `Single Wraps` in Add Lead example. **UNVERIFIED enum values:** Toe Nails, Clips, Double Wraps |
+| RoofDeckAttachment | `Level B` or `Level C` estimated; `Level A/B/C/D` from confirmed report; Unknown omitted | Key and `Level A` in example. **UNVERIFIED enum values:** Level B/C/D |
+| SecondaryWaterResistance | `Yes` from requested roof-year/user-confirmation rule or report; otherwise `No` meaning no credit | Key and `No` in example. `Yes` is **UNVERIFIED** against the public enum contract |
+| OpeningProtection | `Hurricane Protection` for evidence code A/B; otherwise `None` / no credit. Estimate B requires permit + explicit all-openings confirmation. Exact OIR code retained in notes | Key and `Hurricane Protection` in example. `None` is **UNVERIFIED**; no claim that API distinguishes OIR A from B |
+| WindMitigationInspectionDate | Actual confirmed report date, MM/DD/YYYY; omitted without report | Key and `02/29/2020` in example |
+| HaveWindMitForm | Boolean true only with attested real report (typed or uploaded/confirmed); false otherwise | Key and boolean true in example; false complements it, not an assertion that estimated answers are report-backed |
+
+QuoteRush support still needs to confirm the unlisted enum options and whether
+wind credits are honored when HaveWindMitForm is false. Carrier acceptance is
+not established by mocked payload tests. CreditPermission remains No and
+AssumedCreditScore remains Excellent.
+
+### Portal verification boundary
+
+HCPA returned pool permit BLD-20-0475137 (2020-06-12). PCPAO returned permit
+18-02000050 (2018-02-01), description `ROOF`, in this round. A bare Havo UA
+was rejected by its firewall, so the direct adapter retains the Mozilla-compatible
+wrapper with the generic Havo product token; that recheck succeeded. Generic
+`ROOF` is retained as evidence but is **not** sufficient to grant re-roof C.
+Firecrawl indexed searches for the Tampa, St. Petersburg and Marco sample
+properties returned no verified records. Public browser fallback is implemented
+and session cleanup is tested, but do not describe any additional portal as a
+working permit source until a real matched permit is returned. Other configured
+portals remain unverified. A portal's failure never becomes evidence of no permits.
+The browser-enabled recheck returned unavailable for HillsGovHub and Marco;
+Tampa, Pinellas Accela and St. Petersburg returned no verified records.
+
+Workspace and production secret-existence checks: FIRECRAWL_API_KEY **yes**;
+OPENROUTER_API_KEY **yes**. No secret values inspected or changed.
+
 ## November 16 evidence and worker-safety update (supersedes older wind notes)
 
 - Incomplete optional previous addresses are omitted on both client and server.

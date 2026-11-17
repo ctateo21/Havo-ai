@@ -1139,9 +1139,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if(address.length<5||address.length>500)return res.status(400).json({error:"Address required"});
     const {supportingWind}=await import("./integrations/wind-supporting-evidence");
     const {boundedOptional}=await import("./integrations/quote-job-safety");
-    const evidence=await boundedOptional(()=>supportingWind(address),null,1500);
+    const evidence=await boundedOptional(()=>supportingWind(address,user?.id),null,1500);
     res.json({status:evidence?"ready":"checking",evidence});
   });
+  const {registerWindReports}=await import("./integrations/wind-report-upload");
+  registerWindReports(app,optionalUser);
   app.get("/api/insurance/property-characteristics", async (req, res) => {
     const user = await optionalUser(req);
     const address = String(req.query.address ?? "").trim();
@@ -1408,6 +1410,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await getPrivateInsuranceProperty(user.id, cacheRequest.address);
         const { request: b, propertyDefaults } =
           prepareQuoteRushStartRequest(req.body,resolveQuoteRushPropertyDefaults,currentPolicyExpirationDate);
+        if(b.windAnswers?.reportAvailable&&b.windAnswers.report?.uploadId){
+          const {ownsWindReport}=await import("./integrations/wind-report-upload");
+          if(!await ownsWindReport(user.id,b.windAnswers.report.uploadId))
+            return res.status(403).json({error:"This report is unavailable for your account. Upload it again or enter the report values by hand."});
+        }
         const answerIdentity=quoteAnswerIdentity({...b,policyEffectiveDate:propertyDefaults.policyEffectiveDate.value},user.id);
         const now = new Date();
         let reclaimedExpiredCacheRow = false;
@@ -1877,7 +1884,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const {resolveWind}=await import("../shared/wind-mitigation");
         const {supportingWind}=await import("./integrations/wind-supporting-evidence");
         const {boundedOptional}=await import("./integrations/quote-job-safety");
-        const windSupporting=await boundedOptional(()=>supportingWind(b.address),null,250);
+        // Enrichment completes before enqueueImportJob creates/claims the durable
+        // import job. It cannot consume that job's 180-second lease.
+        const windSupporting=await boundedOptional(()=>supportingWind(b.address,user.id),null,80000);
         const windEvidence=resolveWind({county,yearBuilt:b.yearBuilt,roofYear:b.roofYear,answers:b.windAnswers,
           permits:windSupporting?.permits.permits,coastal:windSupporting?.coastal});
         const params: QuoteRushParams = {

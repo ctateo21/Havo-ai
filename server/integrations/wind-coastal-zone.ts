@@ -1,5 +1,19 @@
 import type {CoastalEvidence} from "../../shared/wind-mitigation";
 export const CCCL_URL="https://ca.dep.state.fl.us/arcgis/rest/services/OpenData/COASTAL_ENV_PERM/MapServer/2";
+export const CBZ_URL="https://services1.arcgis.com/nRHtyn3uE1kyzoYc/ArcGIS/rest/services/Florida_Coastal_Building_Zone/FeatureServer/0";
+/** FDEP's polygon already encodes the landward side and island-width clipping.
+ * Its published methodology uses 1500ft mainland / 5000ft barrier islands.
+ * It is approximate, NOT a survey or a historical parcel-level determination. */
+export function classifyPublishedZone(data:any,county:string,distanceFeet:number|null):CoastalEvidence{
+  const base={distanceFeet,source:"FDEP Florida Coastal Building Zone (approximate statutory boundary)",sourceUrl:CBZ_URL};
+  if(data?.error||!Array.isArray(data?.features)||data.exceededTransferLimit)
+    return {...base,status:"unknown",reason:"Coastal polygon data unavailable"};
+  if(data.features.length===0)return {...base,status:"outside",reason:"Outside FDEP mapped coastal building zone; approximate, not a survey"};
+  const valid=data.features.filter((f:any)=>String(f.attributes?.COUNTY??"").toLowerCase().replace(/ county$/,"")===county.toLowerCase()
+    &&["Barrier Island","Standard"].includes(f.attributes?.DEFINITION_SOURCE_TYPE));
+  if(valid.length!==data.features.length||!valid.length)return {...base,status:"unknown",reason:"Unrecognized or conflicting coastal polygon classification"};
+  return {...base,status:"inside",reason:`Estimated from FDEP ${valid[0].attributes.DEFINITION_SOURCE_TYPE} polygon; landward buffer and island clipping supplied by FDEP. Not proof of the parcel's 1986 regulatory boundary.`};
+}
 export function classifyCoastal(distanceFeet:number|null,geography?:{landward:boolean;barrierIsland:boolean;wholeNarrowIsland?:boolean}):CoastalEvidence{
   const base={distanceFeet,source:"FDEP Coastal Construction Control Lines",sourceUrl:CCCL_URL};
   if(distanceFeet===null||!Number.isFinite(distanceFeet)||distanceFeet<0)return {...base,status:"unknown",reason:"CCCL distance unavailable"};
@@ -34,6 +48,11 @@ export async function checkCoastalZone(county:string,lat:number|null,lng:number|
       const distance=nearestLineFeet(lat,lng,j.features.flatMap((f:any)=>f.geometry?.paths??[]));
       result=classifyCoastal(distance);
     }}
+    const point=new URLSearchParams({f:"json",geometry:`${lng},${lat}`,geometryType:"esriGeometryPoint",
+      inSR:"4326",returnGeometry:"false",outFields:"COUNTY,DEFINITION_SOURCE_TYPE,COASTAL_BARRIER_ISLAND_NAME",
+      spatialRel:"esriSpatialRelIntersects"});
+    const polygon=await http(`${CBZ_URL}/query?${point}`,{signal:AbortSignal.timeout(8000)});
+    if(polygon.ok)result=classifyPublishedZone(await polygon.json(),county,result.distanceFeet);
   }catch{/* Optional evidence never stops quoting. */}
   cache.set(key,{expires:Date.now()+(result.status==="unknown"?3600000:86400000*30),value:result});
   if(cache.size>2000)cache.delete(cache.keys().next().value!);

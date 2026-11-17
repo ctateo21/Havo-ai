@@ -3,6 +3,7 @@ import { reserveAi, aiUsageStore, parseUsage, type Usage } from "./ai-usage";
 export type OpenRouterContent = string | Array<
   | { type: "text"; text: string }
   | { type: "file"; file: { filename: string; file_data: string } }
+  | { type: "image_url"; image_url: { url: string } }
 >;
 
 export interface AiCitation { url: string; title: string }

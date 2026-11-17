@@ -2,7 +2,7 @@ import {load} from "cheerio";
 import {streetIdentity} from "./insurance-building-sources";
 import {lookupPinellasParcel} from "./pinellas-parcel";
 import type {PermitEvidence} from "../../shared/wind-mitigation";
-export const PERMIT_UA="Mozilla/5.0 (compatible; HavoPropertyTax/1.0; +https://havofl.com)";
+export const PERMIT_UA="Mozilla/5.0 (compatible; Havo/1.0; +https://havofl.com)";
 export type PermitResult={status:"available"|"unavailable"|"unsupported";permits:PermitEvidence[];source:string;queriedAt:string};
 export interface PermitAdapter {id:string; county:string; lookup:(address:string,http:typeof fetch)=>Promise<PermitEvidence[]>}
 const HCPA="https://gis.hcpafl.org/CommonServices/property/search/";

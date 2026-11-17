@@ -8,10 +8,14 @@ const windObjectSchema = z.object({
   reportAvailable:z.boolean().default(false),
   report:z.object({
     reference:z.string().trim().min(3).max(120),
+    uploadId:z.string().uuid().optional(),
+    inspector:z.string().trim().max(200).optional(),
+    yearBuilt:z.number().int().min(1800).max(2027).optional(),
+    roofCovering:z.string().trim().max(300).optional(),
     inspectionDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v=>Number.isFinite(Date.parse(v)) && new Date(v).toISOString().slice(0,10)===v && Date.parse(v)<=Date.now()),
     transcribedFromReport:z.literal(true),
     roofToWall:z.enum(["Unknown","Toe Nails","Clips","Single Wraps","Double Wraps"]),
-    roofDeck:z.enum(["Unknown","A","B","C"]),
+    roofDeck:z.enum(["Unknown","A","B","C","D"]),
     swr:z.enum(["Unknown","Yes","No"]),
     opening:z.enum(["Unknown","A","B","C","N","X"]),
     shape:z.enum(["Hip","Gable","Flat"]),
@@ -30,12 +34,15 @@ export const windAnswersSchema=z.preprocess(value=>{
 },windObjectSchema);
 export type WindAnswers = z.infer<typeof windAnswersSchema>;
 export type WindEvidence = {value:string; estimated:boolean; source:string};
-export type PermitEvidence = {number:string; description:string; date:string; source:string; sourceUrl:string};
+export type PermitEvidence = {number:string; description:string; date:string; source:string; sourceUrl:string;
+  classification?:{kind:"openings"|"garage_door"|"reroof"|"roof_detail"|"other";quote:string;swr:boolean}};
 export type CoastalEvidence = {status:"inside"|"outside"|"unknown"; distanceFeet:number|null; source:string; sourceUrl:string; reason?:string};
 export type WindResult = {haveReport:boolean; fields:Record<"roofToWall"|"roofDeck"|"swr"|"opening"|"shape",WindEvidence>; notes:string[]};
 export function permitKinds(p:PermitEvidence) {
-  return {roof:/\b(re.?roof|roof replacement|roofing|roof)\b/i.test(p.description),
-    opening:/impact (windows?|doors?)|hurricane shutters?|storm panels?|wind.rated garage/i.test(p.description)};
+  // Unclassified permit text must never confer a credit. In particular "ROOF"
+  // alone does not establish a replacement rather than a repair/inspection.
+  return {roof:p.classification?.kind==="reroof",
+    opening:p.classification?.kind==="openings"||p.classification?.kind==="garage_door"};
 }
 export function resolveWind(input:{county:string; yearBuilt:number; roofYear:number; answers?:WindAnswers; permits?:PermitEvidence[]; coastal?:CoastalEvidence}):WindResult{
   const a=windAnswersSchema.parse(input.answers??{}), permits=input.permits??[];
@@ -51,7 +58,7 @@ export function resolveWind(input:{county:string; yearBuilt:number; roofYear:num
     (input.yearBuilt>=1987 && input.yearBuilt<=1995 && input.coastal?.status==="inside");
   const roofPermit=permits.find(p=>permitKinds(p).roof && Date.parse(p.date)>Date.parse("2007-10-01"));
   const openings=permits.filter(p=>permitKinds(p).opening);
-  const deck=roofPermit?"C":input.roofYear>input.yearBuilt||input.yearBuilt>=2002?"B":"Unknown";
+  const deck=roofPermit&&input.yearBuilt<2002?"C":input.roofYear>input.yearBuilt||input.yearBuilt>=2002?"B":"Unknown";
   const fields:WindResult["fields"]={
     roofToWall:fact(clips?"Clips":"Unknown",input.yearBuilt<1996&&clips?"coastal-zone check + year built":"year built"),
     roofDeck:fact(deck,roofPermit?`county permit ${roofPermit.number}`:"year built / user roof year"),

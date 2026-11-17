@@ -9,7 +9,8 @@ import {parseHomeEstimates} from "./quoterush-home-fields";
 import {buildImporterPayload,type QuoteRushParams} from "./quoterush";
 const answers=windAnswersSchema.parse({});
 const base={county:"hillsborough",yearBuilt:1958,roofYear:2018,answers};
-const permit:PermitEvidence={number:"EXAMPLE-1",description:"REROOF",date:"2018-02-01",source:"County permit",sourceUrl:"https://example.test/"};
+const permit:PermitEvidence={number:"EXAMPLE-1",description:"REROOF",date:"2018-02-01",source:"County permit",sourceUrl:"https://example.test/",
+  classification:{kind:"reroof",quote:"REROOF",swr:false}};
 test("partial optional addresses are omitted; complete addresses retained",()=>{
   for(const x of [undefined,{}, {Address:"100 Example St"},{Address:"100 Example St",City:"Tampa",State:"FL",Zip:""}])assert.equal(completePreviousAddress(x),undefined);
   assert.equal(completePreviousAddress({Address:"100 Example St",City:"Tampa",State:"fl",Zip:"33607"})?.State,"FL");
@@ -33,13 +34,17 @@ test("coastal thresholds require verified geography; errors remain unknown",asyn
   assert.ok(nearestLineFeet(27,-82,[[[-82,26.99],[-82,27.01]]])!<1);
 });
 test("permit opening protection requires explicit all confirmation and roof dates control deck",()=>{
-  const opening={...permit,description:"Impact windows and hurricane shutters"};
+  const opening:PermitEvidence={...permit,description:"Impact windows and hurricane shutters",
+    classification:{kind:"openings",quote:"Impact windows and hurricane shutters",swr:false}};
   assert.equal(permitKinds(opening).opening,true);
   assert.equal(resolveWind({...base,permits:[opening]}).fields.opening.value,"X");
   assert.equal(resolveWind({...base,answers:{...answers,allOpenings:"all",openingsConfirmed:true}}).fields.opening.value,"N");
   assert.equal(resolveWind({...base,permits:[opening],answers:{...answers,allOpenings:"all"}}).fields.opening.value,"X");
   assert.equal(resolveWind({...base,permits:[opening],answers:{...answers,allOpenings:"all",openingsConfirmed:true}}).fields.opening.value,"B");
   assert.equal(resolveWind({...base,permits:[permit]}).fields.roofDeck.value,"C");
+  assert.equal(resolveWind({...base,yearBuilt:2002,permits:[permit]}).fields.roofDeck.value,"B");
+  assert.equal(resolveWind({...base,yearBuilt:2003,permits:[permit]}).fields.roofDeck.value,"B");
+  assert.equal(permitKinds({...permit,description:"ROOF",classification:undefined}).roof,false);
   assert.equal(resolveWind(base).fields.roofDeck.value,"B");
   assert.equal(resolveWind({...base,yearBuilt:2000,roofYear:2000}).fields.roofDeck.value,"Unknown");
 });
@@ -91,7 +96,7 @@ test("payload sends evidence-based credits and user-gated community, never credi
     openingProtection:"None",secondaryWaterResistance:"No",roofShape:"Gable",creditPermissionGranted:false,
     windAnswers:{...answers,gated:true},windEvidence:resolveWind({...base,yearBuilt:2003,roofYear:2022,permits:[permit]})} as QuoteRushParams;
   const payload=buildImporterPayload(p,"agent@example.test");
-  assert.equal(payload.HO.HaveWindMitForm,false);assert.equal(payload.HO.RoofDeckAttachment,"Level C");
+  assert.equal(payload.HO.HaveWindMitForm,false);assert.equal(payload.HO.RoofDeckAttachment,"Level B");
   assert.equal(payload.HO.RoofWallConnection,"Clips");assert.equal(payload.HO.SecondaryWaterResistance,"Yes");
   assert.equal(payload.HO.GatedCommunity,"Single Entry");assert.equal(payload.Client.CreditPermission,"No");
   assert.equal(payload.Client.AssumedCreditScore,"Excellent");assert.match(payload.Client.OverviewNotes,/estimated/);

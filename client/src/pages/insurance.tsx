@@ -740,6 +740,7 @@ export default function InsuranceDashboard() {
   );
   const [currentHome,setCurrentHome]=useState({Address:"",City:"",State:"FL",Zip:""});
   const [windAnswers,setWindAnswers]=useState<WindAnswers>(()=>windAnswersSchema.parse({}));
+  const [windEvidenceUnavailable, setWindEvidenceUnavailable] = useState(false);
   const [windSupporting,setWindSupporting]=useState<{permits:{permits:PermitEvidence[]};coastal:CoastalEvidence}|null>(null);
   const [homeMortgage,setHomeMortgage]=useState<string>("");
   const [purchaseDate, setPurchaseDate] = useAnonymousDraft("purchaseDate",
@@ -1041,16 +1042,18 @@ export default function InsuranceDashboard() {
   },[windPreview]);
   useEffect(()=>{
     setWindAnswers(windAnswersSchema.parse({}));setWindSupporting(null);
+    setWindEvidenceUnavailable(false);
     if(!address)return;
     let stopped=false,timer:ReturnType<typeof setTimeout>,attempt=0;
     const read=async()=>{
       try{
         const r=await authedFetch(`/api/insurance/wind-evidence?address=${encodeURIComponent(address)}`);
-        if(!r.ok)return;
+        if(!r.ok){if(!stopped)setWindEvidenceUnavailable(true);return;}
         const data=await r.json();if(stopped)return;
         if(data.evidence)setWindSupporting(data.evidence);
-        else if(++attempt<6)timer=setTimeout(read,3000);
-      }catch{/* Optional evidence never blocks the quote. */}
+        else if(++attempt<28)timer=setTimeout(read,3000);
+        else setWindEvidenceUnavailable(true);
+      }catch{if(!stopped)setWindEvidenceUnavailable(true);/* Optional evidence never blocks the quote. */}
     };
     timer=setTimeout(read,1500);return()=>{stopped=true;clearTimeout(timer);};
   },[address]);
@@ -2627,11 +2630,23 @@ export default function InsuranceDashboard() {
                 </p>
               </CardHeader>
               <CardContent className="space-y-5">
-                <WindEvidenceForm value={windAnswers} onChange={value=>{
+                <WindEvidenceForm key={address} isAuthenticated={isAuthenticated} value={windAnswers} onChange={value=>{
                   setWindAnswers(value);
                   setRoofShapeIdx(value.shape==="Hip"?0:value.shape==="Flat"?1:value.shape==="Gable"?3:2);
                 }} permits={windSupporting?.permits.permits} onRoofYear={setRoofYear}
                   result={windPreview}/>
+                {windEvidenceUnavailable && <div role="status" className="space-y-1 rounded-lg border border-border bg-muted/40 p-3">
+                  <p className="text-sm font-semibold">County records unavailable or check timed out</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">We couldn’t retrieve supporting county records. You can continue with your entered answers and labeled estimates, or enter an existing report. Missing permit evidence does not confirm any wind credit.</p>
+                </div>}
+                {qrStatus === "starting" && <div role="status" className="space-y-2 rounded-lg border border-primary/15 bg-primary/5 p-3">
+                  <p className="text-sm font-semibold">Checking county permits and records…</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {qrElapsed >= 30
+                      ? "The county records check is taking longer than expected. If records time out or are unavailable, we use your entered answers and clearly labeled estimates—not confirmed permit credits. You can enter report values manually."
+                      : "Looking for supporting evidence. County permits are clues, not proof of complete opening protection or a confirmed insurance credit."}
+                  </p>
+                </div>}
                 <InsuranceEstimateForm
                   hideWindQuestions
                   policyType={policyType}
@@ -2781,7 +2796,7 @@ export default function InsuranceDashboard() {
                         {qrStatus === "idle" &&
                           "Get real-time rates from your Florida-appointed carriers."}
                         {qrStatus === "starting" &&
-                          "We're getting your quotes. This takes a few minutes. We'll email you the results, and they'll be here when you come back."}
+                          "Checking county permits and records… Report drafts and permit clues do not confirm credits."}
                         {qrStatus === "pending" &&
                           `We're getting your quotes. This takes a few minutes. We'll email you the results, and they'll be here when you come back. ${qrQuoteCounter} quote${qrQuoteCounter !== 1 ? "s" : ""} so far · ${qrElapsed}s`}
                         {qrStatus === "success" &&
@@ -3025,7 +3040,7 @@ export default function InsuranceDashboard() {
                       </div>
                       <p className="text-xs text-muted-foreground text-center">
                         {qrStillWorking ? "Still working — we'll email your top 3 when carriers finish. You can close this page."
-                          : qrStatus === "starting" ? "Sending to carriers"
+                          : qrStatus === "starting" ? "Checking county permits and records…"
                             : qrCarrierTotal != null
                               ? `Carriers quoting ${qrRespondedCarriers ?? qrQuoteCounter} of ${qrCarrierTotal}`
                               : `Carriers quoting · ${qrQuoteCounter} quote${qrQuoteCounter === 1 ? "" : "s"} received`}
