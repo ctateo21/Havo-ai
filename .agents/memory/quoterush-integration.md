@@ -7,11 +7,14 @@ description: How Havo's live insurance quoting talks to QuoteRUSH — manual tri
 
 ## Wind evidence boundary
 
-Permit sources are county Property Appraiser parcel pages only. Never use city
-permit portals, Accela, Click2Gov, EnerGov or their browser fallbacks.
-**Why:** Christian explicitly replaced the portal approach with PA-only records.
-**How to apply:** Verify a real PA parcel permits section before enabling an adapter;
-unsupported counties stay Unknown. Garage-only permits cannot suggest all openings.
+Permit sources are Property Appraiser first. Christian approved official county/city
+portal fallbacks ONLY for Pasco, Polk, Hernando and Sarasota after PA finds no records.
+Hillsborough, Pinellas, Lee, Manatee and Collier remain appraiser-only.
+**Why:** Christian superseded the blanket portal prohibition for four counties only.
+**How to apply:** Route by verified jurisdiction, not mailing city. Never bypass or
+auto-solve CAPTCHA, login or robots restrictions; uncertain jurisdiction stays Unknown.
+Preserve exact-property and verbatim evidence checks. Garage-only permits cannot
+suggest all openings. Real buyer reports override all estimates.
 
 Lee PA permit dates represent receipt of information, not verified issue dates.
 **Why:** The PA's Building / Construction Permit Data disclaimer expressly says

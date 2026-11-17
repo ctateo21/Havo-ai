@@ -2,6 +2,7 @@ import {load} from "cheerio";
 import {resolveParcel,type CountySlug,type ParcelIdentity} from "./parcel-resolver";
 import {streetIdentity} from "./insurance-building-sources";
 import type {PermitEvidence} from "../../shared/wind-mitigation";
+import {officialPermitFallback,FALLBACK_COUNTIES} from "./official-permit-fallback";
 
 const names:Record<string,string>={lee:"Lee",manatee:"Manatee",pasco:"Pasco",polk:"Polk",hernando:"Hernando",collier:"Collier"};
 export const PA_PERMIT_RESTRICTIONS:Record<string,string>={
@@ -80,7 +81,18 @@ export async function lookupAdditionalPaPermits(
   const key=`${county}:${id.parcelId}`,saved=parcelCache.get(key);
   if(saved&&saved.expires>Date.now())return saved.records;
   if(parcelPending.has(key))return parcelPending.get(key)!;
-  const task=loadPaRecords(county,address,id,http,render).then(records=>{
+  const task=(async()=>{
+    let records:PermitEvidence[];
+    try{records=await loadPaRecords(county,address,id,http,render);}
+    catch(error){
+      // Only a verified empty PA section/referral may trigger the fallback.
+      // Bot blocks, mismatches, unknown schemas and timeouts never do.
+      if(!FALLBACK_COUNTIES.has(county)||!(error instanceof Error)||
+        !/no PA permit rows|not PA permit records|has no permit section/.test(error.message))throw error;
+      records=[];
+    }
+    return records.length===0&&FALLBACK_COUNTIES.has(county)?officialPermitFallback(id,address,http):records;
+  })().then(records=>{
     parcelCache.set(key,{records,expires:Date.now()+30*86400000});
     if(parcelCache.size>2000)parcelCache.delete(parcelCache.keys().next().value!);
     return records;

@@ -62,7 +62,7 @@ export async function lookupWindPermits(county:string,address:string,http:typeof
     // Do not accumulate a long queue in the quote path.
     if(wait>3000)return {status:"unavailable" as const,permits:[],source:adapter.id,queriedAt:new Date().toISOString()};
     await new Promise(r=>setTimeout(r,wait));
-    const deadline=AbortSignal.timeout(county==="collier"?50000:18000);
+    const deadline=AbortSignal.timeout(["pasco","polk","hernando","sarasota"].includes(county)?75000:county==="collier"?50000:18000);
     const signal=parentSignal?AbortSignal.any([deadline,parentSignal]):deadline;
     const polite:typeof fetch=(url,options)=>http(url,{...options,signal,headers:{...options?.headers,
       "User-Agent":PERMIT_UA,...(county==="pinellas"?{Referer:"https://www.pcpao.gov/"}:{})}});

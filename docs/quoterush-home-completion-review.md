@@ -1,3 +1,36 @@
+# Four-county official portal fallback update
+
+This supersedes the earlier blanket PA-only prohibition ONLY for Pasco, Polk,
+Hernando and Sarasota. The other five counties are unchanged. No migration.
+
+Implementation uses plain HTTP with a per-request cookie jar, identifying Havo UA,
+one-second pacing, parent cancellation and a 75-second permit budget within the
+existing 80-second enrichment cap. No browser/Firecrawl or automatic CAPTCHA solver
+is used for these fallbacks. Any CAPTCHA markup, login wall, block or robots
+restriction stops the request. Unknown errors never become evidence.
+
+PA adapters must first return empty records or the specifically recognized
+no-record/referral condition. PA failures, identity mismatches and unknown schemas
+do not authorize fallback. Successful results retain the existing per-parcel cache.
+Existing OpenRouter verbatim classification and report precedence are unchanged.
+Re-roof alone does not establish SWR: explicit underlayment evidence is required.
+
+| Jurisdiction | Route | Current limitation |
+|---|---|---|
+| Unincorporated Pasco, districts U/UF | PASCO Accela Building | Live check stopped by CAPTCHA/login safety detection; no records verified |
+| Unincorporated Polk, districts 30/90/91/92/93 | POLKCO Accela Building | HTTP adapter implemented; live records not verified |
+| North Port, M0500 | NORTHPORT Accela Building | Routing implemented, but not activated: Sarasota PA remains robots-restricted, so no qualifying PA-empty lookup |
+| Other Pasco/Polk cities | Unknown | Public exact-address search not verified; never route to wrong county |
+| Hernando current/legacy | Unknown | No validated record parser or public-search adapter; not implemented |
+| Unincorporated Sarasota / Venice | Unknown | Login/CAPTCHA restrictions; not attempted |
+| City of Sarasota | Unknown | Public search not verified; no scraping attempted |
+
+Accela parser requires an exact address cell in both the search row and record
+detail plus an explicitly labeled issue date. Layout differences fail closed.
+No client address, owner details or live permit identifiers are committed.
+This update is partial: the unverified and restricted paths above remain Unknown,
+not claimed as working adapters.
+
 # QuoteRush home completion and automatic carrier submission
 
 ## Current Apply Defaults override (supersedes earlier report-only/gated rules)
