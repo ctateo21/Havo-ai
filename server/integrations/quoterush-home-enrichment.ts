@@ -20,11 +20,12 @@ export async function enrichQuoteRushHome(address: string, facts: {
   const listing: Record<string,unknown> = "listing" in deps ? await deps.listing(address).catch(()=>({})) : {};
   // Keep AI evidence separate from verified public property facts.
   for (const key of Object.keys(HOME_FIELD_RULES) as HomeField[]) {
-    const evidence = profile?.fieldSources?.[`quoteRush.${key}`];
+    const evidence = profile?.fieldSources?.[`quoteRush.${key}`] ??
+      (key === "PoolType" ? profile?.fieldSources?.["quoteRush.Pool"] : undefined);
     const stored = evidence?.value as HomeFields[HomeField];
     if (stored && validateHomeValue(key, stored.value) !== null &&
       (stored.source === "property data" || stored.source === "OpenRouter" || stored.source === "agency default") &&
-      typeof stored.confidence === "number" && stored.confidence >= 0 && stored.confidence <= 1) fields[key] = stored;
+      typeof stored.confidence === "number" && stored.confidence >= 0 && stored.confidence <= 1) fields[key] = {...stored,value:validateHomeValue(key,stored.value)!};
   }
   if (profile?.stories != null) {
     const value = validateHomeValue("Stories", profile.stories);
@@ -40,7 +41,7 @@ export async function enrichQuoteRushHome(address: string, facts: {
   }
   const units=profile?.livingUnits;
   if (listing.propertyType === "Multifamily" && units && units>=2 && units<=4) {
-    fields.StructureType={value:({2:"Duplex (2 Family)",3:"Triplex (3 Family)",4:"Quadplex (4 Family)"} as Record<number,string>)[units],
+    fields.StructureType={value:({2:"Duplex",3:"Triplex",4:"Quadplex"} as Record<number,string>)[units],
       source:"property data",estimated:false,confidence:1,fetchedAt:now.toISOString()};
   }
   if (typeof listing.fullBathCount==="number" && Number.isInteger(listing.fullBathCount)) {
@@ -48,7 +49,7 @@ export async function enrichQuoteRushHome(address: string, facts: {
     if(value)fields.FullBathCount={value,source:"property data",estimated:false,confidence:1,fetchedAt:now.toISOString()};
   }
   // Christian's desktop default; do not claim that unknown means verified no pool.
-  if(profile?.hasPool!==true && listing.hasPool!==true)fields.Pool={
+  if(profile?.hasPool!==true && listing.hasPool!==true)fields.PoolType={
     value:"None",source:profile?.hasPool===false||listing.hasPool===false?"property data":"agency default",estimated:profile?.hasPool!==false&&listing.hasPool!==false,
     confidence:profile?.hasPool===false||listing.hasPool===false?1:0,fetchedAt:now.toISOString()};
   for (const key of ["PoolScreenedEnclosure","ScreenedEnclosureSquareFeet"] as const) {
@@ -56,12 +57,12 @@ export async function enrichQuoteRushHome(address: string, facts: {
     const value=validateHomeValue(key,raw);
     if(value!==null)fields[key]={value,source:"property data",estimated:false,confidence:1,fetchedAt:now.toISOString()};
   }
-  if(!fields.PoolScreenedEnclosure && fields.Pool?.value==="None")fields.PoolScreenedEnclosure={
+  if(!fields.PoolScreenedEnclosure && fields.PoolType?.value==="None")fields.PoolScreenedEnclosure={
     value:"false",source:"agency default",estimated:true,confidence:0,fetchedAt:now.toISOString()};
   const missing = (Object.keys(HOME_FIELD_RULES) as HomeField[]).filter(key => !fields[key]);
   // Do not manufacture pool details when records affirm no pool. Unknown is not zero.
-  const requested = missing.filter(key => key!=="FullBathCount" && !(fields.Pool?.value === "None" &&
-    ["Pool", "ScreenedEnclosureSquareFeet", "ScreenedCoverage"].includes(key)));
+  const requested = missing.filter(key => key!=="FullBathCount" && !(fields.PoolType?.value === "None" &&
+    ["PoolType", "ScreenedEnclosureSquareFeet", "ScreenedCoverage"].includes(key)));
   if (deps.enabled && requested.length) {
     try {
       const result = await boundedOptional(deadline=>deps.complete({

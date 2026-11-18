@@ -5,6 +5,17 @@ description: How Havo's live insurance quoting talks to QuoteRUSH — manual tri
 
 # QuoteRUSH integration
 
+## Workbook contract precedence
+
+Use the exact accepted JSON keys/options in Christian's November 18, 2026
+transcription of Jeff's mapping workbook over older desktop-label observations.
+Do not infer missing enum spellings. Keep the agency affidavit checkbox default
+true; it does not assert that a verified wind report exists.
+**Why:** Desktop labels and historical examples are not the importer enum contract;
+the explicit mapping request retained the checkbox despite a conflicting quotation.
+**How to apply:** Normalize historical cached suggestions at the outbound boundary,
+omit unsupported options, and preserve separate estimated/report provenance.
+
 ## Wind evidence boundary
 
 Permit sources are Property Appraiser first. Christian approved official county/city

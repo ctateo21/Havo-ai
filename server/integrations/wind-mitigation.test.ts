@@ -107,7 +107,7 @@ test("payload sends evidence-based wind values with agency checkbox/community de
   assert.equal(reportPayload.HO.HaveWindMitForm,true);
   assert.equal(reportPayload.HO.WindMitigationInspectionDate,"01/01/2026");
   assert.equal(reportPayload.HO.RoofWallConnection,"Single Wraps");
-  assert.equal(reportPayload.HO.OpeningProtection,"Hurricane Protection");
+  assert.equal(reportPayload.HO.OpeningProtection,"Basic");
   assert.equal(reportPayload.HO.RoofShape,"Hip");
   assert.equal(reportPayload.HO.SecondaryWaterResistance,"No");
 });
