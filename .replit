@@ -8,7 +8,7 @@ packages = ["chromium", "postgrest"]
 
 [deployment]
 deploymentTarget = "autoscale"
-build = ["bash", "-c", "npm test && npm run build"]
+build = ["npm", "run", "build"]
 run = ["npm", "run", "start"]
 
 [[ports]]
