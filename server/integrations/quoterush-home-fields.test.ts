@@ -39,6 +39,37 @@ test("workbook enums normalize historical evidence and omit unsupported options"
   for(const key of ["Stories","PoolType","Pool","Construction","PrimaryWaterHeaterLocation","Sprinklers"])
     assert.equal(key in HO,false,key);
 });
+test("pool workbook strings pass through and historical variants normalize at the outbound boundary",()=>{
+  const cases = [
+    ["Inground - small < 300 sq ft - Detached","Inground - small < 300 sq. ft. - Detached"],
+    ["Inground - med 300-600 sq ft - Detached","Inground - 300 - 600 sq. ft. - Detached"],
+    ["Inground - large > 600 sq ft - Detached","Inground - large > 600 sq. ft. - Detached"],
+    ["Inground - small < 300 sq ft","Inground - small < 300 sq. ft."],
+    ["Inground - med 300-600 sq ft","Inground - 300 - 600 sq. ft."],
+    ["Inground - large > 600 sq ft","Inground - large > 600 sq. ft."],
+    ["Above Ground","Above Ground - Detached"],
+    ["None","None"],
+  ];
+  for(const [legacy,official] of cases){
+    for(const value of [legacy,official]){
+      assert.equal(validateHomeValue("PoolType",value),official);
+      const evidence={value,confidence:1,source:"property data",estimated:false,fetchedAt:"2026-11-18T00:00:00Z"};
+      // Exercise both the current and historical cache key without pre-normalizing.
+      for(const key of ["PoolType","Pool"]){
+        const {HO}=buildImporterPayload({...p,homeFields:{[key]:evidence} as any},"agent@example.test");
+        assert.equal(HO.PoolType,official);
+        assert.equal("Pool" in HO,false);
+        assert.equal(HO.HaveWindMitForm,true);
+      }
+      const parsed=parseHomeEstimates(JSON.stringify({PoolType:{value,confidence:1}}));
+      assert.equal(parsed.PoolType?.value,official);
+    }
+  }
+  const {HO}=buildImporterPayload({...p,homeFields:{PoolType:{
+    value:"Indoor",confidence:1,source:"property data",estimated:false,fetchedAt:"2026-11-18T00:00:00Z",
+  }}},"agent@example.test");
+  assert.equal("PoolType" in HO,false);
+});
 test("workbook wind values distinguish A/B, omit unknown SWR and unsupported deck D",()=>{
   for(const opening of ["A","B","X","N","Unknown"]){
     for(const swr of ["Yes","No","Unknown"]){

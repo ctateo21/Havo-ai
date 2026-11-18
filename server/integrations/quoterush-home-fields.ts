@@ -4,7 +4,8 @@ import type { QuoteRushParams } from "./quoterush";
 export const HOME_FIELD_RULES = {
   StructureType: ["Single Family", "Townhouse (End Unit)", "Townhouse (Center Unit)", "Rowhouse(End Unit)", "Rowhouse(Center Unit)", "Duplex", "Triplex", "Quadplex", "Condo", "Apartment"],
   Stories: ["1", "1.5", "2", "2.5", "3", "4", "Bi-Level", "Tri-Level"],
-  PoolType: ["None", "Inground - small < 300 sq. ft.", "Inground - 300 - 600 sq. ft.", "Inground - large > 600 sq. ft.", "Above Ground - Detached"],
+  PoolType: ["None", "Inground - small < 300 sq. ft.", "Inground - 300 - 600 sq. ft.", "Inground - large > 600 sq. ft.", "Above Ground - Detached",
+    "Inground - small < 300 sq. ft. - Detached", "Inground - 300 - 600 sq. ft. - Detached", "Inground - large > 600 sq. ft. - Detached"],
   PoolScreenedEnclosure: ["true", "false"],
   FullBathCount: "area",
   ScreenedEnclosureSquareFeet: "area",
@@ -23,7 +24,10 @@ const LEGACY_OPTIONS: Partial<Record<HomeField, Record<string,string>>> = {
     "Rowhouse (Townhouse Center)":"Townhouse (Center Unit)","Rowhouse (Townhouse End)":"Townhouse (End Unit)"},
   PoolType: {"Inground - small < 300 sq ft":"Inground - small < 300 sq. ft.",
     "Inground - med 300-600 sq ft":"Inground - 300 - 600 sq. ft.",
-    "Inground - large > 600 sq ft":"Inground - large > 600 sq. ft.","Above Ground":"Above Ground - Detached"},
+    "Inground - large > 600 sq ft":"Inground - large > 600 sq. ft.","Above Ground":"Above Ground - Detached",
+    "Inground - small < 300 sq ft - Detached":"Inground - small < 300 sq. ft. - Detached",
+    "Inground - med 300-600 sq ft - Detached":"Inground - 300 - 600 sq. ft. - Detached",
+    "Inground - large > 600 sq ft - Detached":"Inground - large > 600 sq. ft. - Detached"},
 };
 export function homeEvidence(fields: HomeFields | undefined, key: HomeField): HomeEvidence | undefined {
   return fields?.[key] ?? (key === "PoolType" ? (fields as Record<string,HomeEvidence> | undefined)?.Pool : undefined);
