@@ -1,3 +1,10 @@
+# Current importer mapping
+
+The [November 18 workbook alignment](quoterush-workbook-mapping.md) supersedes
+all historical JSON key/enum observations below, including old Pool, Sprinklers,
+water-heater, wind, structure and policy strings. Historical investigation notes
+below are retained for context, not the current importer contract.
+
 # Four-county official portal fallback update
 
 This supersedes the earlier blanket PA-only prohibition ONLY for Pasco, Polk,
@@ -53,15 +60,15 @@ and does not document an Apply Defaults API flag.
 | Electrical | HO.ElectricalType | `"Circuit Breakers"` | Verified |
 | Heat | HO.PrimaryHeatSource | `"Electric"` | Verified |
 | Plumbing | HO.PlumbingType | `"PVC"` | Verified |
-| Water heater location | HO.PrimaryWaterHeaterLocation | `"Garage"` | **UNVERIFIED key and enum**; not in public example. Lead note flags it; may be ignored |
+| Water heater location | HO.WaterHeaterLocation | `"Garage"` | Workbook mapping supplied November 18; location remains an unverified assumption |
 | Terrain | HO.Terrain | `"Exposure B"` | Verified |
-| Sprinkler | HO.Sprinklers | `"None"` | Verified |
+| Sprinkler | HO.SprinklerSystem | `"None"` | Workbook mapping supplied November 18 |
 | Business | HO.BusinessOnPremises | `"No"` | Verified |
 | Fire extinguisher | HO.underwriting.FireExtinguisher | `true` | Verified nesting and boolean |
 | Secured community | HO.GatedCommunity | `"Single Entry"` always | Key verified; **value UNVERIFIED by API**, observed by Christian in desktop |
 | Wind affidavit | HO.HaveWindMitForm | `true` always | Verified boolean; agency-default provenance in notes |
-| SWR | HO.SecondaryWaterResistance | evidence Yes/No; otherwise `"Unknown"` | Key/No verified; **Yes/Unknown UNVERIFIED enum** in example |
-| Openings | HO.OpeningProtection | `"Hurricane Protection"` for supported A/B evidence; otherwise `"None"` | Key/Hurricane Protection verified; **None UNVERIFIED enum** in example |
+| SWR | HO.SecondaryWaterResistance | evidence Yes/No; otherwise omitted | Workbook mapping supplied November 18 |
+| Openings | HO.OpeningProtection | A = `"Hurricane Protection"`, B = `"Basic"`, otherwise `"Unknown or None"` | Workbook mapping supplied November 18 |
 | Roof-to-wall | HO.RoofWallConnection | evidence Clips/Toe Nails/Single Wraps/Double Wraps; Unknown omitted | Key/Single Wraps verified; other enums **UNVERIFIED** |
 | Deck | HO.RoofDeckAttachment | evidence `Level A/B/C/D`; Unknown omitted | Key/Level A verified; B/C/D **UNVERIFIED** |
 | Roof shape | HO.RoofShape | evidence/user; Gable fallback flagged | Key/Gable verified; Hip **UNVERIFIED** by example |
@@ -72,7 +79,7 @@ and does not document an Apply Defaults API flag.
 | Identity theft | HO.IdentityTheft | `false` | Key/boolean verified; **desktop default unknown**, unchecked per Christian. Sample's true is not Apply Defaults evidence |
 | Structure type | HO.StructureType | property records/listing, then bounded OpenRouter | Key/Single Family verified; other desktop enums **UNVERIFIED** by API example |
 | Stories | HO.Stories | property data, then OpenRouter, numeric string | Key/`"1"` verified; other allowed story counts not enumerated |
-| Pool | HO.Pool | property evidence, then OpenRouter; None agency fallback | Key verified; desktop enums **UNVERIFIED** (example uses `Inground - 300 - 600 sq. ft.`) |
+| Pool | HO.PoolType | property evidence, then OpenRouter; None agency fallback | Workbook mapping supplied November 18; unsupported options omitted |
 | Dwelling Coverage Amount | HO.CoverageA | Havo Coverage A as numeric string, **never AI** | Verified |
 | Screened enclosure | HO.PoolScreenedEnclosure | **boolean**, property data then AI; area >0 also establishes true | Verified boolean. Fixed missing positive-enclosure mapping |
 | Enclosure area | HO.ScreenedEnclosureSquareFeet | property data then AI, numeric string | Verified |

@@ -133,8 +133,8 @@ export function buildImporterPayload(
   }
   const formTypeMap: Record<string, string> = {
     HO3: "HO-3: Home Owners Policy",
-    HO6: "HO-6: Condo Unit Owners Policy",
-    DP3: "DP-3: Dwelling Fire Policy",
+    HO6: "HO-6: Condo Owners Policy",
+    DP3: "DP-3 Dwelling Fire/Renters",
   };
   const formType =
     formTypeMap[p.policyType] ||
@@ -192,7 +192,7 @@ export function buildImporterPayload(
       NewPurchase: p.newPurchase || "No",
       ...(p.purchaseDate ? { PurchaseDate: formatDateOfBirth(p.purchaseDate) } : {}),
       PurchasePrice: String(Math.round(p.purchasePrice)),
-      UsageType: p.usageType || "Primary",
+      UsageType: p.usageType === "Investment" || p.usageType?.toLowerCase() === "rental" ? "Rental" : p.usageType || "Primary",
       MonthsOwnerOccupied: p.monthsOccupied,
       MonthsOccupied: p.monthsOccupied,
       ...(p.rentalTerm ? { RentalTerm: p.rentalTerm } : {}),
@@ -201,18 +201,13 @@ export function buildImporterPayload(
       // Do not fabricate a square-footage value. Carrier data is only useful
       // when it is supplied by the user or a verified property source.
       ...(p.sqFt > 0 ? { SquareFeet: String(Math.round(p.sqFt)) } : {}),
-      ConstructionType: p.constructionType ||
-        "Masonry",
-      Construction:
-        p.constructionType === "Mixed"
-          ? p.masonryConstruction || "Mixed"
-          : p.masonryConstruction ||
-            p.constructionType ||
-            "Concrete Block",
+      ConstructionType: p.constructionType === "Mixed" ? "Mixed Masonry-Frame" : p.constructionType || "Masonry",
       // Do not send exterior-finish labels (for example Stucco) as a
       // structural framing subtype.
-      MasonryConstruction:
-        p.masonryConstruction || "",
+      ...(["Concrete Block","Concrete Block - Stucco","Solid Brick","Solid Stone","Superior"].includes(p.masonryConstruction)
+        ? {MasonryConstruction:p.masonryConstruction}:{}),
+      ...(["Frame","Frame - Stucco","Aluminum Siding","Vinyl Siding","Wood Siding","Hardiplank Siding","Masonry Veneer","Brick Veneer","Stone Veneer","Logs","Asbestos"].includes(p.frameConstruction)
+        ? {FrameConstruction:p.frameConstruction}:{}),
       FoundationType: "Slab",
       RoofShape: p.windEvidence?.fields.shape.value || p.roofShape || "Gable",
       RoofMaterial: "Architectural Shingles",
@@ -258,13 +253,12 @@ export function buildImporterPayload(
       // Agency Apply Defaults setting; NOT proof that a report was supplied.
       // Keep real report provenance separately in windEvidence and lead notes.
       HaveWindMitForm: true,
-      SecondaryWaterResistance: "Unknown",
-      OpeningProtection: "None",
+      OpeningProtection: "Unknown or None",
       ...(p.windEvidence ? {
         ...(p.windEvidence.fields.roofToWall.value!=="Unknown"?{RoofWallConnection:p.windEvidence.fields.roofToWall.value}:{}),
-        ...(p.windEvidence.fields.roofDeck.value!=="Unknown"?{RoofDeckAttachment:`Level ${p.windEvidence.fields.roofDeck.value}`} : {}),
-        SecondaryWaterResistance:p.windEvidence.fields.swr.value,
-        OpeningProtection:["A","B"].includes(p.windEvidence.fields.opening.value)?"Hurricane Protection":"None",
+        ...(["A","B","C"].includes(p.windEvidence.fields.roofDeck.value)?{RoofDeckAttachment:`Level ${p.windEvidence.fields.roofDeck.value}`} : {}),
+        ...(["Yes","No"].includes(p.windEvidence.fields.swr.value)?{SecondaryWaterResistance:p.windEvidence.fields.swr.value}:{}),
+        OpeningProtection:p.windEvidence.fields.opening.value==="A"?"Hurricane Protection":p.windEvidence.fields.opening.value==="B"?"Basic":"Unknown or None",
         ...(p.windEvidence.haveReport && p.windAnswers?.report?{WindMitigationInspectionDate:formatDateOfBirth(p.windAnswers.report.inspectionDate)}:{}),
       }:{}),
       Terrain: "Exposure B",
