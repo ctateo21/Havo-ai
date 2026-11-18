@@ -13,6 +13,7 @@
 // the quote route for mapping review. Do not log it: it is not public data.
 
 import type { QuoteRushPropertyDefaults } from "@shared/quoterush-property-defaults";
+import {quoteRushEnv} from "./quoterush-env";
 import { quoteRushFetch as fetch } from "./quoterush-pause";
 import { importerHomeExtras, homeFieldNotes, APPLY_DEFAULT_NOTES, type HomeFields } from "./quoterush-home-fields";
 import {windNotes,type WindAnswers,type WindResult} from "../../shared/wind-mitigation";
@@ -95,16 +96,16 @@ export interface QuoteRushResult {
 }
 
 function getWebId(): string {
-  return process.env.QUOTERUSH_WEBID ?? "";
+  return quoteRushEnv().webId;
 }
 function getWebPassword(): string {
-  return process.env.QUOTERUSH_WEBID_PASSWORD ?? process.env.QUOTERUSH_WEBPASSWORD ?? "";
+  return quoteRushEnv().webPassword;
 }
 function getEndpointKey(): string {
-  return process.env.QUOTERUSH_ENDPOINT_KEY ?? "";
+  return quoteRushEnv().endpointKey;
 }
 function getAgency(): string {
-  return process.env.QUOTERUSH_AGENCY_ID ?? process.env.QUOTERUSH_AGENCY ?? "";
+  return quoteRushEnv().agency;
 }
 
 import { inspectImporterResponse } from "./quoterush-import-response";
@@ -139,7 +140,9 @@ export function buildImporterPayload(
     formTypeMap[p.policyType] ||
     "HO-3: Home Owners Policy";
   const payload: Record<string, any> = {
-    PreviousAddress:p.previousAddress || {Address:p.streetAddress,City:p.city,State:p.state,Zip:p.zip},
+    ...(p.previousAddress?{PreviousAddress:p.previousAddress}:p.newPurchase==="Yes"?{
+      PreviousAddress:{Address:p.streetAddress,City:p.city,State:p.state,Zip:p.zip},
+    }:{}),
     Client: {
       NameFirst: p.firstName || "Havo",
       NameLast: p.lastName || "Lead",
@@ -169,7 +172,7 @@ export function buildImporterPayload(
       LeadStatus: "New Lead",
       OverviewNotes: [...APPLY_DEFAULT_NOTES, ...homeFieldNotes(p.homeFields ?? {}),
         ...(p.windEvidence?windNotes(p.windEvidence):[]),
-        ...(!p.previousAddress ? ["Assumption for quoting only: PreviousAddress uses the quoted property address; this is not a verified buyer address. Agent must confirm the buyer's current home address."]:[]),
+        ...(!p.previousAddress && p.newPurchase==="Yes" ? ["Assumption for quoting only: PreviousAddress uses the quoted property address; this is not a verified buyer address. Agent must confirm the buyer's current home address."]:[]),
         ...(p.windEvidence?.haveReport?["Wind report values transcribed by user; agent must verify against report."]:["No verified wind mitigation form supplied; obtain actual report and inspection date before applying form credits."]),
         "System update years unknown; verify with 4-point inspection."].join("\n"),
       Lob_Home: true,
@@ -386,9 +389,7 @@ export async function importAndSubmit(
   const WEBPASSWORD = getWebPassword();
   const ENDPOINT_KEY = getEndpointKey();
   const AGENCY = getAgency();
-  const ASSIGNED_EMAIL =
-    process.env.QUOTERUSH_ASSIGNED_EMAIL ??
-    "christian@tateoco.com";
+  const ASSIGNED_EMAIL = quoteRushEnv().assignedEmail;
 
   if (!WEBID || !WEBPASSWORD ||
       !ENDPOINT_KEY || !AGENCY) {

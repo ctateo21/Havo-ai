@@ -2399,7 +2399,13 @@ export default function InsuranceDashboard() {
             )}
           </div>
 
-          <CurrentHomeForm address={currentHome} onAddress={setCurrentHome} mortgage={homeMortgage} onMortgage={setHomeMortgage} newPurchase={newPurchase===true}/>
+          {newPurchase===true?
+            <CurrentHomeForm address={currentHome} onAddress={setCurrentHome} mortgage={homeMortgage} onMortgage={setHomeMortgage} newPurchase={true}/>:
+            <div className="container mx-auto px-4 py-2">
+              <label className="text-sm">Will this home have a mortgage? <select aria-label="Will this home have a mortgage?" value={homeMortgage} onChange={e=>setHomeMortgage(e.target.value)} className="border rounded p-2">
+                <option value="">Please select</option><option value="yes">Yes — financed purchase or refinance</option><option value="no">No — owned outright or cash purchase</option>
+              </select></label>
+            </div>}
           {/* Address + action bar */}
           <div className="container mx-auto px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-3">

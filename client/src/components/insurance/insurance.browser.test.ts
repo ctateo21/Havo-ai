@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 test("mobile current home form closes blank and populated without assuming mortgage",async({page})=>{
   await page.setViewportSize({width:390,height:844});
   await fixture(page,{rate:250});
+  await page.getByTestId("select-new-purchase").selectOption("yes");
   const section=page.getByRole("region",{name:"Current home and mortgage"});
   await expect(section.getByRole("button",{name:"Edit"})).toBeVisible();
   await section.getByRole("button",{name:"Edit"}).click();
@@ -18,6 +19,16 @@ test("mobile current home form closes blank and populated without assuming mortg
   await expect(section).toContainText("Mortgage: No");
   await section.getByRole("button",{name:"Edit"}).click();
   await expect(section.getByLabel("Will this home have a mortgage?")).toHaveValue("no");
+});
+test("already-owned mortgage question stays visible and optional without a collapse section",async({page})=>{
+  await fixture(page,{rate:250});
+  await page.getByTestId("select-new-purchase").selectOption("no");
+  await expect(page.getByRole("region",{name:"Current home and mortgage"})).toHaveCount(0);
+  const mortgage=page.getByLabel("Will this home have a mortgage?");
+  await expect(mortgage).toBeVisible();
+  await expect(mortgage).toHaveValue("");
+  await mortgage.selectOption("yes");
+  await expect(mortgage).toHaveValue("yes");
 });
 
 const ADDRESS = "7400 36th Ave N, St Petersburg, FL 33710";

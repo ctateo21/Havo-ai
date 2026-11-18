@@ -50,6 +50,14 @@ test("blank previous address uses quoted property with an assumption, never inve
   assert.deepEqual(confirmed.PreviousAddress,entered);
   assert.doesNotMatch(confirmed.Client.OverviewNotes,/Assumption for quoting only: PreviousAddress/);
 });
+test("owned and refinance imports omit blank previous address and its assumption",()=>{
+  const out=buildImporterPayload({...p,newPurchase:"No"},"agent@example.test");
+  assert.equal("PreviousAddress" in out,false);
+  assert.doesNotMatch(out.Client.OverviewNotes,/Assumption for quoting only: PreviousAddress/);
+  assert.equal("Mortgage" in out.HO,false);
+  const entered={Address:"200 Fictional Lane",City:"Example",State:"FL",Zip:"33000"};
+  assert.deepEqual(buildImporterPayload({...p,newPurchase:"No",previousAddress:entered},"agent@example.test").PreviousAddress,entered);
+});
 test("Apply Defaults fields are explicit without fabricating report provenance",()=>{
   const out=buildImporterPayload({...p,windAnswers:{gated:false} as any},"agent@example.test");
   assert.equal(out.HO.GatedCommunity,"Single Entry");
