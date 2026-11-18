@@ -14,8 +14,14 @@
 
 import type { QuoteRushPropertyDefaults } from "@shared/quoterush-property-defaults";
 import { quoteRushFetch as fetch } from "./quoterush-pause";
+import { importerHomeExtras, homeFieldNotes, APPLY_DEFAULT_NOTES, type HomeFields } from "./quoterush-home-fields";
+import {windNotes,type WindAnswers,type WindResult} from "../../shared/wind-mitigation";
 
 export interface QuoteRushParams {
+  windAnswers?:WindAnswers;
+  windEvidence?:WindResult;
+  previousAddress?: {Address:string; City:string; State:string; Zip:string};
+  homeFields?: HomeFields;
   streetAddress: string;
   city: string;
   state: string;
@@ -133,6 +139,7 @@ export function buildImporterPayload(
     formTypeMap[p.policyType] ||
     "HO-3: Home Owners Policy";
   const payload: Record<string, any> = {
+    ...(p.previousAddress ? {PreviousAddress:p.previousAddress} : {}),
     Client: {
       NameFirst: p.firstName || "Havo",
       NameLast: p.lastName || "Lead",
@@ -160,6 +167,11 @@ export function buildImporterPayload(
       Assigned: assignedEmail,
       LeadSource: "Havo Platform",
       LeadStatus: "New Lead",
+      OverviewNotes: [...APPLY_DEFAULT_NOTES, ...homeFieldNotes(p.homeFields ?? {}),
+        ...(p.windEvidence?windNotes(p.windEvidence):[]),
+        ...(!p.previousAddress && p.newPurchase==="Yes" ? ["Agent required: collect buyer's current home address before carrier execution."]:[]),
+        ...(p.windEvidence?.haveReport?["Wind report values transcribed by user; agent must verify against report."]:["No verified wind mitigation form supplied; obtain actual report and inspection date before applying form credits."]),
+        "System update years unknown; verify with 4-point inspection."].join("\n"),
       Lob_Home: true,
       Lob_Auto: false,
       // FEMA flood-zone enrichment is property context only. A separate
@@ -167,6 +179,7 @@ export function buildImporterPayload(
       Lob_Flood: false,
     },
     HO: {
+      ...importerHomeExtras(p),
       FormType: formType,
       Address: p.streetAddress,
       City: p.city,
@@ -198,8 +211,8 @@ export function buildImporterPayload(
       MasonryConstruction:
         p.masonryConstruction || "",
       FoundationType: "Slab",
-      RoofShape: p.roofShape || "Gable",
-      RoofMaterial: "Composite Shingle",
+      RoofShape: p.windEvidence?.fields.shape.value || p.roofShape || "Gable",
+      RoofMaterial: "Architectural Shingles",
       UpdateRoofYear: String(p.roofYear),
       UpdateRoofType: "Full",
       CoverageA: String(p.coverageA),
@@ -239,10 +252,18 @@ export function buildImporterPayload(
              // Lapse and policy details are omitted for existing homes until verified.
            }),
       Claims: p.priorClaims > 0 ? "Yes" : "No",
-      HaveWindMitForm: p.windMitForm,
-      OpeningProtection: p.openingProtection,
-      SecondaryWaterResistance:
-        p.secondaryWaterResistance,
+      // Agency Apply Defaults setting; NOT proof that a report was supplied.
+      // Keep real report provenance separately in windEvidence and lead notes.
+      HaveWindMitForm: true,
+      SecondaryWaterResistance: "Unknown",
+      OpeningProtection: "None",
+      ...(p.windEvidence ? {
+        ...(p.windEvidence.fields.roofToWall.value!=="Unknown"?{RoofWallConnection:p.windEvidence.fields.roofToWall.value}:{}),
+        ...(p.windEvidence.fields.roofDeck.value!=="Unknown"?{RoofDeckAttachment:`Level ${p.windEvidence.fields.roofDeck.value}`} : {}),
+        SecondaryWaterResistance:p.windEvidence.fields.swr.value,
+        OpeningProtection:["A","B"].includes(p.windEvidence.fields.opening.value)?"Hurricane Protection":"None",
+        ...(p.windEvidence.haveReport && p.windAnswers?.report?{WindMitigationInspectionDate:formatDateOfBirth(p.windAnswers.report.inspectionDate)}:{}),
+      }:{}),
       Terrain: "Exposure B",
       BurglarAlarm: "None",
       FireAlarm: "None",
@@ -255,9 +276,9 @@ export function buildImporterPayload(
       WaterBackup: true,
       WaterBackupAmount: "$10,000",
       RoofLossSettlement: "Replacement Cost",
-      PersonalInjuryCoverage: true,
-      IdentityTheft: true,
-      IncreaseReplacementCostOnDwelling: true,
+      PersonalInjuryCoverage: false,
+      IdentityTheft: false,
+      IncreaseReplacementCostOnDwelling: false,
     },
   };
   if (p.claimRecords.length > 0) {
@@ -439,6 +460,7 @@ export async function importAndSubmit(
     params.firstName, params.lastName, params.email, params.phone, params.dateOfBirth,
     formatDateOfBirth(params.dateOfBirth), params.streetAddress, params.city, params.zip,
     hooks.callbackUrl ?? "",
+    ...Object.values(params.previousAddress ?? {}),
   ]);
   console.log("[quoterush] importer diagnostics", inspection.diagnostics);
 
@@ -466,23 +488,36 @@ export async function importAndSubmit(
       ...(rawPropertyData ? { rawPropertyData } : {}),
     };
   }
-  console.log("[quoterush] LeadId:", leadId);
+  console.log("[quoterush] verified lead received");
   await hooks.onLeadCreated?.(leadId);
 
   // Step D: Submit quote request (triggers QuoteBot)
-  let carriers:unknown[]|undefined;
+  let carriers:string[]|undefined;
+  const sensitiveValues = [WEBID, WEBPASSWORD, ENDPOINT_KEY, AGENCY, ASSIGNED_EMAIL,
+    String(leadId), params.firstName, params.lastName, params.email, params.phone,
+    params.dateOfBirth, params.streetAddress, params.city, params.zip, hooks.callbackUrl ?? "",
+    ...Object.values(params.previousAddress ?? {})];
   try{
     const r=await fetch("https://api.quoterush.com/GetQuotableSitesForLead",{
       method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({EndpointKey:ENDPOINT_KEY,Agency:AGENCY,LeadId:leadId,LOB:"Home"}),
       signal:AbortSignal.timeout(10000),
     });
-    if(!r.ok)throw Error("Carrier discovery failed");
-    const result=await r.json();
-    if(!Array.isArray(result.Sites)||!result.Sites.length)throw Error("No carrier list");
-    carriers=result.Sites;
-  }catch{console.warn("[quoterush] Carrier discovery unavailable; submitting without Carriers");}
-  await hooks.onCarriers?.(carriers?.length??null,carriers?undefined:"Carrier discovery unavailable; submitted without a carrier list.");
+    const body = await r.text();
+    if(!r.ok) {
+      const diagnostics = inspectImporterResponse(body, r.headers.get("content-type"), sensitiveValues).diagnostics;
+      console.warn("[quoterush] carrier discovery rejected", {status:r.status,...diagnostics});
+      throw Error("Carrier discovery failed");
+    }
+    const result=JSON.parse(body);
+    if(!Array.isArray(result.Sites)||!result.Sites.length ||
+      result.Sites.some((site: unknown) => typeof site !== "string" || !site.trim())) throw Error("No carrier list");
+    carriers=[...new Set(result.Sites as string[])];
+  }catch{
+    await hooks.onCarriers?.(null,"Carrier discovery unavailable; no carrier submission attempted.");
+    return {leadId, submitted:false, error:"Carrier discovery unavailable. Agent review required; imported lead retained.", ...(rawPropertyData?{rawPropertyData}:{})};
+  }
+  await hooks.onCarriers?.(carriers.length);
   let submitRes: Response;
   let submitText: string;
   try {
@@ -499,7 +534,7 @@ export async function importAndSubmit(
           LeadId: leadId,
           LOB: "Home",
           Submitter: ASSIGNED_EMAIL,
-          ...(carriers?{Carriers:carriers}:{}),
+          Carriers:carriers,
           ...(hooks.callbackUrl?{callbackUrl:hooks.callbackUrl}:{}),
         }),
         signal: AbortSignal.timeout(30000),
@@ -520,11 +555,13 @@ export async function importAndSubmit(
   console.log(
     "[quoterush] SubmitQuoteRequest status:", submitRes.status
   );
+  const submitInspection = inspectImporterResponse(submitText, submitRes.headers.get("content-type"), sensitiveValues);
+  if (!submitRes.ok) console.warn("[quoterush] submission diagnostics", submitInspection.diagnostics);
 
   return {
     leadId,
     submitted: submitRes.ok,
-    error: submitRes.ok ? undefined : `Quote submission failed (${submitRes.status})`,
+    error: submitRes.ok ? undefined : `Quote submission failed (${submitRes.status}): ${submitInspection.diagnostics.messages.join("; ") || "No readable provider reason"}. Verify QuoteRush premium submission activation and agency authorization.`,
     ...(rawPropertyData ? { rawPropertyData } : {}),
   };
 }

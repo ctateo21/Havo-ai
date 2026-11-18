@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { completePreviousAddress, previousAddressSchema } from "../../shared/optional-previous-address";
+import { windAnswersSchema } from "../../shared/wind-mitigation";
 import {
   isValidQuoteRushDate,
   resolveQuoteRushPropertyDefaults,
@@ -30,6 +32,8 @@ function isClaimDateWithinFiveYears(value: string): boolean {
 }
 
 const quoteRushStartSchema = z.object({
+  previousAddress:z.preprocess(completePreviousAddress,previousAddressSchema.optional()),
+  windAnswers:windAnswersSchema.optional(),
   address: z.string().min(5),
   coverageA: z.number().positive(),
   policyType: z.enum(["HO3", "HO6", "DP3"]),

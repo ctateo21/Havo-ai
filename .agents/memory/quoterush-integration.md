@@ -5,6 +5,76 @@ description: How Havo's live insurance quoting talks to QuoteRUSH — manual tri
 
 # QuoteRUSH integration
 
+## Wind evidence boundary
+
+Permit sources are Property Appraiser first. Christian approved official county/city
+portal fallbacks ONLY for Pasco, Polk, Hernando and Sarasota after PA finds no records.
+Hillsborough, Pinellas, Lee, Manatee and Collier remain appraiser-only.
+**Why:** Christian superseded the blanket portal prohibition for four counties only.
+**How to apply:** Route by verified jurisdiction, not mailing city. Never bypass or
+auto-solve CAPTCHA, login or robots restrictions; uncertain jurisdiction stays Unknown.
+Preserve exact-property and verbatim evidence checks. Garage-only permits cannot
+suggest all openings. Real buyer reports override all estimates.
+
+Lee PA permit dates represent receipt of information, not verified issue dates.
+**Why:** The PA's Building / Construction Permit Data disclaimer expressly says
+the date may not represent issuance or completion.
+**How to apply:** Preserve that qualification; never use receipt dates to prove
+that a reroof was issued after an underwriting cutoff.
+
+Christian requires report-backed, user-confirmed and estimated wind answers to
+remain distinct in the UI and stored evidence. Existing real report values override
+estimates. Christian's latest Apply Defaults decision supersedes the previous
+report-only checkbox rule: always send HaveWindMitForm=true and GatedCommunity
+Single Entry, but never change stored haveReport or invent an inspection date.
+Lead notes must state that these are agency defaults, not verified facts.
+Unknown SWR stays Unknown; absent opening evidence defaults to None. Optional
+IdentityTheft, PersonalInjuryCoverage and IncreaseReplacementCostOnDwelling are off.
+**Why:** Christian explicitly requested matching his desktop Apply Defaults state
+while preserving the provenance of actual wind evidence.
+ProtectionClass and BCEG
+join Coverage A and flood zone as never-AI fields. Estimated roof-to-wall connections
+must never exceed Clips, and uncertain coastal geography must not justify Clips.
+
+Deck attachment C estimates are limited to pre-2002 homes with explicit qualifying
+re-roof evidence. Homes built 2002+ stay B maximum without a report. Generic ROOF
+permit text is not proof of re-roof work. Uploaded reports are private to the user,
+and extraction remains an unconfirmed draft until the user reviews it.
+
+**Why:** Christian narrowed the deck rule and requires evidence, not broad keyword
+matches or automatic acceptance of document extraction.
+
+**Why:** Preliminary carrier credits must not exceed their supporting evidence.
+**How to apply:** Preserve provenance through prompts, cached values and importer
+notes; exclude old AI jurisdiction-rating evidence as well as new inference.
+
+## Ancillary home-field estimates (2026-11-16)
+
+Christian's desktop recording confirms Add VIP Carriers > Execute queues a local
+BOT Manager that opens carrier portals in Chrome. Do not call the API a cloud bot
+until QuoteRush confirms its routing. Human-review alerts must explain this desktop
+execution path. Real wind-form availability must never be inferred from building year
+or protection answers; the importer checkbox now follows the agency default above.
+System update years are unknown, not year built; collect the 4-point evidence.
+
+**Why:** Desktop rating showed missing answers block execution, and defaults can
+misrepresent old homes or nonexistent inspection reports.
+**How to apply:** Preserve the imported lead, avoid duplicate imports, and distinguish
+documented importer fields from carrier-specific popup answers.
+
+Christian authorized OpenRouter best guesses for missing ancillary home fields,
+with structured allowed values, confidence, and explicit "estimated" labels in
+the admin view and lead notes. Verified records and user answers retain priority.
+This supersedes the older blanket no-inference rule only for ancillary fields;
+never infer dwelling Coverage A below rebuild cost, flood zones, applicant facts,
+claims, credit permission or roof age.
+
+**Why:** Imports now work, but incomplete Home tabs still require manual work.
+**How to apply:** Cache property-only estimates separately from verified facts,
+preserve uncertainty, and leave unsupported importer values for agent review.
+Automatic carrier execution follows an explicit user quote request, not merely
+viewing an address. No live testing without Christian's approval.
+
 ## Current insurance decisions (2026-11-12; supersede older shared-cache notes below)
 
 **Rule:** Never pull or ask permission to pull credit; send CreditPermission No.

@@ -11,6 +11,9 @@ import {
 } from "@/lib/auth";
 import { notifyNewScenario } from "@/lib/notify-scenario";
 import { authedFetch } from "@/lib/authed-fetch";
+import { WindEvidenceForm } from "@/components/insurance/wind-evidence-form";
+import { resolveWind,windAnswersSchema,type WindAnswers,type CoastalEvidence,type PermitEvidence } from "@shared/wind-mitigation";
+import {completePreviousAddress} from "@shared/optional-previous-address";
 import { updateProfileContact } from "@/lib/auth";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -81,7 +84,7 @@ const REGIONS: Record<RegionKey, Region> = {
 
 const ROOF_ADJ  = [0.90, 1.00, 1.20, 1.38];
 const OPENING_PROTECTION_ADJ = [1.00, 0.92]; // no, yes
-const ROOF_SHAPE_ADJ = [0.92, 1.06, 1.00]; // hip, flat, other / unsure
+const ROOF_SHAPE_ADJ = [0.92, 1.06, 1.00, 1.00]; // hip, flat, unsure, confirmed gable
 const SWR_ADJ = [1.00, 1.00, 0.94]; // no, unsure, yes
 const HURR_ADJ  = [1.10, 1.05, 1.00];
 const CURRENT_YEAR = new Date().getFullYear();
@@ -735,6 +738,11 @@ export default function InsuranceDashboard() {
   const [newPurchase, setNewPurchase] = useAnonymousDraft<boolean | null>("newPurchase",
     initialQuotePropertyAnswers.newPurchase,
   );
+  const [currentHome,setCurrentHome]=useState({Address:"",City:"",State:"FL",Zip:""});
+  const [windAnswers,setWindAnswers]=useState<WindAnswers>(()=>windAnswersSchema.parse({}));
+  const [windEvidenceUnavailable, setWindEvidenceUnavailable] = useState(false);
+  const [windSupporting,setWindSupporting]=useState<{permits:{permits:PermitEvidence[]};coastal:CoastalEvidence}|null>(null);
+  const [homeMortgage,setHomeMortgage]=useState<string>("");
   const [purchaseDate, setPurchaseDate] = useAnonymousDraft("purchaseDate",
     initialQuotePropertyAnswers.purchaseDate,
   );
@@ -1022,6 +1030,33 @@ export default function InsuranceDashboard() {
   });
 
   const address = scenarios.find(s => s.id === activeScenarioId)?.address || addressParam;
+  const windPreview=useMemo(()=>windAnswersSchema.safeParse(windAnswers).success?resolveWind({
+    county:rebuildRate?.county??getCountyName(address)??"",yearBuilt:Number(yearBuilt),roofYear:Number(roofYear),
+    answers:windAnswers,permits:windSupporting?.permits.permits,coastal:windSupporting?.coastal,
+  }):undefined,[windAnswers,windSupporting,rebuildRate?.county,address,yearBuilt,roofYear]);
+  useEffect(()=>{
+    if(!windPreview)return;
+    setOpeningProtectionIdx(["A","B"].includes(windPreview.fields.opening.value)?1:0);
+    setSwrIdx(windPreview.fields.swr.value==="Yes"?2:windPreview.fields.swr.value==="No"?0:1);
+    setRoofShapeIdx(windPreview.fields.shape.value==="Hip"?0:windPreview.fields.shape.value==="Flat"?1:windPreview.fields.shape.estimated?2:3);
+  },[windPreview]);
+  useEffect(()=>{
+    setWindAnswers(windAnswersSchema.parse({}));setWindSupporting(null);
+    setWindEvidenceUnavailable(false);
+    if(!address)return;
+    let stopped=false,timer:ReturnType<typeof setTimeout>,attempt=0;
+    const read=async()=>{
+      try{
+        const r=await authedFetch(`/api/insurance/wind-evidence?address=${encodeURIComponent(address)}`);
+        if(!r.ok){if(!stopped)setWindEvidenceUnavailable(true);return;}
+        const data=await r.json();if(stopped)return;
+        if(data.evidence)setWindSupporting(data.evidence);
+        else if(++attempt<28)timer=setTimeout(read,3000);
+        else setWindEvidenceUnavailable(true);
+      }catch{if(!stopped)setWindEvidenceUnavailable(true);/* Optional evidence never blocks the quote. */}
+    };
+    timer=setTimeout(read,1500);return()=>{stopped=true;clearTimeout(timer);};
+  },[address]);
 
   // ── Property-characteristics resolution ───────────────────────────────────
   // Resolve the FEMA flood zone for the active address. Priority:
@@ -1722,7 +1757,7 @@ export default function InsuranceDashboard() {
 
   // Quote results belong to an authenticated user AND the complete answer set.
   // Never hydrate an address-only local or shared cache. qr-start alone gates reuse.
-  const quoteIdentity = JSON.stringify([
+  const quoteIdentity = JSON.stringify([currentHome,homeMortgage,windAnswers,
     user?.id, address, rebuild, policyType, policyAnswered, roofYear, yearBuilt, constIdx, constructionKnown,
     openingProtectionIdx, roofShapeIdx, swrIdx, hurrIdx, aopDeductible,
     floodZone, floodZoneUnknown, squareFeet, sqFtConfirmed, newPurchase,
@@ -1735,6 +1770,7 @@ export default function InsuranceDashboard() {
   if (quoteIdentityRef.current !== quoteIdentity) quoteEpochRef.current += 1;
   quoteIdentityRef.current = quoteIdentity;
   const quoteValidationMessages = [
+    ...(!windAnswersSchema.safeParse(windAnswers).success?["Complete the values from your wind mitigation report, or select no report."]:[]),
     ...(!policyAnswered ? ["Select or confirm a policy type."] : []),
     ...(newPurchase === null ? ["Select whether this is a new purchase."] : []),
     ...(newPurchase && !purchaseDate ? ["Enter the confirmed closing date."] : []),
@@ -2059,13 +2095,14 @@ export default function InsuranceDashboard() {
           body: JSON.stringify({
             address,
             coverageA: rebuild,
+            windAnswers,
             policyType: policyType || "HO3",
             // Send the answers as entered. The index fields remain for
             // compatibility with older callers of this endpoint.
             yearBuilt,
             roofYear,
             openingProtection: openingProtectionIdx === 1,
-            roofShape: ["Hip", "Flat", "Gable"][roofShapeIdx] ?? "Gable",
+            roofShape: ["Hip", "Flat", "Gable", "Gable"][roofShapeIdx] ?? "Gable",
             secondaryWaterResistance:
               swrIdx === 2 ? "Yes" : swrIdx === 0 ? "No" : "Unknown",
             windMitigationLocks: windMitigationLocksRef.current,
@@ -2096,6 +2133,8 @@ export default function InsuranceDashboard() {
                 }
               : {}),
             policyEffectiveDate: purchaseDate || undefined,
+            ...(newPurchase && completePreviousAddress(currentHome) ? {previousAddress:completePreviousAddress(currentHome)}:{}),
+            ...(homeMortgage ? {hasMortgage:homeMortgage==="yes"}:{}),
             ...(ho6ResidenceUse
               ? { usageType: ho6ResidenceUse }
               : {}),
@@ -2362,6 +2401,19 @@ export default function InsuranceDashboard() {
             )}
           </div>
 
+          {newPurchase && <fieldset className="container mx-auto px-4 py-3">
+            <legend className="font-medium">Current home address</legend>
+            <p className="text-sm text-muted-foreground">Carriers may require this for a new purchase. Optional here; our team must complete it before running carriers if omitted.</p>
+            <div className="grid gap-2 sm:grid-cols-4">{(["Address","City","State","Zip"] as const).map(key=>
+              <label key={key} className="text-sm">{key === "Address" ? "Street and unit" : key}
+                <Input value={currentHome[key]} onChange={e=>setCurrentHome({...currentHome,[key]:e.target.value})} autoComplete="off" />
+              </label>)}</div>
+          </fieldset>}
+          <div className="container mx-auto px-4 py-2">
+            <label className="text-sm">Will this home have a mortgage? <select aria-label="Will this home have a mortgage?" value={homeMortgage} onChange={e=>setHomeMortgage(e.target.value)} className="border rounded p-2">
+              <option value="">Please select</option><option value="yes">Yes — financed purchase or refinance</option><option value="no">No — owned outright or cash purchase</option>
+            </select></label>
+          </div>
           {/* Address + action bar */}
           <div className="container mx-auto px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-3">
@@ -2578,7 +2630,25 @@ export default function InsuranceDashboard() {
                 </p>
               </CardHeader>
               <CardContent className="space-y-5">
+                <WindEvidenceForm key={address} isAuthenticated={isAuthenticated} value={windAnswers} onChange={value=>{
+                  setWindAnswers(value);
+                  setRoofShapeIdx(value.shape==="Hip"?0:value.shape==="Flat"?1:value.shape==="Gable"?3:2);
+                }} permits={windSupporting?.permits.permits} onRoofYear={setRoofYear}
+                  result={windPreview}/>
+                {windEvidenceUnavailable && <div role="status" className="space-y-1 rounded-lg border border-border bg-muted/40 p-3">
+                  <p className="text-sm font-semibold">County records unavailable or check timed out</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">We couldn’t retrieve supporting county records. You can continue with your entered answers and labeled estimates, or enter an existing report. Missing permit evidence does not confirm any wind credit.</p>
+                </div>}
+                {qrStatus === "starting" && <div role="status" className="space-y-2 rounded-lg border border-primary/15 bg-primary/5 p-3">
+                  <p className="text-sm font-semibold">Checking county permits and records…</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {qrElapsed >= 30
+                      ? "The county records check is taking longer than expected. If records time out or are unavailable, we use your entered answers and clearly labeled estimates—not confirmed permit credits. You can enter report values manually."
+                      : "Looking for supporting evidence. County permits are clues, not proof of complete opening protection or a confirmed insurance credit."}
+                  </p>
+                </div>}
                 <InsuranceEstimateForm
+                  hideWindQuestions
                   policyType={policyType}
                   onPolicyTypeChange={(value) => {
                     setPolicyType(value);
@@ -2658,7 +2728,10 @@ export default function InsuranceDashboard() {
                     setOpeningProtectionIdx(value);
                   }}
                   roofShape={roofShapeIdx}
-                  onRoofShapeChange={setRoofShapeIdx}
+                  onRoofShapeChange={value=>{
+                    setRoofShapeIdx(value);
+                    setWindAnswers(previous=>({...previous,shape:value===0?"Hip":value===1?"Flat":value===3?"Gable":"Not sure"}));
+                  }}
                   swr={swrIdx}
                   onSwrChange={(value) => {
                     windMitigationLocksRef.current.secondaryWaterResistance = true;
@@ -2723,7 +2796,7 @@ export default function InsuranceDashboard() {
                         {qrStatus === "idle" &&
                           "Get real-time rates from your Florida-appointed carriers."}
                         {qrStatus === "starting" &&
-                          "We're getting your quotes. This takes a few minutes. We'll email you the results, and they'll be here when you come back."}
+                          "Checking county permits and records… Report drafts and permit clues do not confirm credits."}
                         {qrStatus === "pending" &&
                           `We're getting your quotes. This takes a few minutes. We'll email you the results, and they'll be here when you come back. ${qrQuoteCounter} quote${qrQuoteCounter !== 1 ? "s" : ""} so far · ${qrElapsed}s`}
                         {qrStatus === "success" &&
@@ -2864,7 +2937,7 @@ export default function InsuranceDashboard() {
                     {openingProtectionIdx === 1
                       ? "impact protection"
                       : "no impact protection"}
-                    , {["hip", "flat", "gable (other / unsure)"][roofShapeIdx] ?? "gable"} roof,{" "}
+                    , {["hip", "flat", "gable (other / unsure)", "gable"][roofShapeIdx] ?? "gable"} roof,{" "}
                     SWR {swrIdx === 2 ? "yes" : swrIdx === 0 ? "no" : "needs confirmation"},{" "}
                     {["concrete block", "mixed masonry / frame", "frame"][constIdx] ?? "concrete block"} construction,{" "}
                     {["2%", "5%", "10%"][hurrIdx] ?? "2%"} hurricane deductible, and{" "}
@@ -2967,7 +3040,7 @@ export default function InsuranceDashboard() {
                       </div>
                       <p className="text-xs text-muted-foreground text-center">
                         {qrStillWorking ? "Still working — we'll email your top 3 when carriers finish. You can close this page."
-                          : qrStatus === "starting" ? "Sending to carriers"
+                          : qrStatus === "starting" ? "Checking county permits and records…"
                             : qrCarrierTotal != null
                               ? `Carriers quoting ${qrRespondedCarriers ?? qrQuoteCounter} of ${qrCarrierTotal}`
                               : `Carriers quoting · ${qrQuoteCounter} quote${qrQuoteCounter === 1 ? "" : "s"} received`}

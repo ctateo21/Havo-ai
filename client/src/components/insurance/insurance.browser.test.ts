@@ -1,6 +1,43 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const ADDRESS = "7400 36th Ave N, St Petersburg, FL 33710";
+test("uploaded wind values remain editable drafts and require explicit review", async ({ page }) => {
+  await fixture(page, { rate: 250 });
+  await page.route("**/api/insurance/wind-report", async route => {
+    expect(route.request().headers()["content-type"]).toContain("multipart/form-data");
+    expect(route.request().postData()).toContain('name="file"');
+    return route.fulfill({ json: { reportId: "private-report-test-82", extracted: {
+      inspectionDate: "2026-01-01", inspector: "Marina Ellis", yearBuilt: 1958,
+      roofCovering: "Concrete tile", roofToWall: "Clips", roofDeck: "D", swr: "Yes", opening: "B", shape: "Hip",
+    } } });
+  });
+  await page.getByLabel("Upload an existing wind mitigation report", { exact: true }).setInputFiles({
+    name: "wind-report.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 test"),
+  });
+  await expect(page.getByLabel("Report reference", { exact: true })).toHaveValue("private-report-test-82");
+  await expect(page.getByLabel("Report: inspector", { exact: true })).toHaveValue("Marina Ellis");
+  await expect(page.getByLabel("Report: year built", { exact: true })).toHaveValue("1958");
+  await expect(page.getByLabel("Report: roof covering", { exact: true })).toHaveValue("Concrete tile");
+  await expect(page.getByLabel("Report: roof deck attachment", { exact: true })).toHaveValue("D");
+  const confirmation = page.getByRole("checkbox", { name: /I copied these values/ });
+  await expect(confirmation).not.toBeChecked();
+  await confirmation.check();
+  await page.getByLabel("Report: inspector", { exact: true }).fill("Marina Ellis, PE");
+  await expect(confirmation).not.toBeChecked();
+});
+
+test("report upload handles expired sign-in without discarding manual entries", async ({ page }) => {
+  await fixture(page, { rate: 250 });
+  await page.getByLabel("Yes, I can enter its values").check();
+  await page.getByLabel("Report reference", { exact: true }).fill("SELLER-REFERENCE");
+  await page.route("**/api/insurance/wind-report", route => route.fulfill({ status: 401, json: { error: "Unauthorized" } }));
+  await page.getByLabel("Upload an existing wind mitigation report", { exact: true }).setInputFiles({
+    name: "wind-report.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 test"),
+  });
+  await expect(page.getByText("Sign up or sign in to upload a private report. Manual entry is still available.")).toBeVisible();
+  await expect(page.getByLabel("Report reference", { exact: true })).toHaveValue("SELLER-REFERENCE");
+});
+
 async function readyLiveQuote(page:Page){
   await expect(page.getByTestId("input-square-feet")).toHaveValue("1166");
   await page.getByTestId("select-policy-type").selectOption("HO3");
@@ -12,6 +49,30 @@ async function readyLiveQuote(page:Page){
   await page.getByTestId("input-roof-year").fill("2018");
   await page.getByTestId("confirm-square-footage").check();
 }
+test("partial previous address is omitted and wind report values are explicitly transcribed",async({page})=>{
+  const calls=await fixture(page,{rate:250});
+  await readyLiveQuote(page);
+  await page.getByLabel("Street and unit",{exact:true}).fill("100 Example Street");
+  await page.getByRole("button",{name:"Get Live Quotes",exact:true}).click();
+  await expect.poll(()=>calls.find(x=>x.path==="/api/insurance/qr-start")).toBeTruthy();
+  const first=calls.find(x=>x.path==="/api/insurance/qr-start")!.body!;
+  expect(first.previousAddress).toBeUndefined();
+  expect((first.windAnswers as any).reportAvailable).toBe(false);
+  await page.getByLabel("Yes, I can enter its values").check();
+  await expect(page.getByRole("button",{name:"Get Live Quotes",exact:true})).toBeDisabled();
+  await page.getByLabel("Report reference",{exact:true}).fill("EXAMPLE REPORT");
+  await page.getByLabel("Inspection date",{exact:true}).fill("2026-01-01");
+  await page.getByLabel("Report: roof-to-wall attachment",{exact:true}).selectOption("Clips");
+  await page.getByLabel("Report: roof deck attachment",{exact:true}).selectOption("C");
+  await page.getByLabel("Report: secondary water resistance",{exact:true}).selectOption("Yes");
+  await page.getByLabel("Report: opening protection code",{exact:true}).selectOption("B");
+  await page.getByLabel("Report: roof shape",{exact:true}).selectOption("Hip");
+  await page.getByRole("checkbox",{name:/I copied these values/i}).check();
+  await page.getByRole("button",{name:"Get Live Quotes",exact:true}).click();
+  await expect.poll(()=>calls.filter(x=>x.path==="/api/insurance/qr-start").length).toBe(2);
+  const second=calls.filter(x=>x.path==="/api/insurance/qr-start")[1].body!;
+  expect((second.windAnswers as any).report.transcribedFromReport).toBe(true);
+});
 test("missing contact prompts before carrier import; details can be saved",async({page})=>{
   await fixture(page,{rate:250});
   await page.route("**/api/insurance/qr-start",route=>route.fulfill({status:428,json:{code:"CONTACT_REQUIRED"}}));
