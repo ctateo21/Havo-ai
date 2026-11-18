@@ -5,6 +5,17 @@ description: How Havo's live insurance quoting talks to QuoteRUSH — manual tri
 
 # QuoteRUSH integration
 
+## Workbook contract precedence
+
+Use the exact accepted JSON keys/options in Christian's November 18, 2026
+transcription of Jeff's mapping workbook over older desktop-label observations.
+Do not infer missing enum spellings. Keep the agency affidavit checkbox default
+true; it does not assert that a verified wind report exists.
+**Why:** Desktop labels and historical examples are not the importer enum contract;
+the explicit mapping request retained the checkbox despite a conflicting quotation.
+**How to apply:** Normalize historical cached suggestions at the outbound boundary,
+omit unsupported options, and preserve separate estimated/report provenance.
+
 ## Wind evidence boundary
 
 Permit sources are Property Appraiser first. Christian approved official county/city
@@ -313,6 +324,15 @@ the warning. Hide it only when a future trusted review flow records explicit
 confirmation in the cached property provenance.
 
 ## Address parsing
+For new purchases only, blank/incomplete previous addresses use the quoted property for quoting only,
+with an explicit unverified-address assumption in the agent note. Complete
+buyer-entered addresses win. Mortgage remains an explicit user choice, not
+inferred from saved scenarios in the insurance flow.
+**Why:** Christian approved this fallback and a dismissible mobile current-home
+form that never blocks quotes on an unanswered mortgage question.
+Refinance/already-owned flows omit a missing previous address and keep the mortgage
+question always visible. The collapsed current-home section is new-purchase-only.
+
 qr-start splits the formatted address on commas and scans segments
 **from the end** for a `ST 12345` pattern (not just the last segment),
 so a trailing country segment like ", USA" from Google doesn't swallow

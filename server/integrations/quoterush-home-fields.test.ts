@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {importerHomeExtras,parseHomeEstimates,homeFieldNotes} from "./quoterush-home-fields";
+import {importerHomeExtras,parseHomeEstimates,homeFieldNotes,validateHomeValue} from "./quoterush-home-fields";
 import {enrichQuoteRushHome} from "./quoterush-home-enrichment";
 import {buildImporterPayload,importAndSubmit,type QuoteRushParams} from "./quoterush";
 import {quoteAnswerIdentity} from "./quote-answer-identity";
@@ -15,6 +15,98 @@ const p = {
   email:"example@example.test",floodZone:"X",windMitForm:false,openingProtection:"None",
   secondaryWaterResistance:"No",roofShape:"Hip",creditPermissionGranted:false,
 } satisfies QuoteRushParams;
+test("workbook enums normalize historical evidence and omit unsupported options",()=>{
+  for(const [old,value] of Object.entries({
+    "Duplex (2 Family)":"Duplex","Triplex (3 Family)":"Triplex","Quadplex (4 Family)":"Quadplex",
+    "Rowhouse (Townhouse Center)":"Townhouse (Center Unit)","Rowhouse (Townhouse End)":"Townhouse (End Unit)",
+  }))assert.equal(validateHomeValue("StructureType",old),value);
+  for(const value of ["Bi-Level","Tri-Level"]){
+    assert.equal(validateHomeValue("StructureType",value),null);
+    assert.equal(validateHomeValue("Stories",value),value);
+  }
+  for(const value of [1,1.5,2,2.5,3,4])assert.equal(validateHomeValue("Stories",value),String(value));
+  for(const value of [5,6,7,8,9,10])assert.equal(validateHomeValue("Stories",value),null);
+  for(const [old,value] of Object.entries({
+    "Inground - small < 300 sq ft":"Inground - small < 300 sq. ft.",
+    "Inground - med 300-600 sq ft":"Inground - 300 - 600 sq. ft.",
+    "Inground - large > 600 sq ft":"Inground - large > 600 sq. ft.",
+    "Above Ground":"Above Ground - Detached",None:"None",
+  }))assert.equal(validateHomeValue("PoolType",old),value);
+  assert.equal(validateHomeValue("PoolType","Indoor"),null);
+  const {HO}=buildImporterPayload({...p,homeFields:parseHomeEstimates(JSON.stringify({
+    Stories:{value:8,confidence:1},PoolType:{value:"Indoor",confidence:1},
+  }))},"agent@example.test");
+  for(const key of ["Stories","PoolType","Pool","Construction","PrimaryWaterHeaterLocation","Sprinklers"])
+    assert.equal(key in HO,false,key);
+});
+test("pool workbook strings pass through and historical variants normalize at the outbound boundary",()=>{
+  const cases = [
+    ["Inground - small < 300 sq ft - Detached","Inground - small < 300 sq. ft. - Detached"],
+    ["Inground - med 300-600 sq ft - Detached","Inground - 300 - 600 sq. ft. - Detached"],
+    ["Inground - large > 600 sq ft - Detached","Inground - large > 600 sq. ft. - Detached"],
+    ["Inground - small < 300 sq ft","Inground - small < 300 sq. ft."],
+    ["Inground - med 300-600 sq ft","Inground - 300 - 600 sq. ft."],
+    ["Inground - large > 600 sq ft","Inground - large > 600 sq. ft."],
+    ["Above Ground","Above Ground - Detached"],
+    ["None","None"],
+  ];
+  for(const [legacy,official] of cases){
+    for(const value of [legacy,official]){
+      assert.equal(validateHomeValue("PoolType",value),official);
+      const evidence={value,confidence:1,source:"property data",estimated:false,fetchedAt:"2026-11-18T00:00:00Z"};
+      // Exercise both the current and historical cache key without pre-normalizing.
+      for(const key of ["PoolType","Pool"]){
+        const {HO}=buildImporterPayload({...p,homeFields:{[key]:evidence} as any},"agent@example.test");
+        assert.equal(HO.PoolType,official);
+        assert.equal("Pool" in HO,false);
+        assert.equal(HO.HaveWindMitForm,true);
+      }
+      const parsed=parseHomeEstimates(JSON.stringify({PoolType:{value,confidence:1}}));
+      assert.equal(parsed.PoolType?.value,official);
+    }
+  }
+  const {HO}=buildImporterPayload({...p,homeFields:{PoolType:{
+    value:"Indoor",confidence:1,source:"property data",estimated:false,fetchedAt:"2026-11-18T00:00:00Z",
+  }}},"agent@example.test");
+  assert.equal("PoolType" in HO,false);
+});
+test("workbook wind values distinguish A/B, omit unknown SWR and unsupported deck D",()=>{
+  for(const opening of ["A","B","X","N","Unknown"]){
+    for(const swr of ["Yes","No","Unknown"]){
+      const windEvidence:any={haveReport:false,notes:[],fields:{
+        opening:{value:opening,source:"user answer",estimated:true},
+        swr:{value:swr,source:"user answer",estimated:true},
+        roofDeck:{value:"D",source:"report",estimated:false},
+        roofToWall:{value:"Unknown",source:"unknown",estimated:true},
+        shape:{value:"Gable",source:"user answer",estimated:false},
+      }};
+      const {HO,Client}=buildImporterPayload({...p,windEvidence},"agent@example.test");
+      assert.equal(HO.OpeningProtection,opening==="A"?"Hurricane Protection":opening==="B"?"Basic":"Unknown or None");
+      assert.equal(HO.SecondaryWaterResistance,swr==="Unknown"?undefined:swr);
+      assert.equal(HO.RoofDeckAttachment,undefined);
+      assert.equal(HO.RoofWallConnection,undefined);
+      assert.equal(HO.HaveWindMitForm,true);
+      assert.equal(HO.GatedCommunity,"Single Entry");
+      assert.match(Client.OverviewNotes,/estimated/);
+    }
+  }
+  for(const deck of ["A","B","C"]){
+    const windEvidence:any={notes:[],fields:{roofDeck:{value:deck},roofToWall:{value:"Clips"},swr:{value:"Unknown"},opening:{value:"X"},shape:{value:"Hip"}}};
+    assert.equal(buildImporterPayload({...p,windEvidence},"agent@example.test").HO.RoofDeckAttachment,`Level ${deck}`);
+  }
+});
+test("official construction subtypes are allowlisted without an extra Construction key",()=>{
+  for(const constructionType of ["Masonry","Frame","Mixed"]){
+    const {HO}=buildImporterPayload({...p,constructionType,frameConstruction:"Vinyl Siding"},"agent@example.test");
+    assert.equal(HO.ConstructionType,constructionType==="Mixed"?"Mixed Masonry-Frame":constructionType);
+    assert.equal(HO.FrameConstruction,"Vinyl Siding");
+    assert.equal(HO.MasonryConstruction,"Concrete Block");
+    assert.equal("Construction" in HO,false);
+  }
+  const {HO}=buildImporterPayload({...p,masonryConstruction:"Brick",frameConstruction:"invented"},"agent@example.test");
+  assert.equal(HO.MasonryConstruction,undefined);
+  assert.equal(HO.FrameConstruction,undefined);
+});
 test("documented home defaults preserve consumer coverage, occupancy, dates, credit and FEMA",()=>{
   const payload=buildImporterPayload(p,"agent@example.test");
   assert.equal(payload.Client.CreditPermission,"No");
@@ -27,8 +119,8 @@ test("documented home defaults preserve consumer coverage, occupancy, dates, cre
   assert.equal(payload.HO.PolicyEffectiveDate,"12/09/2026");
   assert.equal(payload.HO.FloodZone,"X");
   assert.equal(payload.HO.HaveWindMitForm,true);
-  assert.equal(payload.HO.OpeningProtection,"None");
-  assert.equal(payload.HO.SecondaryWaterResistance,"Unknown");
+  assert.equal(payload.HO.OpeningProtection,"Unknown or None");
+  assert.equal(payload.HO.SecondaryWaterResistance,undefined);
   assert.equal(payload.HO.RoofMaterial,"Architectural Shingles");
   assert.equal(payload.HO.UpdatePlumbingYear,undefined);
   assert.equal(payload.HO.ConstructionType,"Masonry");
@@ -40,16 +132,34 @@ test("documented home defaults preserve consumer coverage, occupancy, dates, cre
   assert.equal(payload.HO.underwriting.FireExtinguisher,true);
   assert.match(payload.Client.OverviewNotes,/Agency defaults/);
 });
+test("blank previous address uses quoted property with an assumption, never inventing mortgage",()=>{
+  const out=buildImporterPayload(p,"agent@example.test");
+  assert.deepEqual(out.PreviousAddress,{Address:p.streetAddress,City:p.city,State:p.state,Zip:p.zip});
+  assert.match(out.Client.OverviewNotes,/Assumption for quoting only: PreviousAddress/);
+  assert.equal(out.HO.Mortgage,undefined);
+  const entered={Address:"200 Fictional Lane",City:"Example",State:"FL",Zip:"33000"};
+  const confirmed=buildImporterPayload({...p,previousAddress:entered},"agent@example.test");
+  assert.deepEqual(confirmed.PreviousAddress,entered);
+  assert.doesNotMatch(confirmed.Client.OverviewNotes,/Assumption for quoting only: PreviousAddress/);
+});
+test("owned and refinance imports omit blank previous address and its assumption",()=>{
+  const out=buildImporterPayload({...p,newPurchase:"No"},"agent@example.test");
+  assert.equal("PreviousAddress" in out,false);
+  assert.doesNotMatch(out.Client.OverviewNotes,/Assumption for quoting only: PreviousAddress/);
+  assert.equal("Mortgage" in out.HO,false);
+  const entered={Address:"200 Fictional Lane",City:"Example",State:"FL",Zip:"33000"};
+  assert.deepEqual(buildImporterPayload({...p,newPurchase:"No",previousAddress:entered},"agent@example.test").PreviousAddress,entered);
+});
 test("Apply Defaults fields are explicit without fabricating report provenance",()=>{
   const out=buildImporterPayload({...p,windAnswers:{gated:false} as any},"agent@example.test");
   assert.equal(out.HO.GatedCommunity,"Single Entry");
   assert.equal(out.HO.HaveWindMitForm,true);
   assert.equal(out.HO.Terrain,"Exposure B");
-  assert.equal(out.HO.Sprinklers,"None");
+  assert.equal(out.HO.SprinklerSystem,"None");
   assert.equal(out.HO.BusinessOnPremises,"No");
   assert.equal(out.HO.BurglarAlarm,"None");
   assert.equal(out.HO.FireAlarm,"None");
-  assert.equal(out.HO.PrimaryWaterHeaterLocation,"Garage");
+  assert.equal(out.HO.WaterHeaterLocation,"Garage");
   for(const key of ["PersonalInjuryCoverage","IdentityTheft","IncreaseReplacementCostOnDwelling"])
     assert.equal(out.HO[key],false);
   assert.match(out.Client.OverviewNotes,/NOT evidence of a real report/);
@@ -62,7 +172,7 @@ test("five previously blank Home fields use documented keys and Coverage A never
     ScreenedEnclosureSquareFeet:{value:400,confidence:.8},CoverageA:{value:1,confidence:1},
   }));
   const {HO}=buildImporterPayload({...p,homeFields},"agent@example.test");
-  for(const key of ["StructureType","Stories","Pool","CoverageA","PoolScreenedEnclosure"])
+  for(const key of ["StructureType","Stories","PoolType","CoverageA","PoolScreenedEnclosure"])
     assert.ok(HO[key]!==undefined && HO[key]!=="",key);
   assert.equal(HO.PoolScreenedEnclosure,true);
   assert.equal(HO.ScreenedEnclosureSquareFeet,"400");
@@ -74,8 +184,8 @@ test("previous address and observed desktop enums map without changing protected
     StructureType:{value:"Duplex (2 Family)",confidence:.9}}));
   const out=buildImporterPayload({...p,previousAddress,homeFields:fields},"agent@example.test");
   assert.deepEqual(out.PreviousAddress,previousAddress);
-  assert.equal(out.HO.Pool,"Above Ground");
-  assert.equal(out.HO.StructureType,"Duplex (2 Family)");
+  assert.equal(out.HO.PoolType,"Above Ground - Detached");
+  assert.equal(out.HO.StructureType,"Duplex");
   assert.equal(out.HO.CoverageA,"331000");
   assert.notEqual(quoteAnswerIdentity({...p,previousAddress},"owner-one").answerHash,
     quoteAnswerIdentity({...p,previousAddress},"owner-two").answerHash);

@@ -13,6 +13,7 @@
 // the quote route for mapping review. Do not log it: it is not public data.
 
 import type { QuoteRushPropertyDefaults } from "@shared/quoterush-property-defaults";
+import {quoteRushEnv} from "./quoterush-env";
 import { quoteRushFetch as fetch } from "./quoterush-pause";
 import { importerHomeExtras, homeFieldNotes, APPLY_DEFAULT_NOTES, type HomeFields } from "./quoterush-home-fields";
 import {windNotes,type WindAnswers,type WindResult} from "../../shared/wind-mitigation";
@@ -95,16 +96,16 @@ export interface QuoteRushResult {
 }
 
 function getWebId(): string {
-  return process.env.QUOTERUSH_WEBID ?? "";
+  return quoteRushEnv().webId;
 }
 function getWebPassword(): string {
-  return process.env.QUOTERUSH_WEBID_PASSWORD ?? process.env.QUOTERUSH_WEBPASSWORD ?? "";
+  return quoteRushEnv().webPassword;
 }
 function getEndpointKey(): string {
-  return process.env.QUOTERUSH_ENDPOINT_KEY ?? "";
+  return quoteRushEnv().endpointKey;
 }
 function getAgency(): string {
-  return process.env.QUOTERUSH_AGENCY_ID ?? process.env.QUOTERUSH_AGENCY ?? "";
+  return quoteRushEnv().agency;
 }
 
 import { inspectImporterResponse } from "./quoterush-import-response";
@@ -132,14 +133,16 @@ export function buildImporterPayload(
   }
   const formTypeMap: Record<string, string> = {
     HO3: "HO-3: Home Owners Policy",
-    HO6: "HO-6: Condo Unit Owners Policy",
-    DP3: "DP-3: Dwelling Fire Policy",
+    HO6: "HO-6: Condo Owners Policy",
+    DP3: "DP-3 Dwelling Fire/Renters",
   };
   const formType =
     formTypeMap[p.policyType] ||
     "HO-3: Home Owners Policy";
   const payload: Record<string, any> = {
-    ...(p.previousAddress ? {PreviousAddress:p.previousAddress} : {}),
+    ...(p.previousAddress?{PreviousAddress:p.previousAddress}:p.newPurchase==="Yes"?{
+      PreviousAddress:{Address:p.streetAddress,City:p.city,State:p.state,Zip:p.zip},
+    }:{}),
     Client: {
       NameFirst: p.firstName || "Havo",
       NameLast: p.lastName || "Lead",
@@ -169,7 +172,7 @@ export function buildImporterPayload(
       LeadStatus: "New Lead",
       OverviewNotes: [...APPLY_DEFAULT_NOTES, ...homeFieldNotes(p.homeFields ?? {}),
         ...(p.windEvidence?windNotes(p.windEvidence):[]),
-        ...(!p.previousAddress && p.newPurchase==="Yes" ? ["Agent required: collect buyer's current home address before carrier execution."]:[]),
+        ...(!p.previousAddress && p.newPurchase==="Yes" ? ["Assumption for quoting only: PreviousAddress uses the quoted property address; this is not a verified buyer address. Agent must confirm the buyer's current home address."]:[]),
         ...(p.windEvidence?.haveReport?["Wind report values transcribed by user; agent must verify against report."]:["No verified wind mitigation form supplied; obtain actual report and inspection date before applying form credits."]),
         "System update years unknown; verify with 4-point inspection."].join("\n"),
       Lob_Home: true,
@@ -189,7 +192,7 @@ export function buildImporterPayload(
       NewPurchase: p.newPurchase || "No",
       ...(p.purchaseDate ? { PurchaseDate: formatDateOfBirth(p.purchaseDate) } : {}),
       PurchasePrice: String(Math.round(p.purchasePrice)),
-      UsageType: p.usageType || "Primary",
+      UsageType: p.usageType === "Investment" || p.usageType?.toLowerCase() === "rental" ? "Rental" : p.usageType || "Primary",
       MonthsOwnerOccupied: p.monthsOccupied,
       MonthsOccupied: p.monthsOccupied,
       ...(p.rentalTerm ? { RentalTerm: p.rentalTerm } : {}),
@@ -198,18 +201,13 @@ export function buildImporterPayload(
       // Do not fabricate a square-footage value. Carrier data is only useful
       // when it is supplied by the user or a verified property source.
       ...(p.sqFt > 0 ? { SquareFeet: String(Math.round(p.sqFt)) } : {}),
-      ConstructionType: p.constructionType ||
-        "Masonry",
-      Construction:
-        p.constructionType === "Mixed"
-          ? p.masonryConstruction || "Mixed"
-          : p.masonryConstruction ||
-            p.constructionType ||
-            "Concrete Block",
+      ConstructionType: p.constructionType === "Mixed" ? "Mixed Masonry-Frame" : p.constructionType || "Masonry",
       // Do not send exterior-finish labels (for example Stucco) as a
       // structural framing subtype.
-      MasonryConstruction:
-        p.masonryConstruction || "",
+      ...(["Concrete Block","Concrete Block - Stucco","Solid Brick","Solid Stone","Superior"].includes(p.masonryConstruction)
+        ? {MasonryConstruction:p.masonryConstruction}:{}),
+      ...(["Frame","Frame - Stucco","Aluminum Siding","Vinyl Siding","Wood Siding","Hardiplank Siding","Masonry Veneer","Brick Veneer","Stone Veneer","Logs","Asbestos"].includes(p.frameConstruction)
+        ? {FrameConstruction:p.frameConstruction}:{}),
       FoundationType: "Slab",
       RoofShape: p.windEvidence?.fields.shape.value || p.roofShape || "Gable",
       RoofMaterial: "Architectural Shingles",
@@ -255,13 +253,12 @@ export function buildImporterPayload(
       // Agency Apply Defaults setting; NOT proof that a report was supplied.
       // Keep real report provenance separately in windEvidence and lead notes.
       HaveWindMitForm: true,
-      SecondaryWaterResistance: "Unknown",
-      OpeningProtection: "None",
+      OpeningProtection: "Unknown or None",
       ...(p.windEvidence ? {
         ...(p.windEvidence.fields.roofToWall.value!=="Unknown"?{RoofWallConnection:p.windEvidence.fields.roofToWall.value}:{}),
-        ...(p.windEvidence.fields.roofDeck.value!=="Unknown"?{RoofDeckAttachment:`Level ${p.windEvidence.fields.roofDeck.value}`} : {}),
-        SecondaryWaterResistance:p.windEvidence.fields.swr.value,
-        OpeningProtection:["A","B"].includes(p.windEvidence.fields.opening.value)?"Hurricane Protection":"None",
+        ...(["A","B","C"].includes(p.windEvidence.fields.roofDeck.value)?{RoofDeckAttachment:`Level ${p.windEvidence.fields.roofDeck.value}`} : {}),
+        ...(["Yes","No"].includes(p.windEvidence.fields.swr.value)?{SecondaryWaterResistance:p.windEvidence.fields.swr.value}:{}),
+        OpeningProtection:p.windEvidence.fields.opening.value==="A"?"Hurricane Protection":p.windEvidence.fields.opening.value==="B"?"Basic":"Unknown or None",
         ...(p.windEvidence.haveReport && p.windAnswers?.report?{WindMitigationInspectionDate:formatDateOfBirth(p.windAnswers.report.inspectionDate)}:{}),
       }:{}),
       Terrain: "Exposure B",
@@ -386,9 +383,7 @@ export async function importAndSubmit(
   const WEBPASSWORD = getWebPassword();
   const ENDPOINT_KEY = getEndpointKey();
   const AGENCY = getAgency();
-  const ASSIGNED_EMAIL =
-    process.env.QUOTERUSH_ASSIGNED_EMAIL ??
-    "christian@tateoco.com";
+  const ASSIGNED_EMAIL = quoteRushEnv().assignedEmail;
 
   if (!WEBID || !WEBPASSWORD ||
       !ENDPOINT_KEY || !AGENCY) {

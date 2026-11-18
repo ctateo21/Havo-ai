@@ -1,5 +1,36 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test("mobile current home form closes blank and populated without assuming mortgage",async({page})=>{
+  await page.setViewportSize({width:390,height:844});
+  await fixture(page,{rate:250});
+  await page.getByTestId("select-new-purchase").selectOption("yes");
+  const section=page.getByRole("region",{name:"Current home and mortgage"});
+  await expect(section.getByRole("button",{name:"Edit"})).toBeVisible();
+  await section.getByRole("button",{name:"Edit"}).click();
+  await expect(section.getByLabel("Will this home have a mortgage?")).toHaveValue("");
+  await section.getByRole("button",{name:"Close",exact:true}).click();
+  await expect(section).toContainText("Mortgage: Not answered");
+  await section.getByRole("button",{name:"Edit"}).click();
+  await section.getByLabel("Will this home have a mortgage?").selectOption("no");
+  if(await section.getByLabel("Street and unit").count()){
+    await section.getByLabel("Street and unit").fill("200 Fictional Lane");
+  }
+  await section.getByRole("button",{name:"Done",exact:true}).click();
+  await expect(section).toContainText("Mortgage: No");
+  await section.getByRole("button",{name:"Edit"}).click();
+  await expect(section.getByLabel("Will this home have a mortgage?")).toHaveValue("no");
+});
+test("already-owned mortgage question stays visible and optional without a collapse section",async({page})=>{
+  await fixture(page,{rate:250});
+  await page.getByTestId("select-new-purchase").selectOption("no");
+  await expect(page.getByRole("region",{name:"Current home and mortgage"})).toHaveCount(0);
+  const mortgage=page.getByLabel("Will this home have a mortgage?");
+  await expect(mortgage).toBeVisible();
+  await expect(mortgage).toHaveValue("");
+  await mortgage.selectOption("yes");
+  await expect(mortgage).toHaveValue("yes");
+});
+
 const ADDRESS = "7400 36th Ave N, St Petersburg, FL 33710";
 test("uploaded wind values remain editable drafts and require explicit review", async ({ page }) => {
   await fixture(page, { rate: 250 });
@@ -52,6 +83,7 @@ async function readyLiveQuote(page:Page){
 test("partial previous address is omitted and wind report values are explicitly transcribed",async({page})=>{
   const calls=await fixture(page,{rate:250});
   await readyLiveQuote(page);
+  await page.getByRole("region",{name:"Current home and mortgage"}).getByRole("button",{name:"Edit"}).click();
   await page.getByLabel("Street and unit",{exact:true}).fill("100 Example Street");
   await page.getByRole("button",{name:"Get Live Quotes",exact:true}).click();
   await expect.poll(()=>calls.find(x=>x.path==="/api/insurance/qr-start")).toBeTruthy();

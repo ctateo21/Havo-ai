@@ -70,7 +70,7 @@ test("historical payload contract retains enums with documented single keys and 
     assert.equal(section[historical],section[documented]);
     assert.ok(section[historical]);
   }
-  for(const key of ["FormType","ConstructionType","Construction","MasonryConstruction","UsageType","AllOtherPerilsDeductible","HurricaneDeductible","WindHailDeductible"])
+  for(const key of ["FormType","MasonryConstruction","UsageType","AllOtherPerilsDeductible","HurricaneDeductible","WindHailDeductible"])
     assert.equal(current.HO[key],old.HO[key]);
   assert.equal(current.HO.PurchaseDate,"12/01/2026");
   assert.equal(current.HO.PolicyEffectiveDate,"12/01/2026");
@@ -113,11 +113,11 @@ test("importer payload retains exact property answers, mixed construction, and b
     {
       yearBuilt: "2007",
       roofYear: "2022",
-      openingProtection: "None",
+      openingProtection: "Unknown or None",
       roofShape: "Hip",
-      swr: "Unknown",
-      constructionType: "Mixed",
-      construction: "Concrete Block",
+      swr: undefined,
+      constructionType: "Mixed Masonry-Frame",
+      construction: undefined,
       masonry: "Concrete Block",
       frame: undefined,
       hurricane: "5%",
@@ -149,22 +149,22 @@ test("six zero-cost policy payload sanity cases stay normalized", () => {
     {
       name: "HO6 primary",
       input: { policyType: "HO6", usageType: "Primary", newPurchase: "No", rentalTerm: "" },
-      expected: { formType: "HO-6: Condo Unit Owners Policy", usageType: "Primary", newPurchase: "No", rentalTerm: undefined },
+      expected: { formType: "HO-6: Condo Owners Policy", usageType: "Primary", newPurchase: "No", rentalTerm: undefined },
     },
     {
       name: "HO6 investment",
       input: { policyType: "HO6", usageType: "Investment", newPurchase: "No", rentalTerm: "Monthly" },
-      expected: { formType: "HO-6: Condo Unit Owners Policy", usageType: "Investment", newPurchase: "No", rentalTerm: "Monthly" },
+      expected: { formType: "HO-6: Condo Owners Policy", usageType: "Rental", newPurchase: "No", rentalTerm: "Monthly" },
     },
     {
       name: "DP3 annual",
       input: { policyType: "DP3", usageType: "Investment", newPurchase: "No", rentalTerm: "Annual" },
-      expected: { formType: "DP-3: Dwelling Fire Policy", usageType: "Investment", newPurchase: "No", rentalTerm: "Annual" },
+      expected: { formType: "DP-3 Dwelling Fire/Renters", usageType: "Rental", newPurchase: "No", rentalTerm: "Annual" },
     },
     {
       name: "DP3 weekly",
       input: { policyType: "DP3", usageType: "Investment", newPurchase: "No", rentalTerm: "Weekly" },
-      expected: { formType: "DP-3: Dwelling Fire Policy", usageType: "Investment", newPurchase: "No", rentalTerm: "Weekly" },
+      expected: { formType: "DP-3 Dwelling Fire/Renters", usageType: "Rental", newPurchase: "No", rentalTerm: "Weekly" },
     },
   ] as const;
 
@@ -1030,8 +1030,8 @@ test("property enrichment can supplement square footage but cannot overwrite exp
     const payload = JSON.parse(String(importer.body));
     assert.equal(payload.HO.SquareFeet, "2600");
     assert.equal(payload.HO.YearBuilt, "2007");
-    assert.equal(payload.HO.ConstructionType, "Mixed");
-    assert.equal(payload.HO.Construction, "Concrete Block");
+    assert.equal(payload.HO.ConstructionType, "Mixed Masonry-Frame");
+    assert.equal(payload.HO.Construction, undefined);
     assert.equal("FrameConstruction" in payload.HO, false);
 
     await importAndSubmit({ ...params, sqFt: 2_100 });
