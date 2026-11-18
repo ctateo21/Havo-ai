@@ -313,6 +313,13 @@ the warning. Hide it only when a future trusted review flow records explicit
 confirmation in the cached property provenance.
 
 ## Address parsing
+Blank/incomplete previous addresses use the quoted property for quoting only,
+with an explicit unverified-address assumption in the agent note. Complete
+buyer-entered addresses win. Mortgage remains an explicit user choice, not
+inferred from saved scenarios in the insurance flow.
+**Why:** Christian approved this fallback and a dismissible mobile current-home
+form that never blocks quotes on an unanswered mortgage question.
+
 qr-start splits the formatted address on commas and scans segments
 **from the end** for a `ST 12345` pattern (not just the last segment),
 so a trailing country segment like ", USA" from Google doesn't swallow

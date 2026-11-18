@@ -12,6 +12,7 @@ import {
 import { notifyNewScenario } from "@/lib/notify-scenario";
 import { authedFetch } from "@/lib/authed-fetch";
 import { WindEvidenceForm } from "@/components/insurance/wind-evidence-form";
+import {CurrentHomeForm} from "@/components/insurance/current-home-form";
 import { resolveWind,windAnswersSchema,type WindAnswers,type CoastalEvidence,type PermitEvidence } from "@shared/wind-mitigation";
 import {completePreviousAddress} from "@shared/optional-previous-address";
 import { updateProfileContact } from "@/lib/auth";
@@ -2113,9 +2114,6 @@ export default function InsuranceDashboard() {
             hurrIdx,
             hasClaims,
             claimRecords,
-            ...(deriveMortgageForAddress(address) !== undefined
-              ? { hasMortgage: deriveMortgageForAddress(address) }
-              : {}),
             aopDeductible,
             floodZone,
             floodZoneUnknown:floodZoneUnknown||!floodZone.trim(),
@@ -2401,19 +2399,7 @@ export default function InsuranceDashboard() {
             )}
           </div>
 
-          {newPurchase && <fieldset className="container mx-auto px-4 py-3">
-            <legend className="font-medium">Current home address</legend>
-            <p className="text-sm text-muted-foreground">Carriers may require this for a new purchase. Optional here; our team must complete it before running carriers if omitted.</p>
-            <div className="grid gap-2 sm:grid-cols-4">{(["Address","City","State","Zip"] as const).map(key=>
-              <label key={key} className="text-sm">{key === "Address" ? "Street and unit" : key}
-                <Input value={currentHome[key]} onChange={e=>setCurrentHome({...currentHome,[key]:e.target.value})} autoComplete="off" />
-              </label>)}</div>
-          </fieldset>}
-          <div className="container mx-auto px-4 py-2">
-            <label className="text-sm">Will this home have a mortgage? <select aria-label="Will this home have a mortgage?" value={homeMortgage} onChange={e=>setHomeMortgage(e.target.value)} className="border rounded p-2">
-              <option value="">Please select</option><option value="yes">Yes — financed purchase or refinance</option><option value="no">No — owned outright or cash purchase</option>
-            </select></label>
-          </div>
+          <CurrentHomeForm address={currentHome} onAddress={setCurrentHome} mortgage={homeMortgage} onMortgage={setHomeMortgage} newPurchase={newPurchase===true}/>
           {/* Address + action bar */}
           <div className="container mx-auto px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-3">

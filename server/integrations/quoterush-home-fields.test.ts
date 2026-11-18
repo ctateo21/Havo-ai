@@ -40,6 +40,16 @@ test("documented home defaults preserve consumer coverage, occupancy, dates, cre
   assert.equal(payload.HO.underwriting.FireExtinguisher,true);
   assert.match(payload.Client.OverviewNotes,/Agency defaults/);
 });
+test("blank previous address uses quoted property with an assumption, never inventing mortgage",()=>{
+  const out=buildImporterPayload(p,"agent@example.test");
+  assert.deepEqual(out.PreviousAddress,{Address:p.streetAddress,City:p.city,State:p.state,Zip:p.zip});
+  assert.match(out.Client.OverviewNotes,/Assumption for quoting only: PreviousAddress/);
+  assert.equal(out.HO.Mortgage,undefined);
+  const entered={Address:"200 Fictional Lane",City:"Example",State:"FL",Zip:"33000"};
+  const confirmed=buildImporterPayload({...p,previousAddress:entered},"agent@example.test");
+  assert.deepEqual(confirmed.PreviousAddress,entered);
+  assert.doesNotMatch(confirmed.Client.OverviewNotes,/Assumption for quoting only: PreviousAddress/);
+});
 test("Apply Defaults fields are explicit without fabricating report provenance",()=>{
   const out=buildImporterPayload({...p,windAnswers:{gated:false} as any},"agent@example.test");
   assert.equal(out.HO.GatedCommunity,"Single Entry");

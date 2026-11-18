@@ -139,7 +139,7 @@ export function buildImporterPayload(
     formTypeMap[p.policyType] ||
     "HO-3: Home Owners Policy";
   const payload: Record<string, any> = {
-    ...(p.previousAddress ? {PreviousAddress:p.previousAddress} : {}),
+    PreviousAddress:p.previousAddress || {Address:p.streetAddress,City:p.city,State:p.state,Zip:p.zip},
     Client: {
       NameFirst: p.firstName || "Havo",
       NameLast: p.lastName || "Lead",
@@ -169,7 +169,7 @@ export function buildImporterPayload(
       LeadStatus: "New Lead",
       OverviewNotes: [...APPLY_DEFAULT_NOTES, ...homeFieldNotes(p.homeFields ?? {}),
         ...(p.windEvidence?windNotes(p.windEvidence):[]),
-        ...(!p.previousAddress && p.newPurchase==="Yes" ? ["Agent required: collect buyer's current home address before carrier execution."]:[]),
+        ...(!p.previousAddress ? ["Assumption for quoting only: PreviousAddress uses the quoted property address; this is not a verified buyer address. Agent must confirm the buyer's current home address."]:[]),
         ...(p.windEvidence?.haveReport?["Wind report values transcribed by user; agent must verify against report."]:["No verified wind mitigation form supplied; obtain actual report and inspection date before applying form credits."]),
         "System update years unknown; verify with 4-point inspection."].join("\n"),
       Lob_Home: true,
