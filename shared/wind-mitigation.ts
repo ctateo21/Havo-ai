@@ -4,6 +4,18 @@ export const CLIP_YEAR: Record<string, number> = {
   pinellas:1996, manatee:1996, sarasota:1996, lee:1996, collier:1996,
   hillsborough:1997, pasco:1997, hernando:1997, polk:1997,
 };
+export const PRODUCT_APPROVAL = ["Meets FBC 2001","Meets FBC 1994","Non-FBC"] as const;
+/** Planning assumptions approved for preliminary quotes, not inspection findings. */
+export function assumeWindAttachments(county:string, yearBuilt:number, roofYear:number, coastal?:CoastalEvidence) {
+  const known=Number.isFinite(yearBuilt)&&yearBuilt>=1800;
+  const normalized=county.toLowerCase().replace(/ county$/,"");
+  const clips=known && (yearBuilt>=2003 || yearBuilt>=(CLIP_YEAR[normalized]??2003) ||
+    (yearBuilt>=1987&&yearBuilt<=1995&&coastal?.status==="inside"));
+  const roofDeck=!known?"A":yearBuilt>=2002||roofYear>=2008?"C":yearBuilt>=1994?"B":"A";
+  const basis=known?`Assumed from ${yearBuilt} build, ${county || "county not supplied"}${coastal?.status==="inside"?" and coastal-zone check":""}`:"Assumed conservative attachment; year built not supplied";
+  return {roofDeck:roofDeck as "A"|"B"|"C",roofToWall:clips?"Clips" as const:"Toe Nails" as const,
+    wallBasis:basis,deckBasis:`${basis}${known&&roofYear>=2008?`; ${roofYear} roof year`:""}`};
+}
 const windObjectSchema = z.object({
   reportAvailable:z.boolean().default(false),
   report:z.object({
@@ -12,15 +24,20 @@ const windObjectSchema = z.object({
     inspector:z.string().trim().max(200).optional(),
     yearBuilt:z.number().int().min(1800).max(2027).optional(),
     roofCovering:z.string().trim().max(300).optional(),
+    productApproval:z.enum(PRODUCT_APPROVAL).optional(),
+    assumedFields:z.array(z.enum(["roofToWall","roofDeck","swr","opening","shape","roofCovering","productApproval"])).optional(),
     inspectionDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v=>Number.isFinite(Date.parse(v)) && new Date(v).toISOString().slice(0,10)===v && Date.parse(v)<=Date.now()),
     transcribedFromReport:z.literal(true),
-    roofToWall:z.enum(["Unknown","Toe Nails","Clips","Single Wraps","Double Wraps"]),
-    roofDeck:z.enum(["Unknown","A","B","C","D"]),
+    roofToWall:z.enum(["Unknown","Toe Nails","Clips","Single Wraps","Double Wraps","Structural","N/A"]),
+    roofDeck:z.enum(["Unknown","A","B","C","D","Concrete"]),
     swr:z.enum(["Unknown","Yes","No"]),
     opening:z.enum(["Unknown","A","B","C","N","X"]),
     shape:z.enum(["Hip","Gable","Flat"]),
   }).optional(),
   shape:z.enum(["Hip","Gable","Flat","Not sure"]).default("Not sure"),
+  roofDeck:z.enum(["A","B","C","Concrete"]).optional(),
+  roofToWall:z.enum(["Toe Nails","Clips","Single Wraps","Double Wraps","Structural","N/A"]).optional(),
+  roofCovering:z.enum(PRODUCT_APPROVAL).optional(),
   allOpenings:z.enum(["all","partial","unsure"]).default("unsure"),
   openingsConfirmed:z.boolean().default(false),
   peelAndStick:z.enum(["yes","no","unsure"]).default("unsure"),
@@ -50,29 +67,21 @@ export function resolveWind(input:{county:string; yearBuilt:number; roofYear:num
   const fact=(value:string,source:string,estimated=true):WindEvidence=>({value,source,estimated});
   if(a.reportAvailable && a.report){
     const r=a.report,source=`Report ${r.uploadId || r.reference || "user-confirmed values"}, inspected ${r.inspectionDate} — confirmed by user`;
-    return {haveReport:true,fields:{roofToWall:fact(r.roofToWall,source,false),roofDeck:fact(r.roofDeck,source,false),
-      swr:fact(r.swr,source,false),opening:fact(r.opening,source,false),shape:fact(r.shape,source,false)},notes:[]};
+    const field=(key:"roofToWall"|"roofDeck"|"swr"|"opening"|"shape",value:string)=>
+      fact(value,r.assumedFields?.includes(key)?"Assumed value; not present in uploaded report":source,!!r.assumedFields?.includes(key));
+    return {haveReport:true,fields:{roofToWall:field("roofToWall",r.roofToWall),roofDeck:field("roofDeck",r.roofDeck),
+      swr:field("swr",r.swr),opening:field("opening",r.opening),shape:field("shape",r.shape)},notes:[]};
   }
-  const county=input.county.toLowerCase().replace(/ county$/,"");
-  const cutoff=CLIP_YEAR[county]??2003;
-  const clips=input.yearBuilt>=2003 || input.yearBuilt>=cutoff ||
-    (input.yearBuilt>=1987 && input.yearBuilt<=1995 && input.coastal?.status==="inside");
-  const roofPermit=permits.find(p=>p.dateBasis!=="received" && permitKinds(p).roof && Date.parse(p.date)>Date.parse("2007-10-01"));
-  const openings=permits.filter(p=>permitKinds(p).opening);
-  const swrPermit=permits.find(p=>p.classification?.swr===true&&
-    p.description.includes(p.classification.quote)&&
-    /\b(peel.and.stick|self.adhered underlayment|seam tape)\b/i.test(p.classification.quote));
-  const deck=roofPermit&&input.yearBuilt<2002?"C":input.roofYear>input.yearBuilt||input.yearBuilt>=2002?"B":"Unknown";
+  const assumed=assumeWindAttachments(input.county,input.yearBuilt,input.roofYear,input.coastal);
   const fields:WindResult["fields"]={
-    roofToWall:fact(clips?"Clips":"Unknown",input.yearBuilt<1996&&clips?"coastal-zone check + year built":"year built"),
-    roofDeck:fact(deck,roofPermit?`county permit ${roofPermit.number}`:"year built / user roof year"),
-    swr:fact(a.peelAndStick==="no"?"No":a.peelAndStick==="yes"||swrPermit||input.roofYear>=2021?"Yes":"No",
-      a.peelAndStick!=="unsure"?"user answer":swrPermit?`county PA permit ${swrPermit.number}: "${swrPermit.classification!.quote}" (${swrPermit.sourceUrl})`:input.roofYear>=2021?"roof year 2021 or later — estimated": "agency default — no verified SWR evidence"),
-    opening:fact(a.allOpenings==="all"&&a.openingsConfirmed?(openings.length?"B":"N"):"X",openings.length?"county permit + user answer":"user answer"),
-    shape:fact(a.shape==="Not sure"?"Gable":a.shape,a.shape==="Not sure"?"agency default — please confirm":"user answer",a.shape==="Not sure"),
+    roofToWall:fact(a.roofToWall??assumed.roofToWall,a.roofToWall?"User-selected estimate":assumed.wallBasis),
+    roofDeck:fact(a.roofDeck??assumed.roofDeck,a.roofDeck?"User-selected estimate":assumed.deckBasis),
+    swr:fact(a.peelAndStick==="no"?"No":a.peelAndStick==="yes"||input.roofYear>=2021?"Yes":"No",
+      a.peelAndStick!=="unsure"?"User-selected estimate":`Assumed from ${input.roofYear || "missing"} roof year`),
+    opening:fact(a.allOpenings==="all"?"A":"None",a.allOpenings==="all"?"User-selected estimate":"Assumed no complete opening protection"),
+    shape:fact(a.shape==="Not sure"?"Gable":a.shape,a.shape==="Not sure"?"Agency default":"User-selected estimate"),
   };
   return {haveReport:false,fields,notes:[
-    ...openings.map(p=>`Opening permit ${p.number}: ${p.description}; confirm ALL windows, doors, sliders and garage door.`),
     ...(input.coastal?[`Coastal check: ${input.coastal.status}; distance ${input.coastal.distanceFeet??"unknown"} ft; ${input.coastal.source}; ${input.coastal.reason??""}`]:[]),
     "No wind mitigation report supplied; estimated credits require carrier verification.",
   ]};

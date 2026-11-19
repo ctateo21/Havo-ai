@@ -2125,6 +2125,7 @@ export default function InsuranceDashboard() {
             yearBuilt,
             roofYear,
             roofMaterial,
+            roofCovering: windAnswers.roofCovering ?? "Meets FBC 2001",
             roofShapeUserSet: roofShapeUserSet.current,
             roofMaterialUserSet: roofMaterialUserSet.current,
             openingProtection: openingProtectionIdx === 1,
@@ -2648,6 +2649,8 @@ export default function InsuranceDashboard() {
               </CardHeader>
               <CardContent className="space-y-5">
                 <WindEvidenceForm key={address} isAuthenticated={isAuthenticated} value={windAnswers}
+                  roofMaterial={roofMaterial}
+                  onRoofMaterialChange={value => { roofMaterialUserSet.current = true; setRoofMaterial(value); }}
                   onRoofShapeSelection={() => { roofShapeUserSet.current = true; }}
                   roofShapeSource={!roofShapeUserSet.current ? windSupporting?.roof?.source || "Gable/Other planning assumption; not independently verified" : undefined}
                   assumedSwr={windPreview?.fields.swr.value === "Yes"}

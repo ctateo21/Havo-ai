@@ -13,7 +13,7 @@ const USER = {
 const json = (route: Route, body: unknown, status = 200) =>
   route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
-async function mockInsurance(page: Page, options: { unavailable?: boolean; shape?: "Hip" | "Flat" | "Gable"; swrPermit?: boolean; legacyClaims?: boolean } = {}) {
+async function mockInsurance(page: Page, options: { unavailable?: boolean; shape?: "Hip" | "Flat" | "Gable"; swrPermit?: boolean; legacyClaims?: boolean; sparseReport?: boolean; missingBuild?: boolean; reportOpening?: "A" | "X" } = {}) {
   const submissions: Record<string, any>[] = [];
   const calls: string[] = [];
   let expiration: string | null = null;
@@ -54,9 +54,9 @@ async function mockInsurance(page: Page, options: { unavailable?: boolean; shape
       calls.push(path);
       if (path === "/api/insurance/rebuild-rate") return options.unavailable ? json(route, { error: "Fixture rate unavailable" }, 503) : json(route, { county: "hillsborough", countyName: "Hillsborough", masonry_cost_per_sqft: 237, frame_cost_per_sqft: 999, source_note: "Fictional test rate", updated_at: "2026-06-01" });
       if (path === "/api/insurance/property-characteristics") return json(route, {
-        yearBuilt: 1998, squareFeetLiving: 2000, constructionLabel: "CONCRETE BLOCK", floodZone: "AE",
+        yearBuilt: options.missingBuild ? null : 1998, squareFeetLiving: 2000, constructionLabel: "CONCRETE BLOCK", floodZone: "AE",
         fieldSources: {
-          yearBuilt: { value: 1998, source: "Fictional county fixture" },
+          yearBuilt: { value: options.missingBuild ? null : 1998, source: "Fictional county fixture" },
           squareFeetLiving: { value: 2000, source: "Fictional county fixture" },
           constructionLabel: { value: "CONCRETE BLOCK", source: "Fictional county fixture" },
           floodZone: { value: "AE", source: "FEMA fixture, not a real lookup" },
@@ -78,7 +78,7 @@ async function mockInsurance(page: Page, options: { unavailable?: boolean; shape
         return json(route, { ok: true, currentPolicyExpirationDate: expiration });
       }
       if (path === "/api/anonymous-quote/start") return json(route, { allowed: true, ...request.postDataJSON() });
-      if (path === "/api/insurance/wind-report") return json(route, { reportId: "00000000-0000-4000-8000-000000000087", extracted: { inspectionDate: "2026-05-15", shape: "Hip", swr: "Yes", opening: "B", roofToWall: "Clips", roofDeck: "B", yearBuilt: 1998 } });
+      if (path === "/api/insurance/wind-report") return json(route, { reportId: "00000000-0000-4000-8000-000000000087", extracted: options.sparseReport ? { inspectionDate: "2026-05-15" } : { inspectionDate: "2026-05-15", shape: "Hip", swr: "Yes", opening: options.reportOpening ?? "A", roofToWall: "Clips", roofDeck: "B", yearBuilt: 1998, roofCovering: "Metal", productApproval: "Meets FBC 1994" } });
       if (path === "/api/insurance/qr-start") {
         submissions.push(request.postDataJSON());
         return json(route, { leadId: 87, status: "success", quoteAccessToken: "fixture-access", quoteCounter: 1, quotes: [{ siteName: "Fictional Fixture Mutual", annualPremium: 2843, monthlyPremium: 236.92, coverageA: 474000, hurricaneDeductible: "2%", aop: "$2,500", rank: 1 }] });
@@ -96,13 +96,13 @@ async function mockInsurance(page: Page, options: { unavailable?: boolean; shape
   return { submissions, calls };
 }
 
-test("first question is report availability; technical assumptions stay closed", async ({ page }) => {
+test("first question is report availability; one editable wind list is visible", async ({ page }) => {
   const { calls } = await mockInsurance(page);
   const form = page.getByText("Do you have an existing wind mitigation report?").locator("xpath=ancestor::section[1]");
   await expect(form.getByRole("radio", { name: "No", exact: true })).toBeChecked();
   await expect(form.getByRole("radio", { name: "Yes", exact: true })).toBeVisible();
   await expect(page.getByLabel("Upload your wind mitigation report")).toHaveCount(0);
-  await expect(page.getByTestId("select-wind-shape")).toBeHidden();
+  await expect(page.getByTestId("select-wind-shape")).toBeVisible();
   await expect(page.getByTestId("select-policy-type")).toHaveValue("HO3");
   await expect(page.getByTestId("select-policy-type").locator("option")).toHaveText(["Homeowners (HO-3)", "Condo (HO-6)", "Dwelling Fire / Landlord Policy (DP-3)"]);
   await expect(page.getByTestId("select-prior-claims")).toHaveCount(0);
@@ -114,9 +114,8 @@ test("first question is report availability; technical assumptions stay closed",
 
 test("wind choices have exact mappings; Yes is opening confirmation and SWR respects edits", async ({ page }) => {
   await mockInsurance(page);
-  await page.getByText("Assumptions we made", { exact: true }).click();
   const shape = page.getByTestId("select-wind-shape");
-  await expect(shape.locator("option")).toHaveText(["Flat", "Gable/Other", "Hip"]);
+  await expect(shape.locator("option")).toHaveText(["Hip", "Flat", "Gable/Other"]);
   await expect(shape).toHaveValue("Gable");
   await expect(page.getByTestId("select-wind-allOpenings").locator("option")).toHaveText(["Yes", "No/Unsure"]);
   await page.getByTestId("select-wind-allOpenings").selectOption("all");
@@ -130,14 +129,133 @@ test("wind choices have exact mappings; Yes is opening confirmation and SWR resp
   await expect(page.getByText("Unknown", { exact: true })).toHaveCount(0);
 });
 
-test("untouched SWR preserves permit evidence and legacy claims cannot silently gate a quote", async ({ page }) => {
+test("wind list follows report order and has no duplicate roof or review selectors", async ({ page }) => {
+  await mockInsurance(page);
+  const table = page.getByRole("table", { name: "Roof and wind details" });
+  await expect(table.getByRole("row")).toHaveCount(7);
+  await expect(table.locator("label")).toHaveText([
+    "Roof Covering", "Product Approval Listing", "Roof Deck Attachment", "Roof-to-Wall Attachment",
+    "Roof Shape", "Secondary Water Resistance (SWR)", "All openings impact-rated or shuttered?",
+  ]);
+  await expect(table.getByRole("combobox")).toHaveCount(7);
+  await expect(page.getByLabel("Roof type", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Assumptions we made", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Review report values", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("select-wind-material").locator("option")).toHaveText(["Shingle", "Tile", "Metal", "Built Up", "Membrane", "Rolled Roofing"]);
+  await expect(page.getByTestId("select-wind-productApproval").locator("option")).toHaveText(["Meets FBC 2001", "Meets FBC 1994", "Non-FBC"]);
+  await expect(page.getByTestId("select-wind-roofDeck").locator("option")).toHaveText(["Level A", "Level B", "Level C", "Reinforced Concrete Roof Deck"]);
+  await expect(page.getByTestId("select-wind-roofToWall").locator("option")).toHaveText(["Toe Nails", "Clips", "Single Wraps", "Double Wraps", "Structural", "Other"]);
+  for (const select of await table.getByRole("combobox").all()) {
+    await expect(select.locator("option:checked")).not.toHaveText(/Unknown|Unverified|no credit/i);
+    await expect(select).toHaveAttribute("aria-describedby", /-basis$/);
+  }
+});
+
+test("missing build year uses labeled Level A and Toe Nails assumptions", async ({ page }) => {
+  await mockInsurance(page, { missingBuild: true });
+  await expect(page.getByTestId("select-wind-roofDeck")).toHaveValue("A");
+  await expect(page.getByTestId("select-wind-roofToWall")).toHaveValue("Toe Nails");
+  await expect(page.getByTestId("select-wind-roofDeck").locator("xpath=ancestor::*[@role='row']")).toContainText("Assumption");
+  await expect(page.getByTestId("select-wind-roofToWall").locator("xpath=ancestor::*[@role='row']")).toContainText("Assumption");
+  await page.getByTestId("select-wind-roofDeck").selectOption("B");
+  await page.getByTestId("select-wind-roofToWall").selectOption("Structural");
+  await page.getByTestId("input-year-built").fill("2005");
+  await expect(page.getByTestId("select-wind-roofDeck")).toHaveValue("B");
+  await expect(page.getByTestId("select-wind-roofToWall")).toHaveValue("Structural");
+});
+
+test("technical edits map into the quote request without changing other defaults", async ({ page }) => {
+  const { submissions } = await mockInsurance(page);
+  await page.getByTestId("select-new-purchase").selectOption("yes");
+  await page.getByTestId("input-property-purchase-price").fill("487300");
+  await page.getByTestId("select-ho6-residence-use").selectOption("primary");
+  await page.getByTestId("select-wind-material").selectOption("Tar and Gravel");
+  await page.getByTestId("select-wind-productApproval").selectOption("Non-FBC");
+  await page.getByTestId("select-wind-roofDeck").selectOption("Concrete");
+  await page.getByTestId("select-wind-roofToWall").selectOption("N/A");
+  await page.getByTestId("select-wind-allOpenings").selectOption("all");
+  const send = page.getByRole("button", { name: "Get Live Quotes", exact: true });
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect.poll(() => submissions.length).toBe(1);
+  expect(submissions[0]).toMatchObject({
+    roofMaterial: "Tar and Gravel", roofCovering: "Non-FBC",
+    aopDeductible: 2500, hurrIdx: 0, hasClaims: false,
+    windAnswers: { roofCovering: "Non-FBC", roofDeck: "Concrete", roofToWall: "N/A", allOpenings: "all" },
+  });
+});
+
+test("missing extracted fields stay assumptions, not invented report findings", async ({ page }) => {
+  const { submissions } = await mockInsurance(page, { sparseReport: true });
+  await page.getByRole("radio", { name: "Yes", exact: true }).check();
+  await page.getByLabel("Upload your wind mitigation report").setInputFiles({
+    name: "fictional-incomplete-report.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 fictional incomplete report"),
+  });
+  await expect(page.getByRole("status").filter({ hasText: "Draft extracted." })).toBeVisible();
+  const table = page.getByRole("table", { name: "Roof and wind details" });
+  await expect(table.getByText(/From your report/)).toHaveCount(0);
+  await expect(table.getByText(/Assumption ·/)).toHaveCount(7);
+  await expect(page.getByTestId("select-wind-productApproval")).toHaveValue("Meets FBC 2001");
+  await expect(page.getByText(/Missing fields remain labeled assumptions/)).toBeVisible();
+  await page.getByTestId("select-wind-shape").selectOption("Hip");
+  await expect(page.getByTestId("select-wind-shape").locator("xpath=ancestor::*[@role='row']")).toContainText("From your report");
+  const displayedDeck = await page.getByTestId("select-wind-roofDeck").inputValue();
+  const displayedWall = await page.getByTestId("select-wind-roofToWall").inputValue();
+  const displayedSwr = await page.getByTestId("select-wind-peelAndStick").inputValue();
+  await page.getByRole("checkbox", { name: /I reviewed these values/ }).check();
+  await expect(table.getByText(/Assumption ·/)).toHaveCount(6);
+  await page.getByTestId("select-new-purchase").selectOption("yes");
+  await page.getByTestId("input-property-purchase-price").fill("487300");
+  await page.getByTestId("select-ho6-residence-use").selectOption("primary");
+  const send = page.getByRole("button", { name: "Get Live Quotes", exact: true });
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect.poll(() => submissions.length).toBe(1);
+  expect(submissions[0].windAnswers.report).toMatchObject({
+    roofDeck: displayedDeck, roofToWall: displayedWall, swr: displayedSwr === "yes" ? "Yes" : "No",
+    productApproval: "Meets FBC 2001", shape: "Hip", transcribedFromReport: true,
+    opening: "Unknown",
+    assumedFields: expect.arrayContaining(["roofCovering", "productApproval", "roofDeck", "roofToWall", "swr", "opening"]),
+  });
+  expect(submissions[0].windAnswers.report.assumedFields).not.toContain("shape");
+  expect(submissions[0].windAnswers.report.opening).not.toBe("X");
+  await page.getByTestId("select-wind-roofDeck").selectOption("Concrete");
+  await page.getByRole("checkbox", { name: /I reviewed these values/ }).check();
+  await expect(page.getByTestId("select-wind-roofDeck").locator("xpath=ancestor::*[@role='row']")).toContainText("From your report");
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect.poll(() => submissions.length).toBe(2);
+  expect(submissions[1].windAnswers.report.roofDeck).toBe("Concrete");
+  expect(submissions[1].windAnswers.report.assumedFields).not.toContain("roofDeck");
+  expect(submissions[1].windAnswers.report.assumedFields).toContain("opening");
+});
+
+test("only an actual extracted report X is preserved as X after review", async ({ page }) => {
+  const { submissions } = await mockInsurance(page, { reportOpening: "X" });
+  await page.getByRole("radio", { name: "Yes", exact: true }).check();
+  await page.getByLabel("Upload your wind mitigation report").setInputFiles({
+    name: "fictional-report-x.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 fictional report X"),
+  });
+  await expect(page.getByRole("status").filter({ hasText: "Draft extracted." })).toBeVisible();
+  await expect(page.getByTestId("select-wind-allOpenings")).toHaveValue("unsure");
+  await expect(page.getByTestId("select-wind-allOpenings").locator("xpath=ancestor::*[@role='row']")).toContainText("From your report");
+  await page.getByRole("checkbox", { name: /I reviewed these values/ }).check();
+  await page.getByTestId("select-new-purchase").selectOption("yes");
+  await page.getByTestId("input-property-purchase-price").fill("487300");
+  await page.getByTestId("select-ho6-residence-use").selectOption("primary");
+  await page.getByRole("button", { name: "Get Live Quotes", exact: true }).click();
+  await expect.poll(() => submissions.length).toBe(1);
+  expect(submissions[0].windAnswers.report.opening).toBe("X");
+  expect(submissions[0].windAnswers.report.assumedFields).not.toContain("opening");
+});
+
+test("permits do not silently suggest SWR and legacy claims cannot gate a quote", async ({ page }) => {
   const { submissions } = await mockInsurance(page, { swrPermit: true, legacyClaims: true });
   await page.getByTestId("input-roof-year").fill("2018");
-  await page.getByText("Assumptions we made", { exact: true }).click();
   const swr = page.getByTestId("select-wind-peelAndStick");
-  await expect(swr).toHaveValue("yes");
-  await expect(page.getByText(/Basis: county PA permit FICTIONAL-SWR-87/)).toBeVisible();
-  await expect(page.getByText("Basis: Gable/Other planning assumption; not independently verified")).toBeVisible();
+  await expect(swr).toHaveValue("no");
+  await expect(page.getByText(/Assumption · Assumed from 2018 roof year/)).toBeVisible();
+  await expect(page.getByText("Assumption · Gable/Other planning assumption; not independently verified")).toBeVisible();
   await page.getByTestId("select-new-purchase").selectOption("yes");
   await page.getByTestId("input-property-purchase-price").fill("487300");
   await page.getByTestId("select-ho6-residence-use").selectOption("primary");
@@ -147,7 +265,7 @@ test("untouched SWR preserves permit evidence and legacy claims cannot silently 
   await expect.poll(() => submissions.length).toBe(1);
   expect(submissions[0]).toMatchObject({
     hasClaims: false, claimRecords: [], roofShapeUserSet: false,
-    secondaryWaterResistance: "Yes",
+    secondaryWaterResistance: "No",
     windAnswers: { peelAndStick: "unsure", shape: "Not sure" },
   });
   await swr.selectOption("no");
@@ -176,18 +294,19 @@ test("Coverage A uses county block rate, frame discount and mixed average; manua
   await expect(page.getByLabel("Hurricane deductible", { exact: true })).toHaveValue("0");
 });
 
-test("private extraction remains editable in closed review without inspector/reference inputs", async ({ page }) => {
+test("private extraction uses the same editable list without duplicate review selectors", async ({ page }) => {
   await mockInsurance(page);
   await page.getByRole("radio", { name: "Yes", exact: true }).check();
   const upload = page.getByLabel("Upload your wind mitigation report");
   await expect(upload).toBeEnabled();
   await upload.setInputFiles({ name: "fictional-report.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 fictional test document") });
   await expect(page.getByRole("status").filter({ hasText: "Draft extracted." })).toBeVisible();
-  await expect(page.getByTestId("select-wind-report-shape")).toBeHidden();
-  await page.getByText("Review report values", { exact: true }).click();
-  await expect(page.getByTestId("select-wind-report-shape")).toHaveValue("Hip");
-  await page.getByTestId("select-wind-report-shape").selectOption("Flat");
-  await expect(page.getByTestId("select-wind-report-shape")).toHaveValue("Flat");
+  await expect(page.getByTestId("select-wind-report-shape")).toHaveCount(0);
+  await expect(page.getByTestId("select-wind-shape")).toHaveValue("Hip");
+  await expect(page.getByRole("table", { name: "Roof and wind details" }).getByRole("combobox")).toHaveCount(7);
+  await expect(page.getByTestId("select-wind-shape").locator("xpath=ancestor::*[@role='row']")).toContainText("From your report");
+  await page.getByTestId("select-wind-shape").selectOption("Flat");
+  await expect(page.getByTestId("select-wind-shape")).toHaveValue("Flat");
   await expect(page.getByLabel("Report reference", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Report: inspector", { exact: true })).toHaveCount(0);
   await page.getByRole("checkbox", { name: /I reviewed these values/ }).check();
@@ -201,8 +320,7 @@ test("new purchase submits simplified defaults and roof material without claim o
   await expect(page.getByTestId("input-purchase-date")).toHaveCount(0);
   await page.getByTestId("input-property-purchase-price").fill("487300");
   await page.getByTestId("select-ho6-residence-use").selectOption("primary");
-  await page.getByTestId("select-roof-material").selectOption("Tile");
-  await page.getByText("Assumptions we made", { exact: true }).click();
+  await page.getByTestId("select-wind-material").selectOption("Tile");
   await page.getByTestId("select-wind-shape").selectOption("Flat");
   await page.getByTestId("select-wind-allOpenings").selectOption("all");
   await page.getByTestId("select-wind-peelAndStick").selectOption("no");
@@ -246,14 +364,13 @@ test("optional county failure allows manual Coverage A and has a working retry",
 
 test("property image suggestions remain estimates and manual shape/material edits win", async ({ page }) => {
   await mockInsurance(page, { shape: "Hip" });
-  await page.getByText("Assumptions we made", { exact: true }).click();
   await expect(page.getByTestId("select-wind-shape")).toHaveValue("Hip");
-  await expect(page.getByTestId("select-roof-material")).toHaveValue("Metal");
-  await expect(page.getByText("Basis: Fictional image estimate")).toBeVisible();
+  await expect(page.getByTestId("select-wind-material")).toHaveValue("Metal");
+  await expect(page.getByText("Assumption · Fictional image estimate")).toBeVisible();
   await page.getByTestId("select-wind-shape").selectOption("Gable");
-  await page.getByTestId("select-roof-material").selectOption("Other");
+  await page.getByTestId("select-wind-material").selectOption("Rubber");
   await expect(page.getByTestId("select-wind-shape")).toHaveValue("Gable");
-  await expect(page.getByTestId("select-roof-material")).toHaveValue("Other");
+  await expect(page.getByTestId("select-wind-material")).toHaveValue("Rubber");
 });
 
 test("existing-home carrier, expiration and optional mortgage remain available", async ({ page }) => {
@@ -280,14 +397,21 @@ test("existing-home carrier, expiration and optional mortgage remain available",
   await expect(home).toContainText("Mortgage: Yes");
 });
 
-test("save a fictional simplified-form screenshot", async ({ page }) => {
+test("save a fictional wind-assumptions screenshot", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 1000 });
   await mockInsurance(page);
   await page.getByTestId("select-new-purchase").selectOption("yes");
   await page.getByTestId("input-property-purchase-price").fill("487300");
   await page.getByTestId("select-ho6-residence-use").selectOption("primary");
   await expect(page.getByRole("button", { name: "Get Live Quotes", exact: true })).toBeEnabled();
-  await page.screenshot({ path: "screenshots/simplified-insurance-form.png", fullPage: true });
+  const list = page.getByRole("table", { name: "Roof and wind details" });
+  await list.scrollIntoViewIfNeeded();
+  // Capture the actual rule table, without the sticky dashboard chrome covering
+  // its first rows after Playwright scrolls the element into view.
+  await list.locator("..").screenshot({
+    path: "screenshots/wind-mit-assumptions.png",
+    style: "header, nav, .sticky, .fixed { visibility: hidden !important; }",
+  });
 });
 
 test("roof year stays required and accepts only whole years 2000 through 2027", async ({ page }) => {
