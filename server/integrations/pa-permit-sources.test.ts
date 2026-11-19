@@ -21,7 +21,9 @@ test("Lee preserves received-date disclaimer; no reroof issue-date credit",()=>{
   const p=parseLeePermits(fixture("lee-pa.html"),"https://www.leepa.org/Display/DisplayParcel.aspx");
   assert.equal(p.length,2);assert.equal(p[1].number,"ROF2018-04591");assert.equal(p[1].dateBasis,"received");
   const wind=resolveWind({county:"lee",yearBuilt:1958,roofYear:2018,permits:[{...p[1],classification:{kind:"reroof",quote:"Roof",swr:false}}]});
-  assert.equal(wind.fields.roofDeck.value,"B");
+  assert.equal(wind.fields.roofDeck.value,"C");
+  assert.match(wind.fields.roofDeck.source,/roof year/);
+  assert.doesNotMatch(wind.fields.roofDeck.source,/permit/);
   assert.throws(()=>parseLeePermits("<div id='PermitDetails'>collapsed</div>","https://example.test"));
 });
 test("Collier parses six dated permits and never substitutes completion date",()=>{

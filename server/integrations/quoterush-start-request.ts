@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { completePreviousAddress, previousAddressSchema } from "../../shared/optional-previous-address";
 import { windAnswersSchema } from "../../shared/wind-mitigation";
-import { insuranceEffectiveDate } from "../../shared/insurance-form-defaults";
+import { insuranceEffectiveDate, ROOF_MATERIALS } from "../../shared/insurance-form-defaults";
 import {
   isValidQuoteRushDate,
   resolveQuoteRushPropertyDefaults,
@@ -44,7 +44,7 @@ const quoteRushStartSchema = z.object({
   roofYear: z.number().int().min(2000).max(2027),
   openingProtection: z.boolean().optional(),
   roofShape: z.enum(["Hip", "Flat", "Gable"]).optional(),
-  roofMaterial: z.enum(["Architectural Shingles", "Metal", "Tile", "Other"]).optional(),
+  roofMaterial: z.enum(ROOF_MATERIALS).optional(),
   roofShapeUserSet: z.boolean().optional(),
   roofMaterialUserSet: z.boolean().optional(),
   secondaryWaterResistance: z.enum(["Yes", "No", "Unknown"]).optional(),

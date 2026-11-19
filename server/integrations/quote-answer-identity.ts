@@ -2,7 +2,7 @@ import {createHash,createHmac,timingSafeEqual} from "node:crypto";
 export function nonPersonalAnswerHash(request:Record<string,any>):string {
   const keys=["policyType","coverageA","hurrIdx","aopDeductible","roofYear","yearBuilt","sqFt","constIdx","openingProtection","roofShape","roofMaterial","roofShapeUserSet","roofMaterialUserSet","secondaryWaterResistance","windIdx","windMitigationLocks","usageType","rentalTerm","newPurchase","purchasePrice","policyEffectiveDate","floodZone","floodZoneUnknown","hasMortgage"];
   const stable=(v:any):any=>v&&typeof v==="object"?Array.isArray(v)?v.map(stable):Object.fromEntries(Object.keys(v).sort().map(k=>[k,stable(v[k])])):v;
-  return createHash("sha256").update(JSON.stringify(keys.map(k=>[k,stable(request[k]??null)]))).digest("hex");
+  return createHash("sha256").update(JSON.stringify(["wind-assumptions-v2",keys.map(k=>[k,stable(request[k]??null)])])).digest("hex");
 }
 export function quoteAnswerIdentity(request:Record<string,any>,userId:string){
   const baseHash=nonPersonalAnswerHash(request);

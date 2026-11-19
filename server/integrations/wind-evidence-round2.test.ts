@@ -49,17 +49,17 @@ test("browser permit fallback always stops its session and never bypasses a CAPT
     calls++;return new Response(JSON.stringify({success:true,data:{markdown:"CAPTCHA verify you are human"}}));
   }))?.blocked,true);assert.equal(calls,0);
 });
-test("explicit PA SWR evidence counts, garage-only never suggests all openings",()=>{
+test("SWR follows roof year; permits do not auto-select all openings",()=>{
   const permit={number:"PA-1",date:"2020-01-01",source:"County PA",sourceUrl:"https://example.test",
     description:"Roof replacement with self-adhered underlayment",
     classification:{kind:"roof_detail" as const,quote:"self-adhered underlayment",swr:true}};
   const result=resolveWind({county:"pinellas",yearBuilt:1958,roofYear:2018,permits:[permit]});
-  assert.equal(result.fields.swr.value,"Yes");assert.equal(result.fields.swr.estimated,true);
-  assert.match(result.fields.swr.source,/PA-1.*self-adhered/);
+  assert.equal(result.fields.swr.value,"No");assert.equal(result.fields.swr.estimated,true);
+  assert.match(result.fields.swr.source,/roof year/);
   const garage={...permit,classification:{kind:"garage_door" as const,quote:"garage door",swr:false}};
   const g=resolveWind({county:"pinellas",yearBuilt:1958,roofYear:2018,permits:[garage],
     answers:windAnswersSchema.parse({allOpenings:"all",openingsConfirmed:true})});
-  assert.equal(g.fields.opening.value,"N");
+  assert.equal(g.fields.opening.value,"A");
   assert.equal(resolveWind({county:"pinellas",yearBuilt:1958,roofYear:2018,permits:[{...permit,classification:{...permit.classification,quote:"made up"}}]}).fields.swr.value,"No");
 });
 test("Marco Gulf-side barrier fixture inside, inland Naples outside, bad data unknown",()=>{

@@ -49,13 +49,17 @@ ProtectionClass and BCEG
 join Coverage A and flood zone as never-AI fields. Estimated roof-to-wall connections
 must never exceed Clips, and uncertain coastal geography must not justify Clips.
 
-Deck attachment C estimates are limited to pre-2002 homes with explicit qualifying
-re-roof evidence. Homes built 2002+ stay B maximum without a report. Generic ROOF
-permit text is not proof of re-roof work. Uploaded reports are private to the user,
-and extraction remains an unconfirmed draft until the user reviews it.
-
-**Why:** Christian narrowed the deck rule and requires evidence, not broad keyword
-matches or automatic acceptance of document extraction.
+Christian's compact-assumptions decision supersedes the previous permit-only
+deck limitation: assume C for 2002+ builds or older builds with 2008+ roof year,
+B for 1994–2001 otherwise, A before 1994. Missing build assumes A/Toe Nails.
+Below the county/coastal Clips cutoffs assume Toe Nails. These remain estimates,
+not verified building-code compliance. Opening Yes means Hurricane Protection;
+otherwise Unknown or None; Basic is report-only. SWR defaults by roof year,
+2021+ Yes, otherwise No, with explicit answers/reports overriding.
+**Why:** Christian wants a compact editable OIR-ordered list with useful assumed
+answers instead of duplicate questions and unanswered attachment fields.
+**How to apply:** Keep a basis per item. Actual reports override estimates;
+uploads stay private and extraction requires user review before use.
 
 **Why:** Preliminary carrier credits must not exceed their supporting evidence.
 **How to apply:** Preserve provenance through prompts, cached values and importer

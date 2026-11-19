@@ -17,10 +17,10 @@ test("partial optional addresses are omitted; complete addresses retained",()=>{
 });
 for(const [county,year] of Object.entries(CLIP_YEAR))test(`${county} clips cutoff, older/coastal and never wraps`,()=>{
   assert.equal(resolveWind({...base,county,yearBuilt:year}).fields.roofToWall.value,"Clips");
-  assert.equal(resolveWind({...base,county,yearBuilt:year-1}).fields.roofToWall.value,"Unknown");
+  assert.equal(resolveWind({...base,county,yearBuilt:year-1}).fields.roofToWall.value,"Toe Nails");
   assert.equal(resolveWind({...base,county,yearBuilt:2003}).fields.roofToWall.value,"Clips");
   assert.equal(resolveWind({...base,county,yearBuilt:1989,coastal:classifyCoastal(100,{barrierIsland:true,landward:true})}).fields.roofToWall.value,"Clips");
-  assert.equal(resolveWind({...base,county,yearBuilt:1989,coastal:classifyCoastal(100)}).fields.roofToWall.value,"Unknown");
+  assert.equal(resolveWind({...base,county,yearBuilt:1989,coastal:classifyCoastal(100)}).fields.roofToWall.value,"Toe Nails");
 });
 test("coastal thresholds require verified geography; errors remain unknown",async()=>{
   assert.equal(classifyCoastal(1400,{landward:true,barrierIsland:false}).status,"inside");
@@ -37,16 +37,16 @@ test("permit opening protection requires explicit all confirmation and roof date
   const opening:PermitEvidence={...permit,description:"Impact windows and hurricane shutters",
     classification:{kind:"openings",quote:"Impact windows and hurricane shutters",swr:false}};
   assert.equal(permitKinds(opening).opening,true);
-  assert.equal(resolveWind({...base,permits:[opening]}).fields.opening.value,"X");
-  assert.equal(resolveWind({...base,answers:{...answers,allOpenings:"all",openingsConfirmed:true}}).fields.opening.value,"N");
-  assert.equal(resolveWind({...base,permits:[opening],answers:{...answers,allOpenings:"all"}}).fields.opening.value,"X");
-  assert.equal(resolveWind({...base,permits:[opening],answers:{...answers,allOpenings:"all",openingsConfirmed:true}}).fields.opening.value,"B");
+  assert.equal(resolveWind({...base,permits:[opening]}).fields.opening.value,"None");
+  assert.equal(resolveWind({...base,answers:{...answers,allOpenings:"all",openingsConfirmed:true}}).fields.opening.value,"A");
+  assert.equal(resolveWind({...base,permits:[opening],answers:{...answers,allOpenings:"all"}}).fields.opening.value,"A");
+  assert.equal(resolveWind({...base,permits:[opening],answers:{...answers,allOpenings:"all",openingsConfirmed:true}}).fields.opening.value,"A");
   assert.equal(resolveWind({...base,permits:[permit]}).fields.roofDeck.value,"C");
-  assert.equal(resolveWind({...base,yearBuilt:2002,permits:[permit]}).fields.roofDeck.value,"B");
-  assert.equal(resolveWind({...base,yearBuilt:2003,permits:[permit]}).fields.roofDeck.value,"B");
+  assert.equal(resolveWind({...base,yearBuilt:2002,permits:[permit]}).fields.roofDeck.value,"C");
+  assert.equal(resolveWind({...base,yearBuilt:2003,permits:[permit]}).fields.roofDeck.value,"C");
   assert.equal(permitKinds({...permit,description:"ROOF",classification:undefined}).roof,false);
-  assert.equal(resolveWind(base).fields.roofDeck.value,"B");
-  assert.equal(resolveWind({...base,yearBuilt:2000,roofYear:2000}).fields.roofDeck.value,"Unknown");
+  assert.equal(resolveWind(base).fields.roofDeck.value,"C");
+  assert.equal(resolveWind({...base,yearBuilt:2000,roofYear:2000}).fields.roofDeck.value,"B");
 });
 test("SWR cutoffs and explicit answers; roof shape distinguishes default from confirmed",()=>{
   assert.equal(resolveWind({...base,roofYear:2021}).fields.swr.value,"Yes");
@@ -55,7 +55,7 @@ test("SWR cutoffs and explicit answers; roof shape distinguishes default from co
   assert.equal(resolveWind({...base,roofYear:2007,answers:{...answers,peelAndStick:"yes"}}).fields.swr.value,"Yes");
   assert.equal(resolveWind({...base,roofYear:2025,answers:{...answers,peelAndStick:"no"}}).fields.swr.value,"No");
   assert.equal(resolveWind(base).fields.shape.estimated,true);
-  assert.equal(resolveWind({...base,answers:{...answers,shape:"Gable"}}).fields.shape.estimated,false);
+  assert.equal(resolveWind({...base,answers:{...answers,shape:"Gable"}}).fields.shape.estimated,true);
   assert.equal(resolveWind({...base,answers:{...answers,shape:"Hip"}}).fields.shape.value,"Hip");
 });
 test("report values override every estimate and require attested report details",()=>{
@@ -97,7 +97,7 @@ test("payload sends evidence-based wind values with agency checkbox/community de
     openingProtection:"None",secondaryWaterResistance:"No",roofShape:"Gable",creditPermissionGranted:false,
     windAnswers:{...answers,gated:true},windEvidence:resolveWind({...base,yearBuilt:2003,roofYear:2022,permits:[permit]})} as QuoteRushParams;
   const payload=buildImporterPayload(p,"agent@example.test");
-  assert.equal(payload.HO.HaveWindMitForm,true);assert.equal(payload.HO.RoofDeckAttachment,"Level B");
+  assert.equal(payload.HO.HaveWindMitForm,true);assert.equal(payload.HO.RoofDeckAttachment,"Level C");
   assert.equal(payload.HO.RoofWallConnection,"Clips");assert.equal(payload.HO.SecondaryWaterResistance,"Yes");
   assert.equal(payload.HO.GatedCommunity,"No");assert.equal(payload.Client.CreditPermission,"No");
   assert.equal(payload.Client.AssumedCreditScore,"Excellent");assert.match(payload.Client.OverviewNotes,/estimated/);

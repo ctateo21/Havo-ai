@@ -81,7 +81,7 @@ test("workbook wind values distinguish A/B, omit unknown SWR and unsupported dec
         shape:{value:"Gable",source:"user answer",estimated:false},
       }};
       const {HO,Client}=buildImporterPayload({...p,windEvidence},"agent@example.test");
-      assert.equal(HO.OpeningProtection,opening==="A"?"Hurricane Protection":opening==="B"?"Basic":"Unknown or None");
+      assert.equal(HO.OpeningProtection,opening==="A"?"Hurricane Protection":"Unknown or None");
       assert.equal(HO.SecondaryWaterResistance,swr==="Unknown"?undefined:swr);
       assert.equal(HO.RoofDeckAttachment,undefined);
       assert.equal(HO.RoofWallConnection,undefined);

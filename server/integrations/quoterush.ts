@@ -17,6 +17,7 @@ import {quoteRushEnv} from "./quoterush-env";
 import { quoteRushFetch as fetch } from "./quoterush-pause";
 import { importerHomeExtras, homeFieldNotes, APPLY_DEFAULT_NOTES, type HomeFields } from "./quoterush-home-fields";
 import {windNotes,type WindAnswers,type WindResult} from "../../shared/wind-mitigation";
+import {ROOF_MATERIALS, reportRoofMaterial} from "../../shared/insurance-form-defaults";
 
 export interface QuoteRushParams {
   windAnswers?:WindAnswers;
@@ -45,7 +46,7 @@ export interface QuoteRushParams {
   openingProtection: string;
   secondaryWaterResistance: string;
   roofShape: string;
-  roofMaterial?: "Architectural Shingles" | "Metal" | "Tile" | "Other";
+  roofMaterial?: typeof ROOF_MATERIALS[number];
   usageType: string;
   rentalTerm: QuoteRushPropertyDefaults["rentalTerm"];
   monthsOccupied: QuoteRushPropertyDefaults["monthsOccupied"];
@@ -172,6 +173,8 @@ export function buildImporterPayload(
       LeadSource: "Havo Platform",
       LeadStatus: "New Lead",
       OverviewNotes: [...APPLY_DEFAULT_NOTES, ...homeFieldNotes(p.homeFields ?? {}),
+        `Roof material: ${(p.windEvidence?.haveReport ? reportRoofMaterial(p.windAnswers?.report?.roofCovering) : undefined) || p.roofMaterial || "Architectural Shingles"} — ${p.windEvidence?.haveReport && reportRoofMaterial(p.windAnswers?.report?.roofCovering) && !p.windAnswers?.report?.assumedFields?.includes("roofCovering") ? "from user-reviewed report" : "estimated; user selection, imagery or agency default"}.`,
+        `Roof product approval: ${(p.windEvidence?.haveReport ? p.windAnswers?.report?.productApproval : undefined) || p.windAnswers?.roofCovering || "Meets FBC 2001"} — ${p.windEvidence?.haveReport && p.windAnswers?.report?.productApproval && !p.windAnswers?.report?.assumedFields?.includes("productApproval") ? "from user-reviewed report" : "estimated; user selection or agency default"}.`,
         ...(p.windEvidence?windNotes(p.windEvidence):[]),
         ...(!p.previousAddress && p.newPurchase==="Yes" ? ["Assumption for quoting only: PreviousAddress uses the quoted property address; this is not a verified buyer address. Agent must confirm the buyer's current home address."]:[]),
         ...(p.windEvidence?.haveReport?["Wind report values transcribed by user; agent must verify against report."]:["No verified wind mitigation form supplied; obtain actual report and inspection date before applying form credits."]),
@@ -211,7 +214,8 @@ export function buildImporterPayload(
         ? {FrameConstruction:p.frameConstruction}:{}),
       FoundationType: "Slab",
       RoofShape: p.windEvidence?.fields.shape.value || p.roofShape || "Gable",
-      RoofMaterial: p.roofMaterial || "Architectural Shingles",
+      RoofMaterial: (p.windEvidence?.haveReport ? reportRoofMaterial(p.windAnswers?.report?.roofCovering) : undefined) || p.roofMaterial || "Architectural Shingles",
+      RoofCovering: (p.windEvidence?.haveReport ? p.windAnswers?.report?.productApproval : undefined) || p.windAnswers?.roofCovering || "Meets FBC 2001",
       UpdateRoofYear: String(p.roofYear),
       UpdateRoofType: "Full",
       CoverageA: String(p.coverageA),
@@ -257,9 +261,10 @@ export function buildImporterPayload(
       OpeningProtection: "Unknown or None",
       ...(p.windEvidence ? {
         ...(p.windEvidence.fields.roofToWall.value!=="Unknown"?{RoofWallConnection:p.windEvidence.fields.roofToWall.value}:{}),
-        ...(["A","B","C"].includes(p.windEvidence.fields.roofDeck.value)?{RoofDeckAttachment:`Level ${p.windEvidence.fields.roofDeck.value}`} : {}),
+        ...(["A","B","C"].includes(p.windEvidence.fields.roofDeck.value)?{RoofDeckAttachment:`Level ${p.windEvidence.fields.roofDeck.value}`} :
+          p.windEvidence.fields.roofDeck.value==="Concrete"?{RoofDeckAttachment:"Reinforced Concrete Roof Deck"}:{}),
         ...(["Yes","No"].includes(p.windEvidence.fields.swr.value)?{SecondaryWaterResistance:p.windEvidence.fields.swr.value}:{}),
-        OpeningProtection:p.windEvidence.fields.opening.value==="A"?"Hurricane Protection":p.windEvidence.fields.opening.value==="B"?"Basic":"Unknown or None",
+        OpeningProtection:p.windEvidence.fields.opening.value==="A"?"Hurricane Protection":p.windEvidence.haveReport && !p.windEvidence.fields.opening.estimated && p.windEvidence.fields.opening.value==="B"?"Basic":"Unknown or None",
         ...(p.windEvidence.haveReport && p.windAnswers?.report?{WindMitigationInspectionDate:formatDateOfBirth(p.windAnswers.report.inspectionDate)}:{}),
       }:{}),
       Terrain: "Exposure B",
