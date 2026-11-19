@@ -52,6 +52,7 @@ export function WindEvidenceForm({ value, onChange, result, isAuthenticated = fa
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState("");
   const [uploadError, setUploadError] = useState(false);
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [missingReportFields, setMissingReportFields] = useState<string[]>(() =>
     value.report?.assumedFields?.map(key => key === "roofCovering" ? "material" : key) ?? []);
   const [edited, setEdited] = useState<string[]>([]);
@@ -65,6 +66,9 @@ export function WindEvidenceForm({ value, onChange, result, isAuthenticated = fa
   useEffect(() => {
     if (!isAuthenticated) { generation.current++; request.current?.abort(); setUploading(false); }
   }, [isAuthenticated]);
+  useEffect(() => {
+    if (!value.reportAvailable) setDetailsExpanded(false);
+  }, [value.reportAvailable]);
   async function upload(file: File) {
     const version = ++generation.current;
     request.current?.abort();
@@ -188,7 +192,7 @@ export function WindEvidenceForm({ value, onChange, result, isAuthenticated = fa
             update({ reportAvailable: true, report: value.report ?? { ...emptyReport, shape: undefined, swr: "Unknown", assumedFields: missing.map(reportField) } as unknown as WindAnswers["report"] });
           }} className="accent-primary" />Yes</label>
         <label className="flex items-center gap-2 text-sm"><input type="radio" name={`${id}-available`} value="no" checked={value.reportAvailable === false}
-          onChange={() => { generation.current++; request.current?.abort(); setUploading(false); setUploadMessage(""); update({ reportAvailable: false, report: undefined }); }} className="accent-primary" />No</label>
+          onChange={() => { generation.current++; request.current?.abort(); setUploading(false); setUploadMessage(""); setDetailsExpanded(false); update({ reportAvailable: false }); }} className="accent-primary" />No</label>
       </div>
     </fieldset>
     {value.reportAvailable && <>
@@ -203,10 +207,19 @@ export function WindEvidenceForm({ value, onChange, result, isAuthenticated = fa
       </div>
     </>}
     <div className="rounded-xl border border-border bg-muted/20 p-4">
-      <div className="mb-4">
-        <h3 className="text-sm font-semibold">Roof &amp; wind details</h3>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Editable estimates, in wind mitigation report order. Assumptions are not verified credits; carriers must review supporting evidence.</p>
+      <div className={value.reportAvailable || detailsExpanded ? "mb-4" : ""}>
+        <h3 className="text-sm font-semibold">
+          {value.reportAvailable ? "Roof & wind details" : <button type="button"
+            className="flex w-full items-center justify-between gap-4 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            aria-expanded={detailsExpanded} aria-controls={`${id}-details`}
+            onClick={() => setDetailsExpanded(expanded => !expanded)}>
+            <span>Roof &amp; wind details</span>
+            <span className="shrink-0 text-xs font-medium text-primary">{detailsExpanded ? "Hide details" : "View / edit details"}</span>
+          </button>}
+        </h3>
+        {(value.reportAvailable || detailsExpanded) && <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Editable estimates, in wind mitigation report order. Assumptions are not verified credits; carriers must review supporting evidence.</p>}
       </div>
+      <div id={`${id}-details`} hidden={!value.reportAvailable && !detailsExpanded}>
       <div role="table" aria-label="Roof and wind details" className="divide-y divide-border">
         {select("material", "Roof Covering", reportMaterial(activeReport?.roofCovering) ?? roofMaterial, materials, next => {
           onRoofMaterialChange?.(next); changeField("material", {}, { roofCovering: next });
@@ -214,7 +227,7 @@ export function WindEvidenceForm({ value, onChange, result, isAuthenticated = fa
         {select("productApproval", "Product Approval Listing", activeReport?.productApproval ?? value.roofCovering ?? "Meets FBC 2001", productApprovals, next => {
           changeField("productApproval", { roofCovering: next as WindAnswers["roofCovering"] }, { productApproval: next as ReportDraft["productApproval"] });
         }, basis("productApproval", activeReport?.productApproval))}
-        {select("roofDeck", "Roof Deck Attachment", evidenceValue("roofDeck", decks, "A"), decks, next => {
+        {select("roofDeck", "Roof Deck Attachment", evidenceValue("roofDeck", decks, "C"), decks, next => {
           changeField("roofDeck", { roofDeck: next as WindAnswers["roofDeck"] }, { roofDeck: next as ReportDraft["roofDeck"] });
         }, basis("roofDeck", activeReport?.roofDeck, estimatedFields.current?.roofDeck.source))}
         {select("roofToWall", "Roof-to-Wall Attachment", evidenceValue("roofToWall", attachments, "Toe Nails"), attachments, next => {
@@ -230,6 +243,7 @@ export function WindEvidenceForm({ value, onChange, result, isAuthenticated = fa
           changeField("opening", { allOpenings: next as WindAnswers["allOpenings"], openingsConfirmed: next === "all" }, { opening: next === "all" ? "A" : "Unknown" });
         }, basis("opening", activeReport?.opening, "complete opening protection has not been established"))}
       </div>
+      </div>
     </div>
     {value.reportAvailable && <div className="space-y-3">
       <p className="text-xs leading-relaxed text-muted-foreground">Review this same list against your report. Missing values are assumptions, not extracted findings. Enter the matching values above; if you cannot review the report, select No to continue with estimates.</p>
@@ -244,7 +258,7 @@ export function WindEvidenceForm({ value, onChange, result, isAuthenticated = fa
         updateReport({
           roofCovering: reportMaterial(activeReport?.roofCovering) ?? roofMaterial,
           productApproval: activeReport?.productApproval ?? value.roofCovering ?? "Meets FBC 2001",
-          roofDeck: evidenceValue("roofDeck", decks, "A") as ReportDraft["roofDeck"],
+          roofDeck: evidenceValue("roofDeck", decks, "C") as ReportDraft["roofDeck"],
           roofToWall: evidenceValue("roofToWall", attachments, "Toe Nails") as ReportDraft["roofToWall"],
           shape: currentShape,
           swr: currentSwr ? "Yes" : "No",

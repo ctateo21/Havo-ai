@@ -11,10 +11,11 @@ export function assumeWindAttachments(county:string, yearBuilt:number, roofYear:
   const normalized=county.toLowerCase().replace(/ county$/,"");
   const clips=known && (yearBuilt>=2003 || yearBuilt>=(CLIP_YEAR[normalized]??2003) ||
     (yearBuilt>=1987&&yearBuilt<=1995&&coastal?.status==="inside"));
-  const roofDeck=!known?"A":yearBuilt>=2002||roofYear>=2008?"C":yearBuilt>=1994?"B":"A";
-  const basis=known?`Assumed from ${yearBuilt} build, ${county || "county not supplied"}${coastal?.status==="inside"?" and coastal-zone check":""}`:"Assumed conservative attachment; year built not supplied";
+  const roofDeck="C";
+  const displayCounty=county.trim().toLowerCase().replace(/\b[a-z]/g,c=>c.toUpperCase());
+  const basis=known?`Assumed from ${yearBuilt} build, ${displayCounty || "county not supplied"}${coastal?.status==="inside"?" and coastal-zone check":""}`:"Assumed conservative attachment; year built not supplied";
   return {roofDeck:roofDeck as "A"|"B"|"C",roofToWall:clips?"Clips" as const:"Toe Nails" as const,
-    wallBasis:basis,deckBasis:`${basis}${known&&roofYear>=2008?`; ${roofYear} roof year`:""}`};
+    wallBasis:basis,deckBasis:"Assumed Level C; agency planning default, not a verified inspection finding"};
 }
 const windObjectSchema = z.object({
   reportAvailable:z.boolean().default(false),
