@@ -30,12 +30,12 @@ export interface QuoteRushPurchasePrice {
 }
 export interface QuoteRushPolicyEffectiveDate {
   value: string;
-  source: "closing-date" | "user-requested" | "current-policy-expiration" | "30-day-default";
+  source: "closing-date" | "user-requested" | "current-policy-expiration" | "30-day-default" | "14-day-default";
   isAssumption: boolean;
 }
 export interface QuoteRushPurchaseDate {
   value: string | null;
-  source: "user-confirmed" | "purchase-scenario" | "prior-sale" | "unknown";
+  source: "user-confirmed" | "purchase-scenario" | "prior-sale" | "unknown" | "14-day-default";
 }
 export interface QuoteRushPropertyDefaults {
   usageType: "Primary" | "Secondary" | "Investment";
@@ -149,7 +149,7 @@ export function resolveQuoteRushPropertyDefaults(
     source: hasSuppliedDate
       ? (input.policyEffectiveDateSource ?? (input.newPurchase ? "closing-date" : "user-requested"))
       : "30-day-default",
-    isAssumption: !hasSuppliedDate,
+    isAssumption: !hasSuppliedDate || input.policyEffectiveDateSource === "14-day-default",
   };
   const suppliedPurchaseDate = input.purchaseDate ?? "";
   const hasPurchaseDate = isValidQuoteRushDate(suppliedPurchaseDate);

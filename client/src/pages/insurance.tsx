@@ -15,6 +15,7 @@ import { WindEvidenceForm } from "@/components/insurance/wind-evidence-form";
 import {CurrentHomeForm} from "@/components/insurance/current-home-form";
 import { resolveWind,windAnswersSchema,type WindAnswers,type CoastalEvidence,type PermitEvidence } from "@shared/wind-mitigation";
 import {completePreviousAddress} from "@shared/optional-previous-address";
+import { insuranceEffectiveDate } from "@shared/insurance-form-defaults";
 import { updateProfileContact } from "@/lib/auth";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -208,7 +209,7 @@ function resolvePolicyTypeForAddress(addr: string): {
   policyType: InsurancePolicyType | "";
   source: "default_rule" | "manual" | null;
 } {
-  if (!addr || !addr.trim()) return { policyType: "", source: null };
+  if (!addr || !addr.trim()) return { policyType: "HO3", source: "default_rule" };
   const ins = getInsuranceScenarios().find(
     s => isSamePropertyAddress(s.address, addr)
   );
@@ -248,7 +249,7 @@ function resolvePolicyTypeForAddress(addr: string): {
   if (ins?.policyType) {
     return { policyType: ins.policyType, source: ins.policyTypeSource ?? "default_rule" };
   }
-  return { policyType: def ?? "", source: def ? "default_rule" : null };
+  return { policyType: def ?? "HO3", source: "default_rule" };
 }
 
 function resolvePhysicalPropertyTypeForAddress(addr: string): string {
@@ -488,8 +489,8 @@ export default function InsuranceDashboard() {
   const [sqFtConfirmed, setSqFtConfirmed] = useAnonymousDraft("sqFtConfirmed", false);
   const [floodZoneUnknown, setFloodZoneUnknown] = useAnonymousDraft("floodZoneUnknown", false);
   const [fieldSources, setFieldSources] = useAnonymousDraft<PropertyEvidence>("fieldSources", {});
-  const [constructionSourced, setConstructionSourced] = useAnonymousDraft("constructionSourced", false);
-  const [constructionConfirmed, setConstructionConfirmed] = useAnonymousDraft("constructionConfirmed", false);
+  const [, setConstructionSourced] = useAnonymousDraft("constructionSourced", false);
+  const [, setConstructionConfirmed] = useAnonymousDraft("constructionConfirmed", false);
   const [roofPermits, setRoofPermits] = useState<RoofSuggestion[]>([]);
   const [rebuildRate, setRebuildRate] = useState<{
     county: string; countyName: string; frame_cost_per_sqft: number | null;
@@ -575,8 +576,8 @@ export default function InsuranceDashboard() {
       roofYear: 0,
       yearBuilt: 0,
       openingProtection: 0,
-      roofShape: 2,
-      swr: 1,
+      roofShape: 3,
+      swr: 0,
     };
     const key = (addr ?? "").trim().toLowerCase();
     if (!key) return defaults;
@@ -629,10 +630,13 @@ export default function InsuranceDashboard() {
   const roofIdx = roofFactorIndex(roofYear);
   const yearIdx = yearBuiltFactorIndex(yearBuilt);
   const windIdx = windMitigationIndex(openingProtectionIdx, roofShapeIdx, swrIdx);
-  const [hasClaims, setHasClaims] = useAnonymousDraft<boolean | null>("hasClaims", null);
-  const [claimRecords, setClaimRecords] = useAnonymousDraft<Array<{
+  // This simplified form discloses a no-claims planning assumption. Never
+  // hydrate obsolete claims answers from a draft or a saved scenario into a
+  // hidden required field.
+  const hasClaims = false;
+  const claimRecords: Array<{
     lossDate: string; claimDetail: string; amount: number | ""; paid: boolean | null; priorResidence: boolean | null;
-  }>>("claimRecords", []);
+  }> = [];
   const claimsIdx = hasClaims ? Math.min(3, claimRecords.length) : 0;
 
   // AOP deductible uses the existing `user_answer_sources` jsonb scratch map.
@@ -740,13 +744,20 @@ export default function InsuranceDashboard() {
     initialQuotePropertyAnswers.newPurchase,
   );
   const [currentHome,setCurrentHome]=useState({Address:"",City:"",State:"FL",Zip:""});
-  const [windAnswers,setWindAnswers]=useState<WindAnswers>(()=>windAnswersSchema.parse({}));
+  const [windAnswers,setWindAnswers]=useState<WindAnswers>(()=>windAnswersSchema.parse({shape:"Not sure", gated:false, peelAndStick:"unsure"}));
+  const swrUserSelected = useRef(false);
+  const roofShapeUserSet = useRef(false);
+  const roofMaterialUserSet = useRef(false);
+  const [roofMaterial, setRoofMaterial] = useAnonymousDraft("roofMaterial", "Architectural Shingles");
   const [windEvidenceUnavailable, setWindEvidenceUnavailable] = useState(false);
-  const [windSupporting,setWindSupporting]=useState<{permits:{permits:PermitEvidence[]};coastal:CoastalEvidence}|null>(null);
+  const [windSupporting,setWindSupporting]=useState<{permits:{permits:PermitEvidence[]};coastal:CoastalEvidence;roof?:{shape:"Hip"|"Gable"|"Flat";material?:string;source:string;estimated:true}}|null>(null);
   const [homeMortgage,setHomeMortgage]=useState<string>("");
   const [purchaseDate, setPurchaseDate] = useAnonymousDraft("purchaseDate",
     initialQuotePropertyAnswers.purchaseDate,
   );
+  useEffect(() => {
+    if (newPurchase === true) setPurchaseDate(insuranceEffectiveDate());
+  }, [newPurchase]);
   const [ho6ResidenceUse, setHo6ResidenceUse] =
     useAnonymousDraft<QuoteRushResidenceUse | "">("ho6ResidenceUse",
       initialQuotePropertyAnswers.ho6ResidenceUse,
@@ -803,6 +814,7 @@ export default function InsuranceDashboard() {
       quote_claim_records: claimRecords,
       quote_currently_insured: currentlyInsured,
       quote_current_carrier: currentCarrier,
+      roof_material: roofMaterial,
     };
   }
 
@@ -817,27 +829,18 @@ export default function InsuranceDashboard() {
     if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) {
       throw new Error("Enter the property's confirmed purchase price or current value.");
     }
-    if (newPurchase && !purchaseDate) throw new Error("Enter the confirmed closing date.");
     if (!newPurchase && currentlyInsured === null) {
       throw new Error("Answer whether this property is currently insured.");
     }
     if (!newPurchase && currentlyInsured && !currentCarrier.trim()) {
       throw new Error("Enter the current insurance carrier.");
     }
-    if (hasClaims === null) {
-      throw new Error("Answer whether you have had insurance claims in the past five years.");
-    }
-    if (hasClaims && (claimRecords.length < 1 || claimRecords.some(c =>
-      !c.lossDate || !c.claimDetail.trim() || !Number.isFinite(c.amount) || Number(c.amount) <= 0 ||
-      typeof c.paid !== "boolean" || typeof c.priorResidence !== "boolean",
-    ))) {
-      throw new Error("Complete every claim's loss date, type/cause, amount, paid status, and residence.");
-    }
     return resolveQuoteRushPropertyDefaults({
       policyType,
       rebuildCost: rebuild,
       newPurchase,
       policyEffectiveDate: purchaseDate || undefined,
+      policyEffectiveDateSource: newPurchase ? "14-day-default" : undefined,
       usageType: ho6ResidenceUse,
       rentalTerm: ho6RentalTerm,
       purchasePrice: purchasePrice || undefined,
@@ -939,6 +942,7 @@ export default function InsuranceDashboard() {
     setConstructionSourced(false);
     setConstructionConfirmed(false);
     setRoofPermits([]);
+    setRoofMaterial("Architectural Shingles");
     setRebuildRate(null);
     setQrSharedContext(null);
     setDobPromptOpen(false);
@@ -955,6 +959,10 @@ export default function InsuranceDashboard() {
         (addressParam ?? "").trim().toLowerCase(),
     );
     const answers = savedScenario?.userAnswerSources ?? {};
+    const savedRoofMaterial = answers.roof_material;
+    if (typeof savedRoofMaterial === "string" && ["Architectural Shingles", "Metal", "Tile", "Other"].includes(savedRoofMaterial)) {
+      setRoofMaterial(savedRoofMaterial);
+    }
     manualRoofYear.current = answers.roof_year_source === "manual";
     setCurrentlyInsured(
       typeof answers.quote_currently_insured === "boolean"
@@ -988,14 +996,6 @@ export default function InsuranceDashboard() {
     setHo6RentalTerm(quoteProperty.ho6RentalTerm);
     setPurchasePrice(quoteProperty.purchasePrice);
     setPurchasePriceSource(quoteProperty.purchasePriceSource);
-    setHasClaims(
-      answers.quote_has_claims === true ? true :
-        answers.quote_has_claims === false ? false : null,
-    );
-    setClaimRecords(
-      Array.isArray(answers.quote_claim_records)
-        ? answers.quote_claim_records.slice(0, 3) : [],
-    );
     console.debug("[insurance-user-load] loaded user fields", {
       address: addressParam, factors: f, aop: ex.aop, quoteProperty,
     });
@@ -1042,7 +1042,10 @@ export default function InsuranceDashboard() {
     setRoofShapeIdx(windPreview.fields.shape.value==="Hip"?0:windPreview.fields.shape.value==="Flat"?1:windPreview.fields.shape.estimated?2:3);
   },[windPreview]);
   useEffect(()=>{
-    setWindAnswers(windAnswersSchema.parse({}));setWindSupporting(null);
+    setWindAnswers(windAnswersSchema.parse({shape:"Not sure", gated:false, peelAndStick:"unsure"}));setWindSupporting(null);
+    swrUserSelected.current = false;
+    roofShapeUserSet.current = false;
+    roofMaterialUserSet.current = false;
     setWindEvidenceUnavailable(false);
     if(!address)return;
     let stopped=false,timer:ReturnType<typeof setTimeout>,attempt=0;
@@ -1056,8 +1059,26 @@ export default function InsuranceDashboard() {
         else setWindEvidenceUnavailable(true);
       }catch{if(!stopped)setWindEvidenceUnavailable(true);/* Optional evidence never blocks the quote. */}
     };
-    timer=setTimeout(read,1500);return()=>{stopped=true;clearTimeout(timer);};
+    void read();return()=>{stopped=true;clearTimeout(timer);};
   },[address]);
+  useEffect(() => {
+    if (windAnswers.reportAvailable) return;
+    const suggested = windSupporting?.roof;
+    if (suggested && !roofShapeUserSet.current) {
+      setWindAnswers(previous => ({ ...previous, shape: suggested.shape }));
+    }
+    if (suggested?.material && !roofMaterialUserSet.current &&
+      ["Architectural Shingles", "Metal", "Tile", "Other"].includes(suggested.material)) {
+      setRoofMaterial(suggested.material);
+    }
+    const permits = windSupporting?.permits.permits.filter(permit => permit.classification?.kind === "reroof" && permit.dateBasis !== "received") ?? [];
+    if (permits.length) {
+      const suggestions = permits.map(permit => ({ year: Number(permit.date.slice(0, 4)), source: permit.source, sourceUrl: permit.sourceUrl }));
+      setRoofPermits(suggestions);
+      const year = suggestions.map(permit => permit.year).filter(validRoofYear).sort((a, b) => b - a)[0];
+      if (year && !manualRoofYear.current) setRoofYear(year);
+    }
+  }, [windSupporting, windAnswers.reportAvailable]);
 
   // ── Property-characteristics resolution ───────────────────────────────────
   // Resolve the FEMA flood zone for the active address. Priority:
@@ -1119,7 +1140,11 @@ export default function InsuranceDashboard() {
         if (cancelled) return;
         if (!profile) { await fallbackFlood(); return; }
         setFieldSources(profile.fieldSources ?? {});
-        setRoofPermits(Array.isArray(profile.roofPermits) ? profile.roofPermits : []);
+        const permits: RoofSuggestion[] = Array.isArray(profile.roofPermits) ? profile.roofPermits : [];
+        setRoofPermits(permits);
+        const suggestedRoofYear = permits.map(permit => permit.year ?? permit.roofYear ?? Number(permit.permitDate?.slice(0, 4)))
+          .filter(validRoofYear).sort((a, b) => b - a)[0];
+        if (!manualRoofYear.current && suggestedRoofYear) setRoofYear(suggestedRoofYear);
         const locks = propertyCharacteristicLocksRef.current;
         const zone = profile.fieldSources?.floodZone?.value ?? profile.floodZone;
         if (!locks.floodZone && typeof zone === "string" && zone) {
@@ -1184,21 +1209,21 @@ export default function InsuranceDashboard() {
     }).catch(()=>{if(active)setAssumedCreditScore("Unavailable");});
     return()=>{active=false;};
   },[]);
-  const costPerSqFt = constIdx === 2 ? rebuildRate?.frame_cost_per_sqft
-    : constIdx === 0 || constIdx === 1 ? rebuildRate?.masonry_cost_per_sqft : null;
-  const constructionKnown = [0, 1, 2].includes(constIdx) &&
-    (constructionSourced || constructionConfirmed || propertyCharacteristicLocksRef.current.construction);
-  const policyAnswered = !!policyType && policyTypeSource === "manual";
-  const computedCoverage = sqFtConfirmed && constructionKnown && squareFeet > 0 && typeof costPerSqFt === "number" && costPerSqFt > 0
+  const blockRate = rebuildRate?.masonry_cost_per_sqft;
+  const costPerSqFt = typeof blockRate === "number" && blockRate > 0
+    ? blockRate * (constIdx === 2 ? 0.85 : constIdx === 1 ? 0.925 : 1) : null;
+  const constructionKnown = [0, 1, 2].includes(constIdx);
+  const policyAnswered = !!policyType;
+  const computedCoverage = constructionKnown && squareFeet > 0 && typeof costPerSqFt === "number" && costPerSqFt > 0
     ? Math.round(squareFeet * costPerSqFt / 1000) * 1000 : 0;
   useEffect(() => {
     if (!manualCoverageA.current) setRebuild(computedCoverage);
   }, [computedCoverage]);
   const rebuildExplanation = (manualCoverageA.current
-    ? "Source: Manual Coverage A — your value is retained and will not be replaced by a lookup."
-    : computedCoverage > 0
-      ? `${squareFeet.toLocaleString()} confirmed sq. ft. × $${costPerSqFt!.toLocaleString("en-US", { maximumFractionDigits: 6 })} per sq. ft. = $${(squareFeet * costPerSqFt!).toLocaleString("en-US", { maximumFractionDigits: 2 })}; rounded to nearest $1,000: ${fmt(computedCoverage)}. ${rebuildRate?.countyName || rebuildRate?.county} · ${rebuildRate?.source_note || "Source note unavailable"} · Updated ${rebuildRate?.updated_at || "date unavailable"}.`
-      : "Coverage A is required. Confirm living area and construction to use a configured county rate, or enter your rebuild estimate manually. Missing rate means no estimate — never market value.") +
+    ? "Your manual Coverage A is retained and will not be replaced by a lookup. Calculated reference: "
+    : "") + (computedCoverage > 0
+      ? `${squareFeet.toLocaleString()} sq. ft. × $${costPerSqFt!.toLocaleString("en-US", { maximumFractionDigits: 2 })} per sq. ft. = $${(squareFeet * costPerSqFt!).toLocaleString("en-US", { maximumFractionDigits: 2 })}; rounded to nearest $1,000: ${fmt(computedCoverage)}. ${rebuildRate?.countyName || rebuildRate?.county} · ${constIdx === 2 ? "Frame uses 85% of the block rate." : constIdx === 1 ? "Mixed uses the average of block and frame rates." : "Block construction rate."} ${rebuildRate?.source_note || "Source note unavailable"} · Updated ${rebuildRate?.updated_at || "date unavailable"}.`
+      : "Coverage A is required. Add living area to use the county rebuild rate, or enter your rebuild estimate manually. Missing rate means no estimate — never market value.") +
     " Not an appraisal — your carrier may adjust Coverage A.";
 
   useEffect(() => {
@@ -1751,7 +1776,7 @@ export default function InsuranceDashboard() {
   }, [
     isAuthenticated, address, rebuild, policyType, policyTypeSource,
     manualAnnualPremium, roofYear, yearBuilt, openingProtectionIdx, roofShapeIdx,
-    swrIdx, hurrIdx, constIdx, aopDeductible, floodZone, floodZoneSource,
+    swrIdx, hurrIdx, constIdx, aopDeductible, floodZone, floodZoneSource, roofMaterial,
      newPurchase, purchaseDate, purchasePrice, purchasePriceSource,
       ho6ResidenceUse, ho6RentalTerm, squareFeet, currentlyInsured, currentCarrier,
   ]);
@@ -1759,7 +1784,7 @@ export default function InsuranceDashboard() {
   // Quote results belong to an authenticated user AND the complete answer set.
   // Never hydrate an address-only local or shared cache. qr-start alone gates reuse.
   const quoteIdentity = JSON.stringify([currentHome,homeMortgage,windAnswers,
-    user?.id, address, rebuild, policyType, policyAnswered, roofYear, yearBuilt, constIdx, constructionKnown,
+    user?.id, address, rebuild, policyType, policyAnswered, roofYear, roofMaterial, roofShapeUserSet.current, roofMaterialUserSet.current, yearBuilt, constIdx, constructionKnown,
     openingProtectionIdx, roofShapeIdx, swrIdx, hurrIdx, aopDeductible,
     floodZone, floodZoneUnknown, squareFeet, sqFtConfirmed, newPurchase,
     purchaseDate, purchasePrice, purchasePriceSource, ho6ResidenceUse,
@@ -1774,20 +1799,17 @@ export default function InsuranceDashboard() {
     ...(!windAnswersSchema.safeParse(windAnswers).success?["Complete the values from your wind mitigation report, or select no report."]:[]),
     ...(!policyAnswered ? ["Select or confirm a policy type."] : []),
     ...(newPurchase === null ? ["Select whether this is a new purchase."] : []),
-    ...(newPurchase && !purchaseDate ? ["Enter the confirmed closing date."] : []),
     ...(!Number.isFinite(purchasePrice) || purchasePrice <= 0 || !purchasePriceSource ? ["Enter a confirmed property value with its source."] : []),
     ...(policyType !== "DP3" && !ho6ResidenceUse ? ["Select residence use."] : []),
     ...((policyType === "DP3" || ho6ResidenceUse === "investment") && !ho6RentalTerm ? ["Select the rental term."] : []),
     ...(newPurchase === false && currentlyInsured === null ? ["Answer whether the property is currently insured."] : []),
     ...(newPurchase === false && currentlyInsured && !currentCarrier.trim() ? ["Enter the current insurance carrier."] : []),
     ...(newPurchase === false && currentlyInsured && !currentPolicyExpirationDate ? ["Enter the current policy expiration date."] : []),
-    ...(hasClaims === null ? ["Answer the claims-history question."] : []),
-    ...(hasClaims && (!claimRecords.length || claimRecords.some(c => !c.lossDate || !c.claimDetail.trim() || Number(c.amount) <= 0 || !Number.isFinite(Number(c.amount)) || typeof c.paid !== "boolean" || typeof c.priorResidence !== "boolean")) ? ["Complete every claim's loss date, type/cause, amount, paid status, and residence."] : []),
     ...(!Number.isInteger(yearBuilt) || yearBuilt < 1800 || yearBuilt > 2027 ? ["Enter the home's year built."] : []),
     ...(!validRoofYear(roofYear) ? [ROOF_YEAR_ERROR] : []),
-    ...(!sqFtConfirmed || !Number.isFinite(squareFeet) || squareFeet <= 0 ? ["Confirm the living area square footage."] : []),
-    ...(!constructionKnown ? ["Select or confirm a known construction type; the default is only assumed."] : []),
-    ...(!Number.isFinite(rebuild) || rebuild <= 0 ? ["Enter Coverage A or confirm square footage and a configured rebuild rate."] : []),
+    ...(!Number.isFinite(squareFeet) || squareFeet <= 0 ? ["Enter the living area square footage."] : []),
+    ...(!constructionKnown ? ["Select a construction type."] : []),
+    ...(!Number.isFinite(rebuild) || rebuild <= 0 ? ["Enter Coverage A or add square footage to use the county rebuild rate."] : []),
   ];
   useEffect(() => {
     if (qrPollRef.current) clearInterval(qrPollRef.current);
@@ -2102,10 +2124,13 @@ export default function InsuranceDashboard() {
             // compatibility with older callers of this endpoint.
             yearBuilt,
             roofYear,
+            roofMaterial,
+            roofShapeUserSet: roofShapeUserSet.current,
+            roofMaterialUserSet: roofMaterialUserSet.current,
             openingProtection: openingProtectionIdx === 1,
             roofShape: ["Hip", "Flat", "Gable", "Gable"][roofShapeIdx] ?? "Gable",
             secondaryWaterResistance:
-              swrIdx === 2 ? "Yes" : swrIdx === 0 ? "No" : "Unknown",
+              swrIdx === 2 ? "Yes" : "No",
             windMitigationLocks: windMitigationLocksRef.current,
             yearIdx,
             roofIdx,
@@ -2622,7 +2647,12 @@ export default function InsuranceDashboard() {
                 </p>
               </CardHeader>
               <CardContent className="space-y-5">
-                <WindEvidenceForm key={address} isAuthenticated={isAuthenticated} value={windAnswers} onChange={value=>{
+                <WindEvidenceForm key={address} isAuthenticated={isAuthenticated} value={windAnswers}
+                  onRoofShapeSelection={() => { roofShapeUserSet.current = true; }}
+                  roofShapeSource={!roofShapeUserSet.current ? windSupporting?.roof?.source || "Gable/Other planning assumption; not independently verified" : undefined}
+                  assumedSwr={windPreview?.fields.swr.value === "Yes"}
+                  onSwrSelection={() => { swrUserSelected.current = true; }} onChange={value=>{
+                  if (value.peelAndStick !== windAnswers.peelAndStick) swrUserSelected.current = true;
                   setWindAnswers(value);
                   setRoofShapeIdx(value.shape==="Hip"?0:value.shape==="Flat"?1:value.shape==="Gable"?3:2);
                 }} permits={windSupporting?.permits.permits} onRoofYear={setRoofYear}
@@ -2699,6 +2729,10 @@ export default function InsuranceDashboard() {
                   rebuild={rebuild}
                   onRebuildChange={value => { manualCoverageA.current = true; setRebuild(value); }}
                   rebuildExplanation={rebuildExplanation}
+                  onResetRebuild={() => { manualCoverageA.current = false; setRebuild(computedCoverage); }}
+                  roofMaterial={roofMaterial}
+                  onRoofMaterialChange={value => { roofMaterialUserSet.current = true; setRoofMaterial(value); }}
+                  floodNotice={assumesHoaFloodCoverage ? `${FLOOD_HOA_ASSUMPTION_NOTE} FEMA flood-zone and risk information still applies; confirm any elevation-certificate fees with your agent.` : isLand ? "No building flood premium is estimated for land. FEMA flood-zone and risk information still applies. Confirm required coverage with your agent." : undefined}
                   fieldSources={fieldSources}
                   fieldLocks={propertyCharacteristicLocksRef.current}
                   constructionKnown={constructionKnown}
@@ -2757,16 +2791,6 @@ export default function InsuranceDashboard() {
                      setFloodZone(value);
                      setFloodZoneSource("Manual entry");
                    }}
-                   hasClaims={hasClaims}
-                   onHasClaimsChange={(value) => {
-                     setHasClaims(value);
-                     if (value === false) setClaimRecords([]);
-                     if (value === true && claimRecords.length === 0) {
-                       setClaimRecords([{ lossDate: "", claimDetail: "", amount: "", paid: null, priorResidence: null }]);
-                     }
-                   }}
-                   claimRecords={claimRecords}
-                   onClaimRecordsChange={setClaimRecords}
                   annualPremium={calc.mid}
                 />
                 {rateError && <div className="mt-3 rounded-lg border border-destructive/30 p-3 text-xs" role="alert">{rateError}<button type="button" className="ml-2 text-primary underline" onClick={() => setRateRetry(v => v + 1)}>Retry county rate</button></div>}
@@ -2951,7 +2975,7 @@ export default function InsuranceDashboard() {
                       <span className="block mt-1 text-blue-800">
                         <strong>Construction subtype default to confirm:</strong>{" "}
                         {constIdx === 1
-                          ? "mixed construction includes verified concrete-block masonry; the frame subtype is omitted"
+                          ? "mixed construction is a planning estimate; the structural subtype needs carrier verification"
                           : "the structural frame subtype is omitted until confirmed"}
                         .
                       </span>
@@ -2973,13 +2997,13 @@ export default function InsuranceDashboard() {
                       , {newPurchase === null
                         ? "purchase status required"
                         : newPurchase
-                          ? `new purchase closing ${purchaseDate || "date required"}`
+                          ? `new purchase policy date ${purchaseDate || insuranceEffectiveDate()} (14-day planning default)`
                           : currentPolicyExpirationDate
                             ? `current policy expiration ${currentPolicyExpirationDate} (preferred over requested date ${purchaseDate || "not provided"})`
                             : `requested effective date ${purchaseDate || "30-day fallback disclosed at quote time"}`},
                       9 months or more occupied, purchase price{" "}
                       {purchasePrice > 0 ? fmt(purchasePrice) : "required"},
-                       composite-shingle roof, slab foundation, and{" "}
+                       {roofMaterial.toLowerCase()} roof, slab foundation, and{" "}
                        {hasClaims === null
                          ? "claims history required"
                          : hasClaims
@@ -3203,30 +3227,6 @@ export default function InsuranceDashboard() {
 
                 </CardContent>
             </Card>
-          </div>
-
-          {/* Flood warning */}
-          <div className="flex gap-3 bg-amber-50 border border-amber-200 rounded-xl p-4">
-            <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
-            <p className="text-sm text-amber-900 leading-relaxed">
-              {assumesHoaFloodCoverage ? (
-                <>
-                  <strong>No separate flood premium is estimated.</strong>{" "}
-                  {FLOOD_HOA_ASSUMPTION_NOTE} FEMA flood-zone and risk information
-                  still applies; confirm any elevation-certificate fees with your agent.
-                </>
-              ) : isLand ? (
-                <>
-                  <strong>No building flood premium is estimated for land.</strong>{" "}
-                  FEMA flood-zone and risk information still applies. Confirm any
-                  required coverage and elevation-certificate fees with your agent.
-                </>
-              ) : (
-                <>
-                  <strong>Flood insurance is not included in this estimate.</strong> Properties in AE or VE flood zones require a separate NFIP or private flood policy — often $800–$3,500+/year depending on zone and elevation. Ask your agent about an elevation certificate to reduce flood premiums.
-                </>
-              )}
-            </p>
           </div>
 
           <p className="text-xs text-muted-foreground text-center leading-relaxed pb-4">

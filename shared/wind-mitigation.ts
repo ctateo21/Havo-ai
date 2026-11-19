@@ -7,7 +7,7 @@ export const CLIP_YEAR: Record<string, number> = {
 const windObjectSchema = z.object({
   reportAvailable:z.boolean().default(false),
   report:z.object({
-    reference:z.string().trim().min(3).max(120),
+    reference:z.string().trim().max(120).optional(),
     uploadId:z.string().uuid().optional(),
     inspector:z.string().trim().max(200).optional(),
     yearBuilt:z.number().int().min(1800).max(2027).optional(),
@@ -49,7 +49,7 @@ export function resolveWind(input:{county:string; yearBuilt:number; roofYear:num
   const a=windAnswersSchema.parse(input.answers??{}), permits=input.permits??[];
   const fact=(value:string,source:string,estimated=true):WindEvidence=>({value,source,estimated});
   if(a.reportAvailable && a.report){
-    const r=a.report,source=`Report ${r.reference}, inspected ${r.inspectionDate} — transcribed by user`;
+    const r=a.report,source=`Report ${r.uploadId || r.reference || "user-confirmed values"}, inspected ${r.inspectionDate} — confirmed by user`;
     return {haveReport:true,fields:{roofToWall:fact(r.roofToWall,source,false),roofDeck:fact(r.roofDeck,source,false),
       swr:fact(r.swr,source,false),opening:fact(r.opening,source,false),shape:fact(r.shape,source,false)},notes:[]};
   }
@@ -66,8 +66,8 @@ export function resolveWind(input:{county:string; yearBuilt:number; roofYear:num
   const fields:WindResult["fields"]={
     roofToWall:fact(clips?"Clips":"Unknown",input.yearBuilt<1996&&clips?"coastal-zone check + year built":"year built"),
     roofDeck:fact(deck,roofPermit?`county permit ${roofPermit.number}`:"year built / user roof year"),
-    swr:fact(swrPermit||input.roofYear>=2021?"Yes":input.roofYear>=2008&&a.peelAndStick==="yes"?"Yes":"Unknown",
-      swrPermit?`county PA permit ${swrPermit.number}: "${swrPermit.classification!.quote}" (${swrPermit.sourceUrl})`:input.roofYear>=2021?"user roof year": "user answer"),
+    swr:fact(a.peelAndStick==="no"?"No":a.peelAndStick==="yes"||swrPermit||input.roofYear>=2021?"Yes":"No",
+      a.peelAndStick!=="unsure"?"user answer":swrPermit?`county PA permit ${swrPermit.number}: "${swrPermit.classification!.quote}" (${swrPermit.sourceUrl})`:input.roofYear>=2021?"roof year 2021 or later — estimated": "agency default — no verified SWR evidence"),
     opening:fact(a.allOpenings==="all"&&a.openingsConfirmed?(openings.length?"B":"N"):"X",openings.length?"county permit + user answer":"user answer"),
     shape:fact(a.shape==="Not sure"?"Gable":a.shape,a.shape==="Not sure"?"agency default — please confirm":"user answer",a.shape==="Not sure"),
   };

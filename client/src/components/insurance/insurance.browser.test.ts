@@ -37,48 +37,49 @@ test("uploaded wind values remain editable drafts and require explicit review", 
   await page.route("**/api/insurance/wind-report", async route => {
     expect(route.request().headers()["content-type"]).toContain("multipart/form-data");
     expect(route.request().postData()).toContain('name="file"');
-    return route.fulfill({ json: { reportId: "private-report-test-82", extracted: {
+    return route.fulfill({ json: { reportId: "00000000-0000-4000-8000-000000000082", extracted: {
       inspectionDate: "2026-01-01", inspector: "Marina Ellis", yearBuilt: 1958,
       roofCovering: "Concrete tile", roofToWall: "Clips", roofDeck: "D", swr: "Yes", opening: "B", shape: "Hip",
     } } });
   });
-  await page.getByLabel("Upload an existing wind mitigation report", { exact: true }).setInputFiles({
+  await page.getByRole("radio", { name: "Yes", exact: true }).check();
+  await page.getByLabel("Upload your wind mitigation report", { exact: true }).setInputFiles({
     name: "wind-report.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 test"),
   });
-  await expect(page.getByLabel("Report reference", { exact: true })).toHaveValue("private-report-test-82");
-  await expect(page.getByLabel("Report: inspector", { exact: true })).toHaveValue("Marina Ellis");
+  await expect(page.getByRole("status").filter({ hasText: "Draft extracted." })).toBeVisible();
+  await page.getByText("Review report values", { exact: true }).click();
+  await expect(page.getByLabel("Report reference", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Report: inspector", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Report: year built", { exact: true })).toHaveValue("1958");
   await expect(page.getByLabel("Report: roof covering", { exact: true })).toHaveValue("Concrete tile");
   await expect(page.getByLabel("Report: roof deck attachment", { exact: true })).toHaveValue("D");
-  const confirmation = page.getByRole("checkbox", { name: /I copied these values/ });
+  const confirmation = page.getByRole("checkbox", { name: /I reviewed these values/ });
   await expect(confirmation).not.toBeChecked();
   await confirmation.check();
-  await page.getByLabel("Report: inspector", { exact: true }).fill("Marina Ellis, PE");
+  await page.getByLabel("Report: roof covering", { exact: true }).fill("Metal");
   await expect(confirmation).not.toBeChecked();
 });
 
 test("report upload handles expired sign-in without discarding manual entries", async ({ page }) => {
   await fixture(page, { rate: 250 });
-  await page.getByLabel("Yes, I can enter its values").check();
-  await page.getByLabel("Report reference", { exact: true }).fill("SELLER-REFERENCE");
+  await page.getByRole("radio", { name: "Yes", exact: true }).check();
+  await page.getByText("Review report values", { exact: true }).click();
+  await page.getByLabel("Report: roof covering", { exact: true }).fill("Metal");
   await page.route("**/api/insurance/wind-report", route => route.fulfill({ status: 401, json: { error: "Unauthorized" } }));
-  await page.getByLabel("Upload an existing wind mitigation report", { exact: true }).setInputFiles({
+  await page.getByLabel("Upload your wind mitigation report", { exact: true }).setInputFiles({
     name: "wind-report.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 test"),
   });
   await expect(page.getByText("Sign up or sign in to upload a private report. Manual entry is still available.")).toBeVisible();
-  await expect(page.getByLabel("Report reference", { exact: true })).toHaveValue("SELLER-REFERENCE");
+  await expect(page.getByLabel("Report: roof covering", { exact: true })).toHaveValue("Metal");
 });
 
 async function readyLiveQuote(page:Page){
   await expect(page.getByTestId("input-square-feet")).toHaveValue("1166");
   await page.getByTestId("select-policy-type").selectOption("HO3");
-  await page.getByTestId("select-prior-claims").selectOption("no");
   await page.getByTestId("select-new-purchase").selectOption("yes");
-  await page.getByTestId("input-purchase-date").fill("2027-01-15");
   await page.getByTestId("input-property-purchase-price").fill("385000");
   await page.getByTestId("select-ho6-residence-use").selectOption("primary");
   await page.getByTestId("input-roof-year").fill("2018");
-  await page.getByTestId("confirm-square-footage").check();
 }
 test("partial previous address is omitted and wind report values are explicitly transcribed",async({page})=>{
   const calls=await fixture(page,{rate:250});
@@ -90,16 +91,16 @@ test("partial previous address is omitted and wind report values are explicitly 
   const first=calls.find(x=>x.path==="/api/insurance/qr-start")!.body!;
   expect(first.previousAddress).toBeUndefined();
   expect((first.windAnswers as any).reportAvailable).toBe(false);
-  await page.getByLabel("Yes, I can enter its values").check();
+  await page.getByRole("radio", { name: "Yes", exact: true }).check();
   await expect(page.getByRole("button",{name:"Get Live Quotes",exact:true})).toBeDisabled();
-  await page.getByLabel("Report reference",{exact:true}).fill("EXAMPLE REPORT");
+  await page.getByText("Review report values", { exact: true }).click();
   await page.getByLabel("Inspection date",{exact:true}).fill("2026-01-01");
   await page.getByLabel("Report: roof-to-wall attachment",{exact:true}).selectOption("Clips");
   await page.getByLabel("Report: roof deck attachment",{exact:true}).selectOption("C");
   await page.getByLabel("Report: secondary water resistance",{exact:true}).selectOption("Yes");
   await page.getByLabel("Report: opening protection code",{exact:true}).selectOption("B");
   await page.getByLabel("Report: roof shape",{exact:true}).selectOption("Hip");
-  await page.getByRole("checkbox",{name:/I copied these values/i}).check();
+  await page.getByRole("checkbox",{name:/I reviewed these values/i}).check();
   await page.getByRole("button",{name:"Get Live Quotes",exact:true}).click();
   await expect.poll(()=>calls.filter(x=>x.path==="/api/insurance/qr-start").length).toBe(2);
   const second=calls.filter(x=>x.path==="/api/insurance/qr-start")[1].body!;
@@ -133,6 +134,7 @@ const user = {
 };
 async function fixture(page: Page, options: { rate?: number; profileFailure?: boolean; floodFailure?: boolean; noConstruction?: boolean; assumedConstruction?: boolean; assumedPolicy?: boolean } = {}) {
   const calls: { path: string; body: Record<string, unknown> | null; access?: string }[] = [];
+  await page.routeWebSocket("**/*", socket => socket.close());
   await page.addInitScript(({ user, address }) => {
     const session = JSON.stringify({ access_token: "insurance-test-token", refresh_token: "insurance-test-refresh", expires_at: 4102444800, expires_in: 3600, token_type: "bearer", user });
     const original = Storage.prototype.getItem;
@@ -181,31 +183,26 @@ async function fixture(page: Page, options: { rate?: number; profileFailure?: bo
 async function completeAnswers(page: Page, answerPolicy = true) {
   await expect(page.getByTestId("input-square-feet")).toHaveValue("1166");
   if (answerPolicy) await page.getByTestId("select-policy-type").selectOption("HO3");
-  await page.getByTestId("select-prior-claims").selectOption("no");
   await page.getByTestId("select-new-purchase").selectOption("yes");
-  await page.getByTestId("input-purchase-date").fill("2027-01-15");
   await page.getByTestId("input-property-purchase-price").fill("385000");
   await page.getByTestId("select-ho6-residence-use").selectOption("primary");
   await page.getByTestId("input-roof-year").fill("2018");
-  await page.getByTestId("confirm-square-footage").check();
 }
 
 for (const mode of ["missing", "assumed"] as const) {
-  test(`${mode} construction with configured rates stays blank until explicitly selected or confirmed`, async ({ page }) => {
+  test(`${mode} construction defaults to editable block without a confirmation gate`, async ({ page }) => {
     await fixture(page, { rate: 250, noConstruction: mode === "missing", assumedConstruction: mode === "assumed" });
     await expect(page.getByTestId("input-square-feet")).toHaveValue("1166");
-    await expect(page.getByRole("combobox", { name: "Construction Type", exact: true })).toHaveValue("0");
-    await page.getByTestId("confirm-square-footage").check();
-    await expect(page.getByTestId("input-coverage-a")).toHaveValue("");
-    await expect(page.getByText("Assumed — confirm. Select or confirm construction before estimating Coverage A.")).toBeVisible();
-    if (mode === "missing") await page.getByRole("combobox", { name: "Construction Type", exact: true }).selectOption("2");
-    else await page.getByRole("button", { name: "Confirm construction type: Concrete Block", exact: true }).click();
+    await expect(page.getByRole("combobox", { name: "Construction", exact: true })).toHaveValue("0");
+    await expect(page.getByTestId("confirm-square-footage")).toHaveCount(0);
     await expect(page.getByTestId("input-coverage-a")).toHaveValue("292000");
-    await expect(page.getByText(/1,166 confirmed sq. ft. ×/)).toContainText("Not an appraisal — your carrier may adjust Coverage A.");
+    await expect(page.getByText(/1,166 sq. ft. ×/)).toContainText("Not an appraisal — your carrier may adjust Coverage A.");
+    await page.getByRole("combobox", { name: "Construction", exact: true }).selectOption("2");
+    await expect(page.getByTestId("input-coverage-a")).toHaveValue("248000");
   });
 }
 
-test("the default policy requires an explicit answer and missing or zero carrier coverage is unavailable", async ({ page }) => {
+test("the default policy needs no extra confirmation and missing or zero carrier coverage is unavailable", async ({ page }) => {
   await fixture(page, { rate: 250, assumedPolicy: true });
   await page.route("**/api/insurance/qr-start", route => route.fulfill({ contentType: "application/json", body: JSON.stringify({
     quoteAccessToken: "coverage-check-token", fromCache: true, leadId: 83, quoteCounter: 2, quotes: [
@@ -213,11 +210,10 @@ test("the default policy requires an explicit answer and missing or zero carrier
       { siteName: "Missing Coverage Carrier", annualPremium: 2860, monthlyPremium: 238.33, coverageA: 400000 },
     ],
   }) }));
-  await expect(page.getByRole("button", { name: "Confirm policy type: HO3", exact: true })).toBeVisible();
+  await expect(page.getByTestId("select-policy-type")).toHaveValue("HO3");
   await completeAnswers(page, false);
   const send = page.getByRole("button", { name: "Get Live Quotes", exact: true });
-  await expect(send).toBeDisabled();
-  await page.getByRole("button", { name: "Confirm policy type: HO3", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Confirm policy type: HO3", exact: true })).toHaveCount(0);
   await expect(send).toBeEnabled();
   await send.click();
   for (const carrier of ["Zero Coverage Carrier", "Missing Coverage Carrier"]) {
@@ -227,50 +223,48 @@ test("the default policy requires an explicit answer and missing or zero carrier
   }
 });
 
-test("sourced St Petersburg facts never fabricate roof, confirmation, or market-value coverage", async ({ page }) => {
+test("sourced facts suggest an editable permit year without fabricating market-value coverage or cached quotes", async ({ page }) => {
   const calls = await fixture(page);
   await expect(page.getByTestId("input-year-built")).toHaveValue("1958");
   await expect(page.getByTestId("input-square-feet")).toHaveValue("1166");
+  await page.getByText("Property assumptions and sources", { exact: true }).click();
   await expect(page.getByText("Florida DOR 2026", { exact: false }).first()).toBeVisible();
-  await expect(page.getByTestId("text-flood-zone")).toHaveValue("X");
+  await expect(page.getByTestId("text-flood-zone")).toHaveText("X");
   await expect(page.getByText("FEMA National Flood Hazard Layer", { exact: false }).first()).toBeVisible();
-  await expect(page.getByTestId("confirm-square-footage")).not.toBeChecked();
-  await expect(page.getByTestId("input-roof-year")).toHaveValue("");
+  await expect(page.getByTestId("confirm-square-footage")).toHaveCount(0);
+  await expect(page.getByTestId("input-roof-year")).toHaveValue("2018");
   await expect(page.getByTestId("input-coverage-a")).toHaveValue("");
   await expect(page.getByTestId("estimated-annual-premium")).toHaveText("—");
-  await page.getByTestId("confirm-square-footage").check();
-  await expect(page.getByTestId("input-coverage-a")).toHaveValue("");
   await expect(page.getByRole("button", { name: "Get Live Quotes", exact: true })).toBeDisabled();
   await expect(page.getByText("Other Borrower's Private Carrier")).toHaveCount(0);
   await expect(page.getByText("Unknown Answers Shared Carrier")).toHaveCount(0);
   expect(calls.some(c => c.path === "/api/insurance/qr-cache" || c.path === "/api/insurance/qr-start")).toBe(false);
   await page.getByTestId("input-roof-year").fill("2018.5");
   await expect(page.locator("#roof-year-error")).toHaveText("Enter a whole year from 2000 to 2027.");
-  await page.getByRole("button", { name: /Use 2018/ }).click();
+  await page.getByTestId("input-roof-year").fill("2018");
   await expect(page.getByTestId("input-roof-year")).toHaveValue("2018");
 });
 
-test("only confirmed living area computes Coverage A; manual value stays locked", async ({ page }) => {
+test("sourced living area computes Coverage A without confirmation; manual value stays locked", async ({ page }) => {
   await fixture(page, { rate: 250 });
   await expect(page.getByTestId("input-square-feet")).toHaveValue("1166");
-  await expect(page.getByTestId("input-coverage-a")).toHaveValue("");
-  await page.getByTestId("confirm-square-footage").check();
   await expect(page.getByTestId("input-coverage-a")).toHaveValue("292000");
-  await expect(page.getByText(/1,166 confirmed sq. ft. ×/)).toContainText("County rate test source");
+  await expect(page.getByText(/1,166 sq. ft. ×/)).toContainText("County rate test source");
   await page.getByTestId("input-coverage-a").fill("315000");
   await page.getByTestId("input-square-feet").fill("1281");
-  await expect(page.getByTestId("confirm-square-footage")).not.toBeChecked();
-  await page.getByTestId("confirm-square-footage").check();
+  await expect(page.getByTestId("confirm-square-footage")).toHaveCount(0);
   await expect(page.getByTestId("input-coverage-a")).toHaveValue("315000");
 });
 
-test("HTTP profile failure falls back to FEMA; failed FEMA permits explicit unknown", async ({ page }) => {
+test("HTTP profile failure falls back to FEMA; failed FEMA stays unverified and editable in assumptions", async ({ page }) => {
   const calls = await fixture(page, { profileFailure: true, floodFailure: true });
   await expect(page.getByText("Checking FEMA flood map…")).toBeVisible();
   await expect(page.getByTestId("input-year-built")).toHaveValue("");
   await expect(page.getByTestId("input-roof-year")).toHaveValue("");
-  await page.getByLabel("I don't know my flood zone — ask my agent to verify.").check();
-  await expect(page.getByTestId("text-flood-zone")).toBeDisabled();
+  await expect(page.getByTestId("text-flood-zone")).toHaveText("Not verified yet");
+  await page.getByText("Property assumptions and sources", { exact: true }).click();
+  await page.getByTestId("input-assumed-flood-zone").fill("X");
+  await expect(page.getByTestId("text-flood-zone")).toHaveText("X");
   expect(calls.some(c => c.path === "/api/flood-zone")).toBe(true);
 });
 
@@ -278,14 +272,12 @@ test("complete answers send confirmation and assumed credit; only server-validat
   const calls = await fixture(page, { rate: 250 });
   await expect(page.getByTestId("input-square-feet")).toHaveValue("1166");
   await page.getByTestId("select-policy-type").selectOption("HO3");
-  await page.getByTestId("select-prior-claims").selectOption("no");
   await page.getByTestId("select-new-purchase").selectOption("yes");
-  await page.getByTestId("input-purchase-date").fill("2027-01-15");
   await page.getByTestId("input-property-purchase-price").fill("385000");
   await page.getByTestId("select-ho6-residence-use").selectOption("primary");
   await page.getByTestId("input-roof-year").fill("2018");
-  await page.getByTestId("confirm-square-footage").check();
-  await page.getByLabel("I don't know my flood zone — ask my agent to verify.").check();
+  await page.getByText("Property assumptions and sources", { exact: true }).click();
+  await page.getByTestId("input-assumed-flood-zone").fill("");
   const send = page.getByRole("button", { name: "Get Live Quotes", exact: true });
   await expect(send).toBeEnabled();
   await send.click();
@@ -313,13 +305,10 @@ test("carrier reads use ten-second intervals and stop at six minutes without dec
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ status: "pending", quoteCounter: 0, expectedCarriers: 14, respondedCarriers: 3, quotes: [] }) });
   });
   await page.getByTestId("select-policy-type").selectOption("HO3");
-  await page.getByTestId("select-prior-claims").selectOption("no");
   await page.getByTestId("select-new-purchase").selectOption("yes");
-  await page.getByTestId("input-purchase-date").fill("2027-01-15");
   await page.getByTestId("input-property-purchase-price").fill("385000");
   await page.getByTestId("select-ho6-residence-use").selectOption("primary");
   await page.getByTestId("input-roof-year").fill("2018");
-  await page.getByTestId("confirm-square-footage").check();
   await page.getByRole("button", { name: "Get Live Quotes", exact: true }).click();
   await expect(page.getByText(/Carriers quoting 0 of 14/)).toBeVisible();
   await page.clock.runFor(9000);
@@ -346,13 +335,10 @@ test("pending-without-lead uses its run token and never persists or reuses acces
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ found: true, status: "pending", expectedCarriers: 11, respondedCarriers: 2 }) });
   });
   await page.getByTestId("select-policy-type").selectOption("HO3");
-  await page.getByTestId("select-prior-claims").selectOption("no");
   await page.getByTestId("select-new-purchase").selectOption("yes");
-  await page.getByTestId("input-purchase-date").fill("2027-01-15");
   await page.getByTestId("input-property-purchase-price").fill("385000");
   await page.getByTestId("select-ho6-residence-use").selectOption("primary");
   await page.getByTestId("input-roof-year").fill("2018");
-  await page.getByTestId("confirm-square-footage").check();
   await page.getByRole("button", { name: "Get Live Quotes", exact: true }).click();
   await expect(page.getByText(/Carriers quoting · 0 quotes received/)).toBeVisible();
   await expect(page.getByText(/of N/)).toHaveCount(0);

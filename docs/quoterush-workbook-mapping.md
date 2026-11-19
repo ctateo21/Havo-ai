@@ -31,7 +31,8 @@ Historical cached Pool and structure options normalize only at the importer/
 enrichment boundary; no database migration or data rewrite.
 
 Protected behaviors unchanged: HaveWindMitForm true as the current agency
-checkbox default (not evidence of a real report); GatedCommunity Single Entry;
+checkbox default (not evidence of a real report); GatedCommunity was Single Entry
+at workbook alignment and is now No under the simplified-form product decision;
 CreditPermission No; AssumedCreditScore Excellent; RoofMaterial Architectural
 Shingles; Coverage A never inferred; dates unchanged; previous-address fallback
 only for new purchases; estimated wind evidence stays labeled in notes.

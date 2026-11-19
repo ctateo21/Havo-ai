@@ -6,7 +6,8 @@ import type {CoastalEvidence} from "../../shared/wind-mitigation";
 import {classifyPermits} from "./permit-classification";
 import {boundedOptional} from "./quote-job-safety";
 import {withAiUser} from "../ai-usage";
-export type SupportingWind={version:3;aiAttempted:boolean;permits:PermitResult;coastal:CoastalEvidence;fetchedAt:string};
+import {estimateRoofFromSatellite,type RoofVision} from "./roof-vision";
+export type SupportingWind={version:4;aiAttempted:boolean;permits:PermitResult;coastal:CoastalEvidence;roof?:RoofVision|null;fetchedAt:string};
 const pending=new Map<string,Promise<SupportingWind|null>>();
 /** Non-personal supporting evidence only. Reports and user attestations never enter this shared cache. */
 export async function supportingWind(address:string,userId?:string):Promise<SupportingWind|null>{
@@ -16,17 +17,19 @@ export async function supportingWind(address:string,userId?:string):Promise<Supp
   const task=(async()=>{
     const profile=await propertyCharacteristicsCache.read(key,new Date());if(!profile)return null;
     const saved=profile.fieldSources?.windSupporting?.value as SupportingWind|undefined;
-    if(saved?.version===3&&(!userId||saved.aiAttempted)&&Date.now()-Date.parse(saved.fetchedAt)<(saved.permits.status==="available"?86400000*30:300000))return saved;
+    if(saved?.version===4&&(!userId||saved.aiAttempted)&&Date.now()-Date.parse(saved.fetchedAt)<(saved.permits.status==="available"?86400000*30:300000))return saved;
     const value=await boundedOptional(async signal=>{
-      const [appraiser,coastal]=await Promise.all([
+      const [appraiser,coastal,roof]=await Promise.all([
         lookupWindPermits(profile.county,address,fetch,signal),
         checkCoastalZone(profile.county,profile.latitude,profile.longitude),
+        userId && profile.latitude != null && profile.longitude != null
+          ? withAiUser(userId,()=>estimateRoofFromSatellite(profile.latitude!,profile.longitude!)) : Promise.resolve(null),
       ]);
       const all=appraiser.permits;
       const unique=all.filter((p,i)=>all.findIndex(q=>q.number===p.number&&q.date===p.date)===i);
       const classified=userId?await withAiUser(userId,()=>classifyPermits(unique,signal)):unique;
       if(signal.aborted)return null;
-      return {version:3 as const,aiAttempted:!!userId,permits:{...appraiser,
+      return {version:4 as const,aiAttempted:!!userId,roof,permits:{...appraiser,
         status:classified.length?"available" as const:appraiser.status,permits:classified},
         coastal,fetchedAt:new Date().toISOString()};
     },null,75000);

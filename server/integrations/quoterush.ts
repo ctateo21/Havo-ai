@@ -45,6 +45,7 @@ export interface QuoteRushParams {
   openingProtection: string;
   secondaryWaterResistance: string;
   roofShape: string;
+  roofMaterial?: "Architectural Shingles" | "Metal" | "Tile" | "Other";
   usageType: string;
   rentalTerm: QuoteRushPropertyDefaults["rentalTerm"];
   monthsOccupied: QuoteRushPropertyDefaults["monthsOccupied"];
@@ -210,7 +211,7 @@ export function buildImporterPayload(
         ? {FrameConstruction:p.frameConstruction}:{}),
       FoundationType: "Slab",
       RoofShape: p.windEvidence?.fields.shape.value || p.roofShape || "Gable",
-      RoofMaterial: "Architectural Shingles",
+      RoofMaterial: p.roofMaterial || "Architectural Shingles",
       UpdateRoofYear: String(p.roofYear),
       UpdateRoofType: "Full",
       CoverageA: String(p.coverageA),

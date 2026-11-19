@@ -50,9 +50,10 @@ test("permit opening protection requires explicit all confirmation and roof date
 });
 test("SWR cutoffs and explicit answers; roof shape distinguishes default from confirmed",()=>{
   assert.equal(resolveWind({...base,roofYear:2021}).fields.swr.value,"Yes");
-  assert.equal(resolveWind(base).fields.swr.value,"Unknown");
+  assert.equal(resolveWind(base).fields.swr.value,"No");
   assert.equal(resolveWind({...base,answers:{...answers,peelAndStick:"yes"}}).fields.swr.value,"Yes");
-  assert.equal(resolveWind({...base,roofYear:2007,answers:{...answers,peelAndStick:"yes"}}).fields.swr.value,"Unknown");
+  assert.equal(resolveWind({...base,roofYear:2007,answers:{...answers,peelAndStick:"yes"}}).fields.swr.value,"Yes");
+  assert.equal(resolveWind({...base,roofYear:2025,answers:{...answers,peelAndStick:"no"}}).fields.swr.value,"No");
   assert.equal(resolveWind(base).fields.shape.estimated,true);
   assert.equal(resolveWind({...base,answers:{...answers,shape:"Gable"}}).fields.shape.estimated,false);
   assert.equal(resolveWind({...base,answers:{...answers,shape:"Hip"}}).fields.shape.value,"Hip");
@@ -98,9 +99,9 @@ test("payload sends evidence-based wind values with agency checkbox/community de
   const payload=buildImporterPayload(p,"agent@example.test");
   assert.equal(payload.HO.HaveWindMitForm,true);assert.equal(payload.HO.RoofDeckAttachment,"Level B");
   assert.equal(payload.HO.RoofWallConnection,"Clips");assert.equal(payload.HO.SecondaryWaterResistance,"Yes");
-  assert.equal(payload.HO.GatedCommunity,"Single Entry");assert.equal(payload.Client.CreditPermission,"No");
+  assert.equal(payload.HO.GatedCommunity,"No");assert.equal(payload.Client.CreditPermission,"No");
   assert.equal(payload.Client.AssumedCreditScore,"Excellent");assert.match(payload.Client.OverviewNotes,/estimated/);
-  assert.equal(buildImporterPayload({...p,windAnswers:answers},"agent@example.test").HO.GatedCommunity,"Single Entry");
+  assert.equal(buildImporterPayload({...p,windAnswers:answers},"agent@example.test").HO.GatedCommunity,"No");
   const reportAnswers=windAnswersSchema.parse({...answers,reportAvailable:true,report:{reference:"Example Report",
     inspectionDate:"2026-01-01",transcribedFromReport:true,roofToWall:"Single Wraps",roofDeck:"A",swr:"No",opening:"B",shape:"Hip"}});
   const reportPayload=buildImporterPayload({...p,windAnswers:reportAnswers,windEvidence:resolveWind({...base,answers:reportAnswers})},"agent@example.test");

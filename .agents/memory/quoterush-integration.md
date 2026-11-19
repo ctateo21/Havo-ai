@@ -36,10 +36,12 @@ that a reroof was issued after an underwriting cutoff.
 Christian requires report-backed, user-confirmed and estimated wind answers to
 remain distinct in the UI and stored evidence. Existing real report values override
 estimates. Christian's latest Apply Defaults decision supersedes the previous
-report-only checkbox rule: always send HaveWindMitForm=true and GatedCommunity
-Single Entry, but never change stored haveReport or invent an inspection date.
+report-only checkbox rule: always send HaveWindMitForm=true, but never change
+stored haveReport or invent an inspection date. The simplified-form decision
+supersedes Single Entry: GatedCommunity defaults to No.
 Lead notes must state that these are agency defaults, not verified facts.
-Unknown SWR stays Unknown; absent opening evidence defaults to None. Optional
+Missing SWR now uses a disclosed no-credit assumption; explicit user No overrides
+age/permit estimates. OpeningProtection uses the workbook's Unknown or None. Optional
 IdentityTheft, PersonalInjuryCoverage and IncreaseReplacementCostOnDwelling are off.
 **Why:** Christian explicitly requested matching his desktop Apply Defaults state
 while preserving the provenance of actual wind evidence.

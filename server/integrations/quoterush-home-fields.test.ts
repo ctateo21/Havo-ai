@@ -86,7 +86,7 @@ test("workbook wind values distinguish A/B, omit unknown SWR and unsupported dec
       assert.equal(HO.RoofDeckAttachment,undefined);
       assert.equal(HO.RoofWallConnection,undefined);
       assert.equal(HO.HaveWindMitForm,true);
-      assert.equal(HO.GatedCommunity,"Single Entry");
+      assert.equal(HO.GatedCommunity,"No");
       assert.match(Client.OverviewNotes,/estimated/);
     }
   }
@@ -152,7 +152,7 @@ test("owned and refinance imports omit blank previous address and its assumption
 });
 test("Apply Defaults fields are explicit without fabricating report provenance",()=>{
   const out=buildImporterPayload({...p,windAnswers:{gated:false} as any},"agent@example.test");
-  assert.equal(out.HO.GatedCommunity,"Single Entry");
+  assert.equal(out.HO.GatedCommunity,"No");
   assert.equal(out.HO.HaveWindMitForm,true);
   assert.equal(out.HO.Terrain,"Exposure B");
   assert.equal(out.HO.SprinklerSystem,"None");

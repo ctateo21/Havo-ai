@@ -60,7 +60,7 @@ test("explicit PA SWR evidence counts, garage-only never suggests all openings",
   const g=resolveWind({county:"pinellas",yearBuilt:1958,roofYear:2018,permits:[garage],
     answers:windAnswersSchema.parse({allOpenings:"all",openingsConfirmed:true})});
   assert.equal(g.fields.opening.value,"N");
-  assert.equal(resolveWind({county:"pinellas",yearBuilt:1958,roofYear:2018,permits:[{...permit,classification:{...permit.classification,quote:"made up"}}]}).fields.swr.value,"Unknown");
+  assert.equal(resolveWind({county:"pinellas",yearBuilt:1958,roofYear:2018,permits:[{...permit,classification:{...permit.classification,quote:"made up"}}]}).fields.swr.value,"No");
 });
 test("Marco Gulf-side barrier fixture inside, inland Naples outside, bad data unknown",()=>{
   const marco={features:[{attributes:{COUNTY:"Collier",DEFINITION_SOURCE_TYPE:"Barrier Island",COASTAL_BARRIER_ISLAND_NAME:"Marco Island"}}]};

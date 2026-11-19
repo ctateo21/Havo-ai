@@ -7,7 +7,7 @@ if (!executablePath) {
 }
 // Deliberately no webServer: this focused suite never starts/restarts the workflow.
 export default defineConfig({
-  testDir: ".", testMatch: "insurance.browser.test.ts", workers: 1,
+  testDir: ".", testMatch: ["insurance.browser.test.ts", "simplified-insurance.spec.ts"], workers: 1,
   outputDir: "/tmp/havo-insurance-browser-results",
-  use: { baseURL: "http://127.0.0.1:5000", headless: true, launchOptions: { executablePath, args: ["--no-sandbox", "--disable-dev-shm-usage"] } },
+  use: { baseURL: "http://127.0.0.1:5000", headless: true, serviceWorkers: "block", launchOptions: { executablePath, args: ["--no-sandbox", "--disable-dev-shm-usage"] } },
 });
