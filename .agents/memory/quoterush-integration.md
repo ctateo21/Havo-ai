@@ -49,9 +49,12 @@ ProtectionClass and BCEG
 join Coverage A and flood zone as never-AI fields. Estimated roof-to-wall connections
 must never exceed Clips, and uncertain coastal geography must not justify Clips.
 
-Christian's compact-assumptions decision supersedes the previous permit-only
-deck limitation: assume C for 2002+ builds or older builds with 2008+ roof year,
-B for 1994–2001 otherwise, A before 1994. Missing build assumes A/Toe Nails.
+Christian's 2026-11-19 decision supersedes all earlier deck cutoffs:
+always assume Level C, regardless of build/roof year, including missing years.
+Manual/report A, B or Reinforced Concrete still override; never assume concrete.
+**Why:** Christian rarely sees A/B and wants an editable planning default.
+With no wind report, collapse the details by default but retain editing.
+Missing build still assumes Toe Nails for roof-to-wall.
 Below the county/coastal Clips cutoffs assume Toe Nails. These remain estimates,
 not verified building-code compliance. Opening Yes means Hurricane Protection;
 otherwise Unknown or None; Basic is report-only. SWR defaults by roof year,

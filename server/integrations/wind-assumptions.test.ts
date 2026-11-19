@@ -5,14 +5,14 @@ import {buildImporterPayload,type QuoteRushParams} from "./quoterush";
 import {reportRoofMaterial,ROOF_MATERIALS} from "../../shared/insurance-form-defaults";
 const coastal:CoastalEvidence={status:"inside",distanceFeet:100,source:"Fictional geography fixture",sourceUrl:"https://example.test"};
 const rows=[
-  ["1985 inland","pinellas",1985,2000,undefined,"A","Toe Nails"],
-  ["1990 coastal","collier",1990,2000,coastal,"A","Clips"],
-  ["1996 Pinellas","pinellas",1996,2000,undefined,"B","Clips"],
-  ["1996 Hillsborough","hillsborough",1996,2000,undefined,"B","Toe Nails"],
+  ["1985 inland","pinellas",1985,2000,undefined,"C","Toe Nails"],
+  ["1990 coastal","collier",1990,2000,coastal,"C","Clips"],
+  ["1996 Pinellas","pinellas",1996,2000,undefined,"C","Clips"],
+  ["1996 Hillsborough","hillsborough",1996,2000,undefined,"C","Toe Nails"],
   ["1998 with 2015 roof","pinellas",1998,2015,undefined,"C","Clips"],
-  ["2001 with 2005 roof","hillsborough",2001,2005,undefined,"B","Clips"],
+  ["2001 with 2005 roof","hillsborough",2001,2005,undefined,"C","Clips"],
   ["2005","polk",2005,2005,undefined,"C","Clips"],
-  ["missing build","pinellas",0,2022,undefined,"A","Toe Nails"],
+  ["missing build","pinellas",0,2022,undefined,"C","Toe Nails"],
 ] as const;
 for(const [name,county,yearBuilt,roofYear,zone,deck,wall] of rows)test(`wind assumption: ${name}`,()=>{
   const actual=assumeWindAttachments(county,yearBuilt,roofYear,zone);
@@ -22,6 +22,15 @@ for(const [name,county,yearBuilt,roofYear,zone,deck,wall] of rows)test(`wind ass
   assert.ok(Object.values(result.fields).every(v=>v.estimated));
 });
 const base={county:"pinellas",yearBuilt:1998,roofYear:2015};
+test("county basis uses proper case without changing county cutoffs",()=>{
+  for(const county of ["pinellas","PINELLAS","Pinellas"]){
+    const result=assumeWindAttachments(county,1996,2000);
+    assert.match(result.wallBasis,/Pinellas/);
+    assert.equal(result.roofToWall,"Clips");
+    assert.equal(result.roofDeck,"C");
+  }
+  assert.equal(assumeWindAttachments("",NaN,NaN).roofDeck,"C");
+});
 const p={coverageA:300000,policyType:"HO3",claimRecords:[],priorClaims:0,yearBuilt:1998,roofYear:2015,
   constructionType:"Masonry",masonryConstruction:"Concrete Block",sqFt:1800,streetAddress:"100 Example St",
   city:"Example City",state:"FL",zip:"00000",newPurchase:"Yes"} as QuoteRushParams;
