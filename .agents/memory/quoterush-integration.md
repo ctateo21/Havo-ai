@@ -296,6 +296,16 @@ Cache stores the top-3 ranked quotes; after the 30-day TTL the entry is
 served with an `expired` flag → UI shows stale top-3 plus a re-run
 prompt (Refresh = GetQuotes only, no re-submit, no cost).
 
+## Simplified consumer intake decision
+Christian wants minimal questions: assume no claims with a visible disclaimer,
+use a fourteen-day effective date for new purchases, and expose editable
+assumptions rather than mandatory technical confirmations. Actual report evidence
+still overrides estimated wind values; the affidavit checkbox is not proof.
+**Why:** Most buyers do not know construction and mitigation terminology.
+**How to apply:** Do not restore the old claims questionnaire, reference/inspector
+inputs, closing-date prompt, or separate square-footage confirmation gate without
+a new product decision. Preserve owned-home policy and optional mortgage answers.
+
 ## Credit-score authorization handling
 Quote requests do not ask the consumer for credit permission and are never
 blocked by the private consent timestamp. The importer must always send
