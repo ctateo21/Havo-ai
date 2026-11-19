@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { completePreviousAddress, previousAddressSchema } from "../../shared/optional-previous-address";
 import { windAnswersSchema } from "../../shared/wind-mitigation";
+import { insuranceEffectiveDate } from "../../shared/insurance-form-defaults";
 import {
   isValidQuoteRushDate,
   resolveQuoteRushPropertyDefaults,
@@ -43,6 +44,9 @@ const quoteRushStartSchema = z.object({
   roofYear: z.number().int().min(2000).max(2027),
   openingProtection: z.boolean().optional(),
   roofShape: z.enum(["Hip", "Flat", "Gable"]).optional(),
+  roofMaterial: z.enum(["Architectural Shingles", "Metal", "Tile", "Other"]).optional(),
+  roofShapeUserSet: z.boolean().optional(),
+  roofMaterialUserSet: z.boolean().optional(),
   secondaryWaterResistance: z.enum(["Yes", "No", "Unknown"]).optional(),
   windMitigationLocks: z.object({
     openingProtection: z.boolean().optional(),
@@ -58,7 +62,7 @@ const quoteRushStartSchema = z.object({
   // Optional at shared-cache lookup time. The route requires this private
   // answer only after reusable success/pending rows have been returned and
   // before any paid claim or stale-row reclaim.
-  hasClaims: z.boolean(),
+  hasClaims: z.boolean().default(false),
   claimRecords: z.array(z.object({
     lossDate: z.string().refine(isClaimDateWithinFiveYears, {
       message: "Claim loss date must be within the past five years.",
@@ -73,7 +77,7 @@ const quoteRushStartSchema = z.object({
   floodZone: z.string().default(""),
   floodZoneUnknown: z.boolean().default(false),
   sqFt: z.number().positive(),
-  sqFtConfirmed: z.literal(true),
+  sqFtConfirmed: z.boolean().default(true),
   // The browser reports a lock only after a person has edited an auto-filled
   // characteristic. Absent locks preserve backward-compatible explicit input.
   propertyCharacteristicLocks: z.object({
@@ -100,7 +104,6 @@ const quoteRushStartSchema = z.object({
   usageType: z.enum(["primary", "secondary", "investment"]).optional(),
   rentalTerm: z.enum(["annual", "monthly", "weekly"]).optional(),
 }).superRefine((value, ctx) => {
-  if(!value.floodZoneUnknown && !value.floodZone.trim())ctx.addIssue({code:z.ZodIssueCode.custom,path:["floodZone"],message:"Select your flood zone or explicitly choose I don't know."});
   if(!value.purchasePriceSource)ctx.addIssue({code:z.ZodIssueCode.custom,path:["purchasePriceSource"],message:"Confirm the source of the purchase price or current value."});
   if (value.hasClaims && value.claimRecords.length === 0) {
     ctx.addIssue({
@@ -121,14 +124,6 @@ const quoteRushStartSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ["purchasePrice"],
       message: "A real property purchase price or current value is required before requesting live quotes.",
-    });
-  }
-  if (value.newPurchase &&
-      !isValidQuoteRushDate(value.policyEffectiveDate ?? value.purchaseDate ?? "")) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["policyEffectiveDate"],
-      message: "A valid closing date is required for a new purchase.",
     });
   }
   if ((value.policyType === "HO3" || value.policyType === "HO6") && !value.usageType) {
@@ -172,6 +167,10 @@ export function prepareQuoteRushStartRequest(
   propertyDefaults: QuoteRushPropertyDefaults;
 } {
   const request = quoteRushStartSchema.parse(body);
+  if (request.newPurchase) {
+    request.policyEffectiveDate = insuranceEffectiveDate();
+    request.purchaseDate = request.policyEffectiveDate;
+  }
   const persistedExpiration =
     !request.newPurchase &&
     currentPolicyExpirationDate &&
@@ -185,7 +184,7 @@ export function prepareQuoteRushStartRequest(
     purchaseDate: request.newPurchase
       ? request.policyEffectiveDate ?? request.purchaseDate
       : undefined,
-    purchaseDateSource: request.newPurchase ? "user-confirmed" : undefined,
+    purchaseDateSource: request.newPurchase ? "14-day-default" : undefined,
     policyEffectiveDate:
       request.policyEffectiveDate ??
       request.purchaseDate ??
@@ -193,7 +192,7 @@ export function prepareQuoteRushStartRequest(
     policyEffectiveDateSource:
       request.policyEffectiveDate || request.purchaseDate
         ? request.newPurchase
-        ? "closing-date"
+        ? "14-day-default"
           : "user-requested"
         : persistedExpiration
           ? "current-policy-expiration"

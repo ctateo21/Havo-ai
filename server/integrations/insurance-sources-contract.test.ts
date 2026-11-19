@@ -47,11 +47,12 @@ test("paid cache only reuses exact answers and never another user's claims",()=>
   assert.ok(canReuseAnsweredQuote(claims,claims.answerHash,"one"));
   assert.equal(canReuseAnsweredQuote({},a.answerHash,"one"),false);
 });
-test("roof and confirmed area are mandatory and bounded",()=>{
+test("roof and area are bounded without a separate area confirmation gate",()=>{
   assert.doesNotThrow(()=>prepareQuoteRushStartRequest(request));
   for(const roofYear of [undefined,null,"2020",1999,2028,2020.5])assert.throws(()=>prepareQuoteRushStartRequest({...request,roofYear}));
   for(const roofYear of [2000,2027])assert.doesNotThrow(()=>prepareQuoteRushStartRequest({...request,roofYear}));
-  assert.throws(()=>prepareQuoteRushStartRequest({...request,sqFtConfirmed:false}));
+  assert.doesNotThrow(()=>prepareQuoteRushStartRequest({...request,sqFtConfirmed:false}));
+  assert.throws(()=>prepareQuoteRushStartRequest({...request,sqFt:0}));
   assert.throws(()=>prepareQuoteRushStartRequest({...request,yearBuilt:undefined}));
 });
 test("callback token is compared against hash, not lead enumeration",()=>{

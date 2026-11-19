@@ -1625,7 +1625,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ...(!b.propertyCharacteristicLocks?.construction
             ? ["Construction — preliminary masonry/concrete-block assumption, confirm"]
             : []),
-          "Roof material — assumed Composite Shingle",
+          `Roof material — ${b.roofMaterial || "Architectural Shingles"} (user selection or planning default)`,
           ...(!b.roofShape ? ["Roof shape — assumed Gable"] : []),
           "Terrain — assumed Exposure B",
           "Fire hydrant — assumed within 1,000 feet",
@@ -1635,7 +1635,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ? ["PurchasePrice — estimated property value, confirm"]
             : []),
           ...(propertyDefaults.policyEffectiveDate.isAssumption
-            ? ["PolicyEffectiveDate — assumed 30 days from quote date"]
+            ? [b.newPurchase ? "PolicyEffectiveDate — assumed 14 days from quote date" : "PolicyEffectiveDate — assumed 30 days from quote date"]
             : []),
         ];
         const initialRunValues = {
@@ -1673,7 +1673,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             hurricaneDeductible: HURR_MAP[b.hurrIdx] ?? "2%",
             aopDeductible: AOP_MAP[b.aopDeductible] ?? "$2,500",
             foundationType: "Slab",
-            roofMaterial: "Composite Shingle",
+            roofMaterial: b.roofMaterial || "Architectural Shingles",
             roofUpdateType: "Full",
             terrain: "Exposure B",
             burglarAlarm: "None",
@@ -1695,6 +1695,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             roofYear: b.roofYear,
             openingProtection: b.openingProtection,
             roofShape: b.roofShape,
+            roofMaterial: b.roofMaterial,
             secondaryWaterResistance: b.secondaryWaterResistance,
             constIdx: b.constIdx,
             hurrIdx: b.hurrIdx,
@@ -1889,7 +1890,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const windSupporting=await boundedOptional(()=>supportingWind(b.address,user.id),null,80000);
         const windEvidence=resolveWind({county,yearBuilt:b.yearBuilt,roofYear:b.roofYear,answers:b.windAnswers,
           permits:windSupporting?.permits.permits,coastal:windSupporting?.coastal});
+        if (!windEvidence.haveReport && b.roofShapeUserSet === false && windSupporting?.roof) {
+          windEvidence.fields.shape={value:windSupporting.roof.shape,source:windSupporting.roof.source,estimated:true};
+        }
         const params: QuoteRushParams = {
+          roofMaterial:!windEvidence.haveReport && b.roofMaterialUserSet === false && windSupporting?.roof?.material
+            ? windSupporting.roof.material : b.roofMaterial,
           windAnswers:b.windAnswers,windEvidence,
           ...(b.previousAddress ? {previousAddress:b.previousAddress}:{}),
           streetAddress,

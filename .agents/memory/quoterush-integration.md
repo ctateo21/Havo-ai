@@ -36,10 +36,12 @@ that a reroof was issued after an underwriting cutoff.
 Christian requires report-backed, user-confirmed and estimated wind answers to
 remain distinct in the UI and stored evidence. Existing real report values override
 estimates. Christian's latest Apply Defaults decision supersedes the previous
-report-only checkbox rule: always send HaveWindMitForm=true and GatedCommunity
-Single Entry, but never change stored haveReport or invent an inspection date.
+report-only checkbox rule: always send HaveWindMitForm=true, but never change
+stored haveReport or invent an inspection date. The simplified-form decision
+supersedes Single Entry: GatedCommunity defaults to No.
 Lead notes must state that these are agency defaults, not verified facts.
-Unknown SWR stays Unknown; absent opening evidence defaults to None. Optional
+Missing SWR now uses a disclosed no-credit assumption; explicit user No overrides
+age/permit estimates. OpeningProtection uses the workbook's Unknown or None. Optional
 IdentityTheft, PersonalInjuryCoverage and IncreaseReplacementCostOnDwelling are off.
 **Why:** Christian explicitly requested matching his desktop Apply Defaults state
 while preserving the provenance of actual wind evidence.
@@ -293,6 +295,16 @@ predicate used for the atomic claim.
 Cache stores the top-3 ranked quotes; after the 30-day TTL the entry is
 served with an `expired` flag → UI shows stale top-3 plus a re-run
 prompt (Refresh = GetQuotes only, no re-submit, no cost).
+
+## Simplified consumer intake decision
+Christian wants minimal questions: assume no claims with a visible disclaimer,
+use a fourteen-day effective date for new purchases, and expose editable
+assumptions rather than mandatory technical confirmations. Actual report evidence
+still overrides estimated wind values; the affidavit checkbox is not proof.
+**Why:** Most buyers do not know construction and mitigation terminology.
+**How to apply:** Do not restore the old claims questionnaire, reference/inspector
+inputs, closing-date prompt, or separate square-footage confirmation gate without
+a new product decision. Preserve owned-home policy and optional mortgage answers.
 
 ## Credit-score authorization handling
 Quote requests do not ask the consumer for credit permission and are never

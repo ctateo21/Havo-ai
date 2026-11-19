@@ -16,6 +16,8 @@ import {
 import { resolveQuoteRushPropertyDefaults } from "@shared/quoterush-property-defaults";
 import { resolvePurchasePriceProvenance } from "@shared/purchase-price-provenance";
 import {redactImporterText} from "./quoterush-import-response";
+import {insuranceEffectiveDate} from "../../shared/insurance-form-defaults";
+const expectedPurchaseDate=()=>insuranceEffectiveDate().replace(/^(\d{4})-(\d{2})-(\d{2})$/,"$2/$3/$1");
 // Explicitly answered property fixture shared by the legacy contract tests.
 const prepareQuoteRushStartRequest=(body:any,...rest:any[])=>prepareRawQuoteRushStartRequest({
   policyType:"HO3",yearBuilt:1958,roofYear:2020,sqFt:1166,sqFtConfirmed:true,
@@ -567,7 +569,7 @@ test("existing-home quote uses an explicit requested date before private expirat
   });
 });
 
-test("current policy expiration cannot override a new-purchase closing date", () => {
+test("new purchases use the disclosed 14-day date, not current policy expiration", () => {
   const { propertyDefaults } = prepareQuoteRushStartRequest(
     {
       address: "123 Palm Way, Tampa, FL 33602",
@@ -589,9 +591,9 @@ test("current policy expiration cannot override a new-purchase closing date", ()
   );
 
   assert.deepEqual(propertyDefaults.policyEffectiveDate, {
-    value: "10/15/2026",
-    source: "closing-date",
-    isAssumption: false,
+    value: expectedPurchaseDate(),
+    source: "14-day-default",
+    isAssumption: true,
   });
 });
 
@@ -721,8 +723,8 @@ test("insurance never hydrates anonymous address-only paid quotes", () => {
   assert.match(insuranceSource,/X-Quote-Access/);
 });
 
-test("new-purchase quote cannot fall back when its closing date is missing", () => {
-  assert.throws(() => prepareQuoteRushStartRequest({
+test("new-purchase quote defaults the closing date without asking", () => {
+  const result = prepareQuoteRushStartRequest({
     address: "123 Palm Way, Tampa, FL 33602",
     coverageA: 425_000,
     policyType: "HO3",
@@ -735,7 +737,9 @@ test("new-purchase quote cannot fall back when its closing date is missing", () 
     newPurchase: true,
     purchasePrice: 610_000,
     purchasePriceSource: "user-confirmed-contract",
-  }), /closing date/i);
+  });
+  assert.equal(result.propertyDefaults.policyEffectiveDate.value,expectedPurchaseDate());
+  assert.equal(result.propertyDefaults.policyEffectiveDate.isAssumption,true);
 });
 
 test("insurance quote state auto-fills residence use from matching source occupancy", () => {
@@ -968,8 +972,8 @@ test("quote-start resolves normalized HO3, HO6, and DP3 defaults before cache ac
         ...expected,
         purchaseDate: request.newPurchase
           ? {
-              value: "09/30/2026",
-              source: "user-confirmed",
+              value: expectedPurchaseDate(),
+              source: "14-day-default",
             }
           : {
               value: null,
