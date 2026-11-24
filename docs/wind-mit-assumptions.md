@@ -2,20 +2,23 @@
 
 Planning assumptions are not inspections or verified building-code compliance.
 Each editable field has a basis note. Reviewed report values override assumptions.
-Missing year built uses Level A / Toe Nails with an explicit missing-build basis.
+Roof deck always defaults to Level C, including missing year built; missing build
+still uses Toe Nails for roof-to-wall. Explicit user/report values override defaults.
+Answering No to having a report collapses the editable list by default. Yes keeps
+upload/review controls visible. County names in basis notes use proper case.
 
 | Scenario | Roof year | Deck | Roof-to-wall |
 |---|---:|---|---|
-| 1985 inland, Pinellas | 2000 | Level A | Toe Nails |
-| 1990 inside coastal zone, Collier | 2000 | Level A | Clips |
-| 1996 Pinellas | 2000 | Level B | Clips |
-| 1996 Hillsborough | 2000 | Level B | Toe Nails |
+| 1985 inland, Pinellas | 2000 | Level C | Toe Nails |
+| 1990 inside coastal zone, Collier | 2000 | Level C | Clips |
+| 1996 Pinellas | 2000 | Level C | Clips |
+| 1996 Hillsborough | 2000 | Level C | Toe Nails |
 | 1998 Pinellas | 2015 | Level C | Clips |
-| 2001 Hillsborough | 2005 | Level B | Clips |
+| 2001 Hillsborough | 2005 | Level C | Clips |
 | 2005 Polk | 2005 | Level C | Clips |
 
-Deck: 2002+ build or known older build with 2008+ roof year → C;
-otherwise 1994+ → B, earlier → A. A missing build stays A.
+Deck: always C as an agency planning assumption, never an inspection finding.
+Level A, Level B and Reinforced Concrete remain manual/report options.
 Wall: 2003+ statewide; 1996+ Pinellas/Manatee/Sarasota/Lee/Collier;
 1997+ Hillsborough/Pasco/Hernando/Polk; or 1987–1995 inside the verified
 coastal zone → Clips. Otherwise Toe Nails. Uncertain geography cannot grant Clips.

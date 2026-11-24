@@ -46,7 +46,7 @@ test("permit opening protection requires explicit all confirmation and roof date
   assert.equal(resolveWind({...base,yearBuilt:2003,permits:[permit]}).fields.roofDeck.value,"C");
   assert.equal(permitKinds({...permit,description:"ROOF",classification:undefined}).roof,false);
   assert.equal(resolveWind(base).fields.roofDeck.value,"C");
-  assert.equal(resolveWind({...base,yearBuilt:2000,roofYear:2000}).fields.roofDeck.value,"B");
+  assert.equal(resolveWind({...base,yearBuilt:2000,roofYear:2000}).fields.roofDeck.value,"C");
 });
 test("SWR cutoffs and explicit answers; roof shape distinguishes default from confirmed",()=>{
   assert.equal(resolveWind({...base,roofYear:2021}).fields.swr.value,"Yes");

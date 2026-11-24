@@ -96,13 +96,20 @@ async function mockInsurance(page: Page, options: { unavailable?: boolean; shape
   return { submissions, calls };
 }
 
-test("first question is report availability; one editable wind list is visible", async ({ page }) => {
+test("first question is report availability; No keeps the entire wind list collapsed", async ({ page }) => {
   const { calls } = await mockInsurance(page);
   const form = page.getByText("Do you have an existing wind mitigation report?").locator("xpath=ancestor::section[1]");
   await expect(form.getByRole("radio", { name: "No", exact: true })).toBeChecked();
   await expect(form.getByRole("radio", { name: "Yes", exact: true })).toBeVisible();
   await expect(page.getByLabel("Upload your wind mitigation report")).toHaveCount(0);
-  await expect(page.getByTestId("select-wind-shape")).toBeVisible();
+  await expect(page.getByTestId("select-wind-shape")).toBeHidden();
+  for (const field of ["material", "productApproval", "roofDeck", "roofToWall", "shape", "peelAndStick", "allOpenings"]) {
+    await expect(page.getByTestId(`select-wind-${field}`)).toBeHidden();
+  }
+  const toggle = form.getByRole("button", { name: /Roof & wind details/ });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(form.getByRole("table", { name: "Roof and wind details" })).toHaveCount(0);
+  await expect(form.locator("fieldset + div").getByRole("button", { name: /Roof & wind details/ })).toBeVisible();
   await expect(page.getByTestId("select-policy-type")).toHaveValue("HO3");
   await expect(page.getByTestId("select-policy-type").locator("option")).toHaveText(["Homeowners (HO-3)", "Condo (HO-6)", "Dwelling Fire / Landlord Policy (DP-3)"]);
   await expect(page.getByTestId("select-prior-claims")).toHaveCount(0);
@@ -114,6 +121,7 @@ test("first question is report availability; one editable wind list is visible",
 
 test("wind choices have exact mappings; Yes is opening confirmation and SWR respects edits", async ({ page }) => {
   await mockInsurance(page);
+  await page.getByRole("button", { name: /Roof & wind details/ }).click();
   const shape = page.getByTestId("select-wind-shape");
   await expect(shape.locator("option")).toHaveText(["Hip", "Flat", "Gable/Other"]);
   await expect(shape).toHaveValue("Gable");
@@ -131,6 +139,7 @@ test("wind choices have exact mappings; Yes is opening confirmation and SWR resp
 
 test("wind list follows report order and has no duplicate roof or review selectors", async ({ page }) => {
   await mockInsurance(page);
+  await page.getByRole("button", { name: /Roof & wind details/ }).click();
   const table = page.getByRole("table", { name: "Roof and wind details" });
   await expect(table.getByRole("row")).toHaveCount(7);
   await expect(table.locator("label")).toHaveText([
@@ -151,9 +160,10 @@ test("wind list follows report order and has no duplicate roof or review selecto
   }
 });
 
-test("missing build year uses labeled Level A and Toe Nails assumptions", async ({ page }) => {
+test("missing build year uses labeled Level C and Toe Nails assumptions; explicit deck edits win", async ({ page }) => {
   await mockInsurance(page, { missingBuild: true });
-  await expect(page.getByTestId("select-wind-roofDeck")).toHaveValue("A");
+  await page.getByRole("button", { name: /Roof & wind details/ }).click();
+  await expect(page.getByTestId("select-wind-roofDeck")).toHaveValue("C");
   await expect(page.getByTestId("select-wind-roofToWall")).toHaveValue("Toe Nails");
   await expect(page.getByTestId("select-wind-roofDeck").locator("xpath=ancestor::*[@role='row']")).toContainText("Assumption");
   await expect(page.getByTestId("select-wind-roofToWall").locator("xpath=ancestor::*[@role='row']")).toContainText("Assumption");
@@ -166,6 +176,7 @@ test("missing build year uses labeled Level A and Toe Nails assumptions", async 
 
 test("technical edits map into the quote request without changing other defaults", async ({ page }) => {
   const { submissions } = await mockInsurance(page);
+  await page.getByRole("button", { name: /Roof & wind details/ }).click();
   await page.getByTestId("select-new-purchase").selectOption("yes");
   await page.getByTestId("input-property-purchase-price").fill("487300");
   await page.getByTestId("select-ho6-residence-use").selectOption("primary");
@@ -251,6 +262,7 @@ test("only an actual extracted report X is preserved as X after review", async (
 
 test("permits do not silently suggest SWR and legacy claims cannot gate a quote", async ({ page }) => {
   const { submissions } = await mockInsurance(page, { swrPermit: true, legacyClaims: true });
+  await page.getByRole("button", { name: /Roof & wind details/ }).click();
   await page.getByTestId("input-roof-year").fill("2018");
   const swr = page.getByTestId("select-wind-peelAndStick");
   await expect(swr).toHaveValue("no");
@@ -296,13 +308,18 @@ test("Coverage A uses county block rate, frame discount and mixed average; manua
 
 test("private extraction uses the same editable list without duplicate review selectors", async ({ page }) => {
   await mockInsurance(page);
+  const toggle = page.getByRole("button", { name: /Roof & wind details/ });
+  await toggle.click();
   await page.getByRole("radio", { name: "Yes", exact: true }).check();
+  await expect(toggle).toHaveCount(0);
+  await expect(page.getByRole("table", { name: "Roof and wind details" })).toBeVisible();
   const upload = page.getByLabel("Upload your wind mitigation report");
   await expect(upload).toBeEnabled();
   await upload.setInputFiles({ name: "fictional-report.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 fictional test document") });
   await expect(page.getByRole("status").filter({ hasText: "Draft extracted." })).toBeVisible();
   await expect(page.getByTestId("select-wind-report-shape")).toHaveCount(0);
   await expect(page.getByTestId("select-wind-shape")).toHaveValue("Hip");
+  await expect(page.getByTestId("select-wind-roofDeck")).toHaveValue("B");
   await expect(page.getByRole("table", { name: "Roof and wind details" }).getByRole("combobox")).toHaveCount(7);
   await expect(page.getByTestId("select-wind-shape").locator("xpath=ancestor::*[@role='row']")).toContainText("From your report");
   await page.getByTestId("select-wind-shape").selectOption("Flat");
@@ -312,10 +329,21 @@ test("private extraction uses the same editable list without duplicate review se
   await page.getByRole("checkbox", { name: /I reviewed these values/ }).check();
   await page.getByRole("radio", { name: "No", exact: true }).check();
   await expect(upload).toHaveCount(0);
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("select-wind-shape")).toBeHidden();
+  await toggle.click();
+  await expect(page.getByRole("table", { name: "Roof and wind details" })).toBeVisible();
+  await page.getByRole("radio", { name: "Yes", exact: true }).check();
+  await expect(page.getByTestId("select-wind-shape")).toHaveValue("Flat");
+  await expect(page.getByTestId("select-wind-roofDeck")).toHaveValue("B");
+  await page.getByRole("radio", { name: "No", exact: true }).check();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("select-wind-roofDeck")).toBeHidden();
 });
 
 test("new purchase submits simplified defaults and roof material without claim or sqft gates", async ({ page }) => {
   const { submissions } = await mockInsurance(page);
+  await page.getByRole("button", { name: /Roof & wind details/ }).click();
   await page.getByTestId("select-new-purchase").selectOption("yes");
   await expect(page.getByTestId("input-purchase-date")).toHaveCount(0);
   await page.getByTestId("input-property-purchase-price").fill("487300");
@@ -364,6 +392,7 @@ test("optional county failure allows manual Coverage A and has a working retry",
 
 test("property image suggestions remain estimates and manual shape/material edits win", async ({ page }) => {
   await mockInsurance(page, { shape: "Hip" });
+  await page.getByRole("button", { name: /Roof & wind details/ }).click();
   await expect(page.getByTestId("select-wind-shape")).toHaveValue("Hip");
   await expect(page.getByTestId("select-wind-material")).toHaveValue("Metal");
   await expect(page.getByText("Assumption · Fictional image estimate")).toBeVisible();
@@ -397,21 +426,44 @@ test("existing-home carrier, expiration and optional mortgage remain available",
   await expect(home).toContainText("Mortgage: Yes");
 });
 
-test("save a fictional wind-assumptions screenshot", async ({ page }) => {
+test("No expands for editing, retains values on collapse, and displays Level C with proper-case county", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 1000 });
   await mockInsurance(page);
   await page.getByTestId("select-new-purchase").selectOption("yes");
   await page.getByTestId("input-property-purchase-price").fill("487300");
   await page.getByTestId("select-ho6-residence-use").selectOption("primary");
   await expect(page.getByRole("button", { name: "Get Live Quotes", exact: true })).toBeEnabled();
+  const toggle = page.getByRole("button", { name: /Roof & wind details/ });
+  const form = toggle.locator("xpath=ancestor::section[1]");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await form.screenshot({
+    path: "screenshots/wind-details-collapsed.png",
+    style: "header, nav, .sticky, .fixed { visibility: hidden !important; }",
+  });
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
   const list = page.getByRole("table", { name: "Roof and wind details" });
+  await expect(list.getByRole("row")).toHaveCount(7);
+  await expect(page.getByTestId("select-wind-roofDeck")).toHaveValue("C");
+  await expect(list).toContainText("Hillsborough");
+  await expect(list).not.toContainText("hillsborough");
   await list.scrollIntoViewIfNeeded();
   // Capture the actual rule table, without the sticky dashboard chrome covering
   // its first rows after Playwright scrolls the element into view.
-  await list.locator("..").screenshot({
-    path: "screenshots/wind-mit-assumptions.png",
+  await form.screenshot({
+    path: "screenshots/wind-details-expanded.png",
     style: "header, nav, .sticky, .fixed { visibility: hidden !important; }",
   });
+  await page.getByTestId("select-wind-roofDeck").selectOption("A");
+  await page.getByTestId("select-wind-shape").selectOption("Flat");
+  await toggle.click();
+  await expect(page.getByTestId("select-wind-roofDeck")).toBeHidden();
+  await toggle.click();
+  await expect(page.getByTestId("select-wind-roofDeck")).toHaveValue("A");
+  await expect(page.getByTestId("select-wind-shape")).toHaveValue("Flat");
+  await page.getByTestId("input-year-built").fill("2005");
+  await expect(page.getByTestId("select-wind-roofDeck")).toHaveValue("A");
 });
 
 test("roof year stays required and accepts only whole years 2000 through 2027", async ({ page }) => {
