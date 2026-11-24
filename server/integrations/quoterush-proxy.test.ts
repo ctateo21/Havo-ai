@@ -14,7 +14,9 @@ test("only QuoteRush uses the cached dispatcher; rotation and removal drain old 
   const info = t.mock.method(console, "info", () => {});
   const direct = t.mock.method(globalThis, "fetch", async () => new Response("direct"));
   const viaProxy = t.mock.method(undici, "fetch", async () => new undici.Response("proxied"));
-  const close = t.mock.method(ProxyAgent.prototype, "close", ProxyAgent.prototype.close);
+  // No sockets are opened in this test. Observe the wrapper's drain requests,
+  // not undici's internal promise-to-callback implementation of close().
+  const close = t.mock.method(ProxyAgent.prototype, "close", async () => {});
 
   process.env.QUOTERUSH_PROXY_URL = fakeProxy;
   assert.equal(await (await quoteRushFetch(endpoint, init)).text(), "proxied");
