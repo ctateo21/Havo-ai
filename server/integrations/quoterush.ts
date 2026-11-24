@@ -14,7 +14,7 @@
 
 import type { QuoteRushPropertyDefaults } from "@shared/quoterush-property-defaults";
 import {quoteRushEnv} from "./quoterush-env";
-import { quoteRushFetch as fetch } from "./quoterush-pause";
+import { quoteRushFetch } from "./quoterush-pause";
 import { importerHomeExtras, homeFieldNotes, APPLY_DEFAULT_NOTES, type HomeFields } from "./quoterush-home-fields";
 import {windNotes,type WindAnswers,type WindResult} from "../../shared/wind-mitigation";
 import {ROOF_MATERIALS, reportRoofMaterial} from "../../shared/insurance-form-defaults";
@@ -320,7 +320,7 @@ export async function getPropertyData(
   const AGENCY = getAgency();
 
   try {
-    const res = await fetch(
+    const res = await quoteRushFetch(
       "https://api.quoterush.com/GetPropertyData",
       {
         method: "POST",
@@ -367,10 +367,8 @@ export async function getPropertyData(
         raw.masonry ?? ""),
       raw,
     };
-  } catch (e) {
-    console.error(
-      "[quoterush] GetPropertyData error:", e
-    );
+  } catch {
+    console.error("[quoterush] GetPropertyData request or response failed");
     return null;
   }
 }
@@ -430,10 +428,10 @@ export async function importAndSubmit(
   const importPayload = buildImporterPayload(
     params, ASSIGNED_EMAIL
   );
-  let importRes: Response;
+  let importRes: Awaited<ReturnType<typeof quoteRushFetch>>;
   let importText: string;
   try {
-    importRes = await fetch(
+    importRes = await quoteRushFetch(
       `https://importer.quoterush.com/Json/Import/${WEBID}`,
       {
         method: "POST",
@@ -499,7 +497,7 @@ export async function importAndSubmit(
     params.dateOfBirth, params.streetAddress, params.city, params.zip, hooks.callbackUrl ?? "",
     ...Object.values(params.previousAddress ?? {})];
   try{
-    const r=await fetch("https://api.quoterush.com/GetQuotableSitesForLead",{
+    const r=await quoteRushFetch("https://api.quoterush.com/GetQuotableSitesForLead",{
       method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({EndpointKey:ENDPOINT_KEY,Agency:AGENCY,LeadId:leadId,LOB:"Home"}),
       signal:AbortSignal.timeout(10000),
@@ -519,10 +517,10 @@ export async function importAndSubmit(
     return {leadId, submitted:false, error:"Carrier discovery unavailable. Agent review required; imported lead retained.", ...(rawPropertyData?{rawPropertyData}:{})};
   }
   await hooks.onCarriers?.(carriers.length);
-  let submitRes: Response;
+  let submitRes: Awaited<ReturnType<typeof quoteRushFetch>>;
   let submitText: string;
   try {
-    submitRes = await fetch(
+    submitRes = await quoteRushFetch(
       "https://api.quoterush.com/SubmitQuoteRequest",
       {
         method: "POST",
@@ -574,7 +572,7 @@ export async function getQuotes(
   const AGENCY = getAgency();
 
   try {
-    const res = await fetch(
+    const res = await quoteRushFetch(
       "https://api.quoterush.com/GetQuotes",
       {
         method: "POST",

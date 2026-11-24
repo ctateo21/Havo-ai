@@ -410,3 +410,10 @@ source reporting without guaranteeing the requested email format.
 
 **How to apply:** keep the insurance FUB source stable; put the property in
 the direct email subject and restrict its body to the requested contact fields.
+
+## Partner IP allowlisting
+The fixed outbound IP requirement is specific to QuoteRush, not other Havo integrations.
+
+**Why:** an agency-approved partner IP must remain consistent across import, carrier submission, and polling. A successful mock run does not prove the partner accepted the IP or that an earlier 403 was caused by IP filtering.
+
+**How to apply:** do not introduce a global proxy or retry a failed proxied request directly. Confirm partner acceptance separately, only with authorization for a live test.
