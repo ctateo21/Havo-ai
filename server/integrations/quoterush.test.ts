@@ -17,6 +17,8 @@ import { resolveQuoteRushPropertyDefaults } from "@shared/quoterush-property-def
 import { resolvePurchasePriceProvenance } from "@shared/purchase-price-provenance";
 import {redactImporterText} from "./quoterush-import-response";
 import {insuranceEffectiveDate} from "../../shared/insurance-form-defaults";
+// These provider contracts mock global fetch, including when run individually.
+delete process.env.QUOTERUSH_PROXY_URL;
 const expectedPurchaseDate=()=>insuranceEffectiveDate().replace(/^(\d{4})-(\d{2})-(\d{2})$/,"$2/$3/$1");
 // Explicitly answered property fixture shared by the legacy contract tests.
 const prepareQuoteRushStartRequest=(body:any,...rest:any[])=>prepareRawQuoteRushStartRequest({

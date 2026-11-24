@@ -4,6 +4,8 @@ import {importerHomeExtras,parseHomeEstimates,homeFieldNotes,validateHomeValue} 
 import {enrichQuoteRushHome} from "./quoterush-home-enrichment";
 import {buildImporterPayload,importAndSubmit,type QuoteRushParams} from "./quoterush";
 import {quoteAnswerIdentity} from "./quote-answer-identity";
+// This test process mocks global fetch. Never inherit a workspace proxy.
+delete process.env.QUOTERUSH_PROXY_URL;
 const p = {
   streetAddress:"100 Example St",city:"Tampa",zip:"33607",state:"FL",county:"Hillsborough",
   coverageA:331000,policyType:"HO3",yearBuilt:1958,roofYear:2018,sqFt:1166,
