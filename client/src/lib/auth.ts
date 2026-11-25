@@ -2481,6 +2481,108 @@ export function saveInsuranceScenarios(s: InsuranceScenario[]): Promise<void> {
   return persistInsuranceScenarios(s);
 }
 
+/** Value columns the answer-merge endpoint accepts (see
+ *  server/integrations/insurance-answers-routes.ts). */
+const INSURANCE_ANSWER_COLUMNS = [
+  "annual_premium", "premium_source", "coverage_a", "coverage_a_source",
+  "coverage_type", "policy_type", "policy_type_source",
+  "occupancy_type_source", "property_type_source", "aop_deductible_source",
+  "hurricane_deductible_source", "flood_deductible_source", "discounts_source",
+] as const;
+const SERVER_OWNED_ANSWER_PREFIX = "live_quote_";
+
+/** Request body for one property's answer merge. Pure; exported for tests. */
+export function buildInsuranceAnswerMergeRequest(s: InsuranceScenario, userId: string) {
+  const row = insuranceToRow(s, userId) as Record<string, unknown>;
+  const columns: Record<string, unknown> = {};
+  for (const key of INSURANCE_ANSWER_COLUMNS) {
+    if (row[key] !== undefined) columns[key] = row[key];
+  }
+  const answers: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(s.userAnswerSources ?? {})) {
+    // live_quote_* keys are written only by the server.
+    if (key.startsWith(SERVER_OWNED_ANSWER_PREFIX) || value === undefined) continue;
+    answers[key] = value;
+  }
+  return {
+    id: s.id,
+    address: s.address,
+    ...(row.normalized_property_key ? { normalizedPropertyKey: String(row.normalized_property_key) } : {}),
+    savedAt: s.savedAt,
+    columns,
+    answers,
+  };
+}
+
+async function postInsuranceAnswerMerge(
+  s: InsuranceScenario,
+  userId: string,
+  keepalive: boolean,
+): Promise<Record<string, unknown> | null> {
+  const response = await authedFetch("/api/insurance/scenario-answers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildInsuranceAnswerMergeRequest(s, userId)),
+    keepalive,
+  });
+  if (!response.ok) throw new Error("Your insurance answers could not be saved.");
+  const body = await response.json().catch(() => null);
+  return body?.userAnswerSources && typeof body.userAnswerSources === "object"
+    ? body.userAnswerSources as Record<string, unknown> : null;
+}
+
+/**
+ * Saves one property's insurance answers. Unlike saveInsuranceScenarios this
+ * never deletes or rewrites other rows: the server merges these answers into
+ * the row's current answer map, preserving server-owned live_quote_* keys
+ * and fields saved from other sessions.
+ *
+ * `flush` sends immediately with keepalive (page hide / navigation) instead
+ * of waiting in the serialized write queue.
+ */
+export function saveInsuranceScenarioAnswers(
+  scenario: InsuranceScenario,
+  options: { flush?: boolean } = {},
+): Promise<void> {
+  const prevList = _insuranceScenarios;
+  const key = scenario.address.trim().toLowerCase();
+  const prev = prevList.find(s => s.id === scenario.id)
+    ?? prevList.find(s => s.address.trim().toLowerCase() === key);
+  const [stamped] = _stampManualOnValueDiff(prev ? [prev] : [], [scenario],
+    i => i.coverageA,
+    i => ({ ...i, coverageASource: "manual" as const }));
+  const next = prev ? { ...stamped, id: prev.id } : stamped;
+  _insuranceScenarios = prev
+    ? prevList.map(s => (s.id === prev.id ? next : s))
+    : [...prevList, next];
+  notify();
+  const userId = _session?.id;
+  if (!userId) return Promise.resolve();
+  const send = async () => {
+    if (_session?.id !== userId) return;
+    try {
+      const merged = await postInsuranceAnswerMerge(next, userId, !!options.flush);
+      if (!merged || _session?.id !== userId) return;
+      // Server-owned keys come from the merged row; local answers typed
+      // since this request was sent still win for their own keys.
+      _insuranceScenarios = _insuranceScenarios.map(s => {
+        if (s.id !== next.id) return s;
+        const local = { ...(s.userAnswerSources ?? {}) };
+        for (const k of Object.keys(local)) if (k.startsWith(SERVER_OWNED_ANSWER_PREFIX)) delete local[k];
+        const serverOwned = Object.fromEntries(
+          Object.entries(merged).filter(([k]) => k.startsWith(SERVER_OWNED_ANSWER_PREFIX)));
+        return { ...s, userAnswerSources: { ...merged, ...local, ...serverOwned } };
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Your insurance answers could not be saved.";
+      notifyError({ table: "insurance_scenarios", message });
+      throw error;
+    }
+  };
+  if (options.flush) return send();
+  return enqueueWrite("insurance_scenarios", send);
+}
+
 function persistInsuranceScenarios(s: InsuranceScenario[]) {
   const userId = _session?.id;
   if (!userId) return Promise.resolve();

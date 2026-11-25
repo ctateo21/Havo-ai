@@ -66,3 +66,48 @@ test("guest prompt and collapsed explainers are wired into the insurance page", 
   assert.match(page, /Real-time carrier rates via Tateo &amp; Co/);
   assert.match(page, /estimate: quoteEstimate/);
 });
+
+test("persisted run helpers: lookup, display, polling, progress", async () => {
+  const { findQuoteRunForAddress, quoteRunDisplay, anyQuoteRunRunning, quoteRunElapsedSeconds, quoteRunProgress, fetchSavedQuoteState } =
+    await import("./saved-insurance-quotes");
+  const run = (status: any, policyType = "HO3") => ({
+    addressNormalized: "100 example st tampa fl 33602", policyType, status,
+    startedAt: "2026-11-25T12:00:00.000Z", finishedAt: null,
+  });
+  const runs = [run("running"), run("agent_follow_up", "HO6")];
+  assert.equal(findQuoteRunForAddress(runs, "100 Example St, Tampa, FL 33602", "HO3")?.status, "running");
+  assert.equal(findQuoteRunForAddress(runs, "100 Example St, Tampa, FL 33602", "HO6")?.status, "agent_follow_up");
+  assert.equal(findQuoteRunForAddress(runs, "100 Example St, Tampa, FL 33602", "DP3"), null);
+  assert.equal(findQuoteRunForAddress(runs, "999 Other Rd, Tampa, FL 33602", "HO3"), null);
+  assert.equal(quoteRunDisplay(run("running")), "running");
+  assert.equal(quoteRunDisplay(run("failed")), "agent");
+  assert.equal(quoteRunDisplay(run("agent_follow_up")), "agent");
+  assert.equal(quoteRunDisplay(run("completed")), "none");
+  assert.equal(quoteRunDisplay(null), "none");
+  assert.equal(anyQuoteRunRunning({ results: [], runs }), true);
+  assert.equal(anyQuoteRunRunning({ results: [], runs: [run("completed")] }), false);
+  assert.equal(quoteRunElapsedSeconds(run("running"), Date.parse("2026-11-25T12:01:30Z")), 90);
+  assert.equal(quoteRunProgress(10_000), 0.9);
+  const state = await fetchSavedQuoteState(async () => new Response(JSON.stringify({ results: [] })));
+  assert.deepEqual(state, { results: [], runs: [] });
+});
+
+test("shared estimate helpers: note, path, priority", async () => {
+  const { sharedEstimateNote, sharedEstimatePath, resolveGeneralInsuranceEstimate, fetchSharedLiveQuoteEstimate } =
+    await import("./saved-insurance-quotes");
+  assert.equal(sharedEstimateNote("2026-11-25T15:00:00.000Z"), "Based on a recent live carrier quote (Nov 25, 2026)");
+  assert.match(sharedEstimatePath("100 Example St", "HO3", "primary") ?? "", /policyType=HO3&occupancy=primary/);
+  assert.equal(sharedEstimatePath("100 Example St", "HO3", null), null, "HO forms require a known occupancy");
+  assert.match(sharedEstimatePath("100 Example St", "DP3", null) ?? "", /policyType=DP3/);
+  assert.equal(sharedEstimatePath("", "HO3", "primary"), null);
+  const shared = { annual: 1900, monthly: 158.33, quotedDate: "2026-11-25T15:00:00.000Z", source: "recent_live_quote" as const };
+  assert.equal(resolveGeneralInsuranceEstimate({ manualAnnual: 2500, shared, calculatedAnnual: 3000 }).source, "manual");
+  assert.equal(resolveGeneralInsuranceEstimate({ ownQuoteAnnual: 2200, shared, calculatedAnnual: 3000 }).source, "own_quote");
+  const used = resolveGeneralInsuranceEstimate({ shared, calculatedAnnual: 3000 });
+  assert.equal(used.annual, 1900);
+  assert.equal(used.note, "Based on a recent live carrier quote (Nov 25, 2026)");
+  assert.equal(resolveGeneralInsuranceEstimate({ shared: null, calculatedAnnual: 3000 }).source, "calculated");
+  const fetched = await fetchSharedLiveQuoteEstimate("/x", async () => new Response(JSON.stringify({ estimate: { ...shared, extra: "ignored" } })));
+  assert.deepEqual(fetched, shared);
+  assert.equal(await fetchSharedLiveQuoteEstimate("/x", async () => new Response(JSON.stringify({ estimate: null }))), null);
+});

@@ -120,3 +120,143 @@ export async function fetchSavedQuoteResults(
   const body = await response.json();
   return Array.isArray(body?.results) ? body.results : [];
 }
+
+// ── Persisted run status (GET /api/insurance/my-quotes `runs`) ──────────────
+export type QuoteRunStatus = "running" | "completed" | "failed" | "agent_follow_up";
+
+export interface QuoteRunState {
+  addressNormalized: string;
+  policyType: string;
+  status: QuoteRunStatus;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface SavedQuoteState {
+  results: SavedQuoteResult[];
+  runs: QuoteRunState[];
+}
+
+/** Poll cadence while a background run is in flight (server polls every 20 s). */
+export const QUOTE_RUN_POLL_MS = 12_000;
+/** Server poll window; used only to scale the progress bar. */
+export const QUOTE_RUN_WINDOW_SECONDS = 12 * 60;
+export const RUNNING_QUOTES_TITLE = "Getting your quotes…";
+export const RUNNING_QUOTES_DETAIL =
+  "This takes a few minutes. We'll email you the results, and they'll be here when you come back.";
+export const AGENT_FOLLOW_UP_MESSAGE =
+  "An agent will finish your quotes — carrier submission could not be confirmed.";
+
+export async function fetchSavedQuoteState(
+  fetcher: (path: string) => Promise<Response>,
+): Promise<SavedQuoteState> {
+  const response = await fetcher("/api/insurance/my-quotes");
+  if (!response.ok) throw new Error("Saved quotes unavailable");
+  const body = await response.json();
+  return {
+    results: Array.isArray(body?.results) ? body.results : [],
+    runs: Array.isArray(body?.runs) ? body.runs : [],
+  };
+}
+
+/** This property's run status; prefers the requested policy type. */
+export function findQuoteRunForAddress(
+  runs: readonly QuoteRunState[] | null | undefined,
+  address: string,
+  policyType?: string | null,
+): QuoteRunState | null {
+  if (!runs?.length || !address.trim()) return null;
+  const key = normalizeQuoteAddress(address);
+  const matches = runs.filter(run => run.addressNormalized === key);
+  if (policyType) return matches.find(run => run.policyType === policyType) ?? null;
+  return matches.find(run => run.status === "running") ?? matches[0] ?? null;
+}
+
+export function anyQuoteRunRunning(state: SavedQuoteState | null | undefined): boolean {
+  return !!state?.runs.some(run => run.status === "running");
+}
+
+/** How the live-quote card should present a persisted run. */
+export function quoteRunDisplay(run: QuoteRunState | null): "running" | "agent" | "none" {
+  if (!run) return "none";
+  if (run.status === "running") return "running";
+  if (run.status === "failed" || run.status === "agent_follow_up") return "agent";
+  return "none";
+}
+
+export function quoteRunElapsedSeconds(run: QuoteRunState | null, now = Date.now()): number {
+  const started = run?.startedAt ? Date.parse(run.startedAt) : NaN;
+  return Number.isFinite(started) ? Math.max(0, Math.floor((now - started) / 1000)) : 0;
+}
+
+/** Progress fraction for a persisted run, capped at 90% until it finishes. */
+export function quoteRunProgress(elapsedSeconds: number): number {
+  return Math.min(elapsedSeconds / QUOTE_RUN_WINDOW_SECONDS, 0.9);
+}
+
+// ── Shared recent live quote as a general estimate ────────────────────────
+export interface SharedLiveQuoteEstimate {
+  annual: number;
+  monthly: number;
+  quotedDate: string;
+  source: "recent_live_quote";
+}
+
+export type SharedEstimateOccupancy = "primary" | "secondary" | "investment";
+
+export function sharedEstimateNote(quotedDate: string): string {
+  const date = formatQuotedDate(quotedDate);
+  return date ? `Based on a recent live carrier quote (${date})` : "Based on a recent live carrier quote";
+}
+
+export function sharedEstimatePath(
+  address: string,
+  policyType: string | null | undefined,
+  occupancy: string | null | undefined,
+): string | null {
+  if (!address.trim() || !policyType || !["HO3", "HO6", "DP3"].includes(policyType)) return null;
+  const params = new URLSearchParams({ address: address.trim(), policyType });
+  if (occupancy === "primary" || occupancy === "secondary" || occupancy === "investment") {
+    params.set("occupancy", occupancy);
+  } else if (policyType !== "DP3") {
+    // HO3/HO6 quotes are reused only for a known matching occupancy.
+    return null;
+  }
+  return `/api/insurance/shared-estimate?${params.toString()}`;
+}
+
+export async function fetchSharedLiveQuoteEstimate(
+  path: string,
+  fetcher: (path: string) => Promise<Response> = p => fetch(p),
+): Promise<SharedLiveQuoteEstimate | null> {
+  const response = await fetcher(path);
+  if (!response.ok) return null;
+  const body = await response.json().catch(() => null);
+  const e = body?.estimate;
+  if (!e || typeof e.annual !== "number" || !(e.annual > 0) || typeof e.quotedDate !== "string") return null;
+  return {
+    annual: e.annual,
+    monthly: typeof e.monthly === "number" ? e.monthly : Math.round((e.annual / 12) * 100) / 100,
+    quotedDate: e.quotedDate,
+    source: "recent_live_quote",
+  };
+}
+
+export type InsuranceEstimateSource = "manual" | "own_quote" | "recent_live_quote" | "calculated";
+
+/** Priority: the user's own manual premium, then their own uploaded/live
+ * quote, then a recent shared live quote, then the calculated estimate. */
+export function resolveGeneralInsuranceEstimate(args: {
+  manualAnnual?: number | null;
+  ownQuoteAnnual?: number | null;
+  shared?: SharedLiveQuoteEstimate | null;
+  calculatedAnnual: number;
+}): { annual: number; source: InsuranceEstimateSource; note: string | null } {
+  const positive = (v: number | null | undefined): v is number => typeof v === "number" && Number.isFinite(v) && v > 0;
+  if (positive(args.manualAnnual)) return { annual: args.manualAnnual, source: "manual", note: null };
+  if (positive(args.ownQuoteAnnual)) return { annual: args.ownQuoteAnnual, source: "own_quote", note: null };
+  if (args.shared && positive(args.shared.annual)) {
+    return { annual: args.shared.annual, source: "recent_live_quote", note: sharedEstimateNote(args.shared.quotedDate) };
+  }
+  return { annual: args.calculatedAnnual, source: "calculated", note: null };
+}
