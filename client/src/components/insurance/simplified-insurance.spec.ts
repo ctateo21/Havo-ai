@@ -13,7 +13,7 @@ const USER = {
 const json = (route: Route, body: unknown, status = 200) =>
   route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
-async function mockInsurance(page: Page, options: { unavailable?: boolean; shape?: "Hip" | "Flat" | "Gable"; swrPermit?: boolean; legacyClaims?: boolean; sparseReport?: boolean; missingBuild?: boolean; reportOpening?: "A" | "X" } = {}) {
+async function mockInsurance(page: Page, options: { unavailable?: boolean; shape?: "Hip" | "Flat" | "Gable"; swrPermit?: boolean; legacyClaims?: boolean; agentFields?: string[]; sparseReport?: boolean; missingBuild?: boolean; reportOpening?: "A" | "X" } = {}) {
   const submissions: Record<string, any>[] = [];
   const calls: string[] = [];
   let expiration: string | null = null;
@@ -84,6 +84,7 @@ async function mockInsurance(page: Page, options: { unavailable?: boolean; shape
         return json(route, { leadId: 87, status: "success", quoteAccessToken: "fixture-access", quoteCounter: 1, quotes: [{ siteName: "Fictional Fixture Mutual", annualPremium: 2843, monthlyPremium: 236.92, coverageA: 474000, hurricaneDeductible: "2%", aop: "$2,500", rank: 1 }] });
       }
       if (path === "/api/insurance/qr-cache") return json(route, { found: false });
+      if (path === "/api/insurance/qr-agent-verification") return json(route, { fields: options.agentFields ?? [] });
       if (path === "/api/flood-zone") return json(route, { zone: "AE", source: "FEMA fixture" });
       return json(route, { ok: true });
     }
@@ -444,4 +445,36 @@ test("simplified fields and premium fit a small phone", async ({ page }) => {
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(376);
   }
+});
+
+test("agent verification after a quote run is a short summary with a collapsed details list", async ({ page }) => {
+  const agentFields = [
+    "Roof covering product approval", "Roof deck attachment", "Roof-to-wall attachment",
+    "Secondary water resistance", "Opening protection", "Prior insurance", "Mortgagee",
+  ];
+  const { submissions } = await mockInsurance(page, { agentFields });
+  await page.getByTestId("select-new-purchase").selectOption("yes");
+  await page.getByTestId("input-property-purchase-price").fill("487300");
+  await page.getByTestId("select-ho6-residence-use").selectOption("primary");
+  const button = page.getByRole("button", { name: "Get Live Quotes", exact: true });
+  await expect(button).toBeEnabled();
+  await button.click();
+  await expect.poll(() => submissions.length).toBe(1);
+
+  const panel = page.getByTestId("agent-verification");
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId("agent-verification-summary")).toHaveText("An agent will verify 7 details for this quote.");
+  const details = page.getByTestId("agent-verification-details");
+  await expect(details).not.toHaveAttribute("open", "");
+  for (const field of agentFields) await expect(panel.getByText(field, { exact: true })).toBeHidden();
+
+  await details.getByText("See details").click();
+  await expect(details).toHaveAttribute("open", "");
+  for (const field of agentFields) await expect(panel.getByText(field, { exact: true })).toBeVisible();
+
+  // Only the list collapses: licensing and not-a-binder disclosures stay
+  // visible, and nothing on the page is pre-checked on the user's behalf.
+  await expect(page.getByText(/License #L132640/).first()).toBeVisible();
+  await expect(page.getByText(/Not a binding quote/).first()).toBeVisible();
+  await expect(page.locator('input[type="checkbox"]:checked, [role="checkbox"][aria-checked="true"]')).toHaveCount(0);
 });
