@@ -44,6 +44,11 @@ export function useGooglePlaces({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const onPlaceSelectedRef = useRef(onPlaceSelected);
   onPlaceSelectedRef.current = onPlaceSelected;
+  // True while a picked suggestion's place details are loading, so a form
+  // submit in that window can defer to the selection instead of the
+  // partial text still in the input.
+  const selectionPendingRef = useRef(false);
+  const isSelectionPending = useCallback(() => selectionPendingRef.current, []);
 
   const bindInputRef = useCallback((element: HTMLInputElement | null) => {
     inputRef.current = element;
@@ -131,6 +136,7 @@ export function useGooglePlaces({
         const abandonSession = () => {
           requestId += 1;
           selectionGeneration += 1;
+          selectionPendingRef.current = false;
           sessionToken = null;
           hideList();
         };
@@ -166,6 +172,7 @@ export function useGooglePlaces({
           sessionToken = null;
           const fallbackAddress = addressWithUnit(prediction?.text?.text || '', unit);
           let place: any;
+          selectionPendingRef.current = true;
 
           try {
             place = prediction.toPlace();
@@ -176,6 +183,7 @@ export function useGooglePlaces({
             console.warn('Google place details unavailable; using the selected address text.', error);
           }
 
+          if (currentSelectionGeneration === selectionGeneration) selectionPendingRef.current = false;
           if (!active || currentSelectionGeneration !== selectionGeneration) return;
           const formattedAddress = addressWithUnit(place?.formattedAddress || fallbackAddress, unit);
           if (!formattedAddress) return;
@@ -270,6 +278,7 @@ export function useGooglePlaces({
         const handleInput = () => {
           requestId += 1;
           selectionGeneration += 1;
+          selectionPendingRef.current = false;
           hideList();
           if (debounceTimer) clearTimeout(debounceTimer);
           if (inputElement.value.trim().length < 3) {
@@ -343,6 +352,7 @@ export function useGooglePlaces({
     void initialize();
     return () => {
       active = false;
+      selectionPendingRef.current = false;
       teardown?.();
     };
   }, [apiKey, enabled, inputElement]);
@@ -350,6 +360,7 @@ export function useGooglePlaces({
   return {
     bindInputRef,
     inputRef,
+    isSelectionPending,
     isLoaded: scriptLoaded && !!window.google?.maps?.places,
     autocomplete: null,
   };
