@@ -58,9 +58,11 @@ import { normalizePropertyKey } from "@/lib/property-key";
 import {
   isInsuranceAddressDismissed,
   readDismissedInsuranceKeys,
+  undismissInsuranceAddress,
 } from "@/lib/insurance-dismissals";
 import { useGooglePlaces } from "@/hooks/use-google-places";
 import LeadCaptureDialog from "@/components/ui/lead-capture-dialog";
+import AgentVerificationSummary from "@/components/insurance/agent-verification-summary";
 import { trackEvent } from "@/lib/posthog";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -1027,6 +1029,12 @@ export default function InsuranceDashboard() {
 
   // ── Address editing ──────────────────────────────────────────────────────
   const [isEditingAddress, setIsEditingAddress] = useState(false);
+  // Explicitly entering an address overrides an earlier delete of it;
+  // otherwise tab hydration treats it as dismissed and jumps to another card.
+  function openInsuranceAddress(addr: string) {
+    undismissInsuranceAddress(getSession()?.id ?? null, addr, normalizePropertyKey(addr).key);
+    setLocation(`/insurance?address=${encodeURIComponent(addr)}`);
+  }
   const [editAddressVal, setEditAddressVal] = useState(addressParam);
   const [showEmptyAddInput, setShowEmptyAddInput] = useState(false);
   const {
@@ -1038,7 +1046,7 @@ export default function InsuranceDashboard() {
       if (!await authorize("insurance", place.formatted_address)) return;
       setIsEditingAddress(false);
       setShowEmptyAddInput(false);
-      setLocation(`/insurance?address=${encodeURIComponent(place.formatted_address)}`);
+      openInsuranceAddress(place.formatted_address);
     },
   });
 
@@ -1326,7 +1334,7 @@ export default function InsuranceDashboard() {
       { id: newId, address: addr, savedSettings: null },
     ]);
     setActiveScenarioId(newId);
-    setLocation(`/insurance?address=${encodeURIComponent(addr)}`);
+    openInsuranceAddress(addr);
     setRegionKey(getRegionFromAddress(addr));
     setRebuild(defaultRebuildFor(addr, null));
     setRoofYear(0);
@@ -2403,7 +2411,7 @@ export default function InsuranceDashboard() {
                           const val = (e.target as HTMLInputElement).value.trim();
                           if (val) {
                             setShowEmptyAddInput(false);
-                            setLocation(`/insurance?address=${encodeURIComponent(val)}`);
+                            openInsuranceAddress(val);
                           }
                         } else if (e.key === "Escape") {
                           setShowEmptyAddInput(false);
@@ -2512,7 +2520,7 @@ export default function InsuranceDashboard() {
                       onKeyDown={async e => {
                         if (e.key === "Enter") {
                           const val = editAddressVal.trim();
-                          if (val && await authorize("insurance", val)) setLocation(`/insurance?address=${encodeURIComponent(val)}`);
+                          if (val && await authorize("insurance", val)) openInsuranceAddress(val);
                           setIsEditingAddress(false);
                         } else if (e.key === "Escape") {
                           setIsEditingAddress(false);
@@ -3082,16 +3090,7 @@ export default function InsuranceDashboard() {
                     )}
                     </div>
                   </details>
-                  {agentVerification.length > 0 ? (
-                    <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
-                      <strong className="block">Agent-only verification</strong>
-                      <ul className="mt-1 list-disc space-y-0.5 pl-4">
-                        {agentVerification.map(field => (
-                          <li key={field}>{field}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
+                  <AgentVerificationSummary fields={agentVerification} />
 
                   {/* Progress bar */}
                   {(qrStatus === "starting" ||
