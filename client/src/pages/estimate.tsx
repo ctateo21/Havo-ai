@@ -897,8 +897,9 @@ function PhotoCarousel({
           </CarouselItem>
         ))}
       </CarouselContent>
-      <CarouselPrevious />
-      <CarouselNext />
+      {/* Inset arrows: outside the slide they widen the page on phones. */}
+      <CarouselPrevious className="left-2" />
+      <CarouselNext className="right-2" />
     </Carousel>
   );
 }

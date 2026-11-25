@@ -225,6 +225,16 @@ for (const viewport of VIEWPORTS) {
           await page.screenshot({ path: process.env.OVERFLOW_SCREENSHOT_PATH, fullPage: false, type: "jpeg", quality: 70 });
         }
       }
+      // The photo carousel arrows must render (photos are mocked) and sit
+      // inside the screen; outside the slide they widen the whole page.
+      for (const name of ["Previous slide", "Next slide"]) {
+        const arrow = page.getByRole("button", { name }).first();
+        await expect(arrow).toBeVisible();
+        const box = await arrow.boundingBox();
+        expect(box, `${name} arrow`).not.toBeNull();
+        expect(box!.x, `${name} arrow left edge`).toBeGreaterThanOrEqual(0);
+        expect(box!.x + box!.width, `${name} arrow right edge`).toBeLessThanOrEqual(viewport.width);
+      }
       await expectFitsViewport(page, "estimate page 4");
       if (viewport.width < 768) await expectNoZoomOnFocus(page, "estimate page 4");
     });
@@ -240,6 +250,13 @@ for (const viewport of VIEWPORTS) {
         await page.goto(path);
         await page.locator("main button").first().waitFor();
         await page.waitForLoadState("networkidle");
+        if (name === "insurance") {
+          // Guest prompt (long label) must wrap inside the screen.
+          const prompt = page.getByTestId("guest-live-quote-prompt");
+          await expect(prompt).toBeVisible();
+          const box = await prompt.boundingBox();
+          expect(box!.x + box!.width, "guest live-quote prompt right edge").toBeLessThanOrEqual(viewport.width);
+        }
         await expectFitsViewport(page, name);
         if (viewport.width < 768) await expectNoZoomOnFocus(page, name);
         // Walk any further wizard pages reachable with the mocked defaults.
