@@ -34,3 +34,5 @@
 - [Dependency remediation](dependency-remediation.md) — preserve framework compatibility, keep unpatched advisories visible, and verify nested overrides actually resolve.
 - [Privacy and consent decisions](privacy-consent-policy.md) — retain records privately; save phones unverified without SMS; separate optional marketing consent.
 - [Anonymous first quote](anonymous-first-quote.md) — one quote total before personal details; account-gated actions preserve drafts and exclude anonymous CRM.
+- [Quote run status & shared estimate](quote-run-status-and-shared-estimate.md) — derived run status (no schema), merge-only answer autosave, 90-day shared live-quote estimate rules.
+- [Purchase-page inline live quote](purchase-inline-live-quote.md) — embed the Insurance component (no copy); shared 90-day reuse; click alert never blocks; no timing promises.

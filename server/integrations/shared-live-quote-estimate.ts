@@ -4,12 +4,17 @@ import { z } from "zod";
 import { insuranceQuoteCache, userInsuranceQuoteResults } from "@shared/schema";
 import { topThreeSavedQuotes } from "./saved-quote-results";
 
-/** A live carrier quote is reused as an address's general estimate for 90 days. */
-export const SHARED_ESTIMATE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+export {
+  LIVE_QUOTE_REUSE_MAX_AGE_MS as SHARED_ESTIMATE_MAX_AGE_MS,
+  normalizeOccupancy, runMatchesScenario, sharedEstimateRequest,
+} from "@shared/live-quote-reuse";
+export type { Occupancy, PolicyForm } from "@shared/live-quote-reuse";
+import {
+  LIVE_QUOTE_REUSE_MAX_AGE_MS as SHARED_ESTIMATE_MAX_AGE_MS,
+  normalizeOccupancy, runMatchesScenario, sharedEstimateRequest,
+  type Occupancy, type PolicyForm,
+} from "@shared/live-quote-reuse";
 export const SHARED_ESTIMATE_SOURCE = "recent_live_quote" as const;
-
-export type Occupancy = "primary" | "secondary" | "investment";
-export type PolicyForm = "HO3" | "HO6" | "DP3";
 
 /** One completed run's lowest premium. Server-only: occupancy never leaves. */
 export interface SharedQuoteCandidate {
@@ -26,45 +31,6 @@ export interface SharedEstimate {
   monthly: number;
   quotedDate: string;
   source: typeof SHARED_ESTIMATE_SOURCE;
-}
-
-export function normalizeOccupancy(value: unknown): Occupancy | null {
-  if (typeof value !== "string") return null;
-  const v = value.trim().toLowerCase();
-  return v === "primary" || v === "secondary" || v === "investment" ? v : null;
-}
-
-/**
- * Whether a completed run may stand in for this scenario's estimate.
- *  - The policy form must match exactly.
- *  - DP3 is a rental form: any DP3 run serves a non-primary DP3 request.
- *  - HO3/HO6 runs are reused only for the same occupancy. A primary quote
- *    never serves an investment/rental scenario, and an HO3 request for an
- *    investment property never matches (HO3 is owner-occupied only).
- *  - A run whose occupancy is unknown is not reused for HO3/HO6.
- */
-export function runMatchesScenario(
-  run: Pick<SharedQuoteCandidate, "policyType" | "occupancy">,
-  request: { policyType: PolicyForm; occupancy: Occupancy | null },
-): boolean {
-  if (run.policyType !== request.policyType) return false;
-  if (request.policyType === "DP3") {
-    return request.occupancy !== "primary" && request.occupancy !== "secondary"
-      && (run.occupancy == null || run.occupancy === "investment");
-  }
-  if (!request.occupancy || !run.occupancy) return false;
-  if (request.policyType === "HO3" && request.occupancy === "investment") return false;
-  return run.occupancy === request.occupancy;
-}
-
-/** An investment property never uses an owner-occupied HO3 quote; its
- * dwelling estimate comes from DP3 (rental dwelling) quotes instead. */
-export function sharedEstimateRequest(
-  policyType: PolicyForm,
-  occupancy: Occupancy | null,
-): { policyType: PolicyForm; occupancy: Occupancy | null } {
-  if (policyType === "HO3" && occupancy === "investment") return { policyType: "DP3", occupancy };
-  return { policyType, occupancy };
 }
 
 /** Lowest annual premium among matching runs within 90 days; number and

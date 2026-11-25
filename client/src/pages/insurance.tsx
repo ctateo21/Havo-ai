@@ -2,7 +2,7 @@ import { useMemo, useState, useRef, useEffect } from "react";
 import { useSearch, useLocation } from "wouter";
 import ScenarioActions from "@/components/scenario-actions";
 import { useQuoteAccess } from "@/context/quote-access-context";
-import { useAnonymousDraft, useAnonymousDraftRef } from "@/hooks/use-anonymous-draft";
+import { AnonymousDraftsDisabledContext, useAnonymousDraft, useAnonymousDraftRef } from "@/hooks/use-anonymous-draft";
 import { rememberAnonymousAccountDraft, confirmAnonymousAccountDraftSaved, hasPendingAnonymousAccountDraft } from "@/lib/anonymous-account-draft";
 import {
   getInsuranceScenarios, saveInsuranceScenarios, type InsuranceScenario,
@@ -85,6 +85,11 @@ import {
   type QuoteRushRentalTerm,
 } from "@shared/quoterush-property-defaults";
 import { resolvePurchasePriceProvenance } from "@shared/purchase-price-provenance";
+import {
+  applyPurchaseQuotePrefill,
+  type PurchaseQuoteContext,
+  type QuotePropertyAnswers,
+} from "@/lib/purchase-insurance-prefill";
 import { SourcedInsuranceForm as InsuranceEstimateForm, validRoofYear, ROOF_YEAR_ERROR, type PropertyEvidence, type RoofSuggestion } from "@/components/insurance/sourced-insurance-form";
 import { useAuth } from "@/context/auth-context";
 import {
@@ -442,18 +447,45 @@ function YearInputRow({ label, value, onChange, testId }: {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
+export type InsuranceQuoteWorkspaceProps = {
+  /** Renders only the questionnaire and live-quote card for one property
+   * inside another page (e.g. the purchase estimate). Answers, autosave,
+   * qr-start and saved results are identical to the Insurance tab. */
+  embedded?: {
+    address: string;
+    purchase?: PurchaseQuoteContext;
+  };
+};
+
 export default function InsuranceDashboard() {
+  return <InsuranceQuoteWorkspace />;
+}
+
+export function InsuranceQuoteWorkspace(props: InsuranceQuoteWorkspaceProps = {}) {
+  // Embedded views are account-only: never read guest drafts saved under the
+  // host page's path for this address.
+  return props.embedded ? (
+    <AnonymousDraftsDisabledContext.Provider value={true}>
+      <InsuranceQuoteWorkspaceInner {...props} />
+    </AnonymousDraftsDisabledContext.Provider>
+  ) : (
+    <InsuranceQuoteWorkspaceInner {...props} />
+  );
+}
+
+function InsuranceQuoteWorkspaceInner({ embedded }: InsuranceQuoteWorkspaceProps) {
   const { user } = useAuth();
   const isAuthenticated = !!user;
   const { authorize, requireAccount } = useQuoteAccess();
   const search = useSearch();
   const [, setLocation] = useLocation();
   const params = new URLSearchParams(search);
-  const addressParam = params.get("address") || "";
+  const addressParam = embedded ? embedded.address : params.get("address") || "";
+  const embeddedPurchase = embedded?.purchase ?? null;
   // An account arriving while this anonymous draft is mounted must not replace
   // the buyer's edits with empty (or older) account values.
-  const anonymousDraftAddress = useRef(!user || hasPendingAnonymousAccountDraft() ? addressParam : null);
-  const priceParam = params.get("price");
+  const anonymousDraftAddress = useRef(!embedded && (!user || hasPendingAnonymousAccountDraft()) ? addressParam : null);
+  const priceParam = embedded ? null : params.get("price");
   const physicalPropertyType = resolvePhysicalPropertyTypeForAddress(addressParam);
   const normalizedPhysicalPropertyType = physicalPropertyType
     .trim()
@@ -682,7 +714,14 @@ export default function InsuranceDashboard() {
   const initialExtras = resolveExtrasFor(addressParam);
   const [aopDeductible, setAopDeductible] = useAnonymousDraft<number>("aopDeductible", initialExtras.aop);
 
-  function resolveQuotePropertyAnswersFor(addr: string): {
+  function resolveQuotePropertyAnswersFor(addr: string): QuotePropertyAnswers {
+    const saved = resolveSavedQuotePropertyAnswersFor(addr);
+    return embeddedPurchase && isSamePropertyAddress(addr, addressParam)
+      ? applyPurchaseQuotePrefill(saved, embeddedPurchase)
+      : saved;
+  }
+
+  function resolveSavedQuotePropertyAnswersFor(addr: string): {
     newPurchase: boolean | null;
     purchaseDate: string;
     ho6ResidenceUse: QuoteRushResidenceUse | "";
@@ -783,7 +822,7 @@ export default function InsuranceDashboard() {
     initialQuotePropertyAnswers.purchaseDate,
   );
   useEffect(() => {
-    if (newPurchase === true) setPurchaseDate(insuranceEffectiveDate());
+    if (newPurchase === true) setPurchaseDate(embeddedPurchase?.closeDate || insuranceEffectiveDate());
   }, [newPurchase]);
   const [ho6ResidenceUse, setHo6ResidenceUse] =
     useAnonymousDraft<QuoteRushResidenceUse | "">("ho6ResidenceUse",
@@ -1542,7 +1581,7 @@ export default function InsuranceDashboard() {
     ? visibleSavedInsuranceScenarios().length
     : -1; // sentinel: don't read when not needed
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || embedded) return;
     if (addressParam) return;
     const saved = visibleSavedInsuranceScenarios();
     if (saved.length === 0) return;
@@ -1566,6 +1605,7 @@ export default function InsuranceDashboard() {
   const didHydrateTabsRef = useRef(false);
   useEffect(() => {
     if (didHydrateTabsRef.current) return;
+    if (embedded) return;
     if (!isAuthenticated) return;
     if (!addressParam) return; // wait for the auto-jump above to land us on an address
     const dismissed = readDismissedInsuranceKeys(currentUserId);
@@ -1694,6 +1734,26 @@ export default function InsuranceDashboard() {
     phInsuranceCalcFiredRef.current.add(key);
     trackEvent("scenario_calculated", { type: "insurance" });
   }, [rebuild, address]);
+
+  // Embedded on the purchase page: the purchase price, occupancy and
+  // financing entered there stay the quote's answers as they change, and
+  // are re-applied after this property's saved answers hydrate.
+  useEffect(() => {
+    if (!embeddedPurchase || answersHydratedFor !== addressParam) return;
+    const next = applyPurchaseQuotePrefill({
+      newPurchase, purchaseDate, ho6ResidenceUse, ho6RentalTerm, purchasePrice,
+      purchasePriceSource, currentlyInsured, currentCarrier,
+    }, embeddedPurchase);
+    if (next.newPurchase !== newPurchase) setNewPurchase(next.newPurchase);
+    if (next.purchasePrice !== purchasePrice) setPurchasePrice(next.purchasePrice);
+    if (next.purchasePriceSource !== purchasePriceSource) setPurchasePriceSource(next.purchasePriceSource);
+    if (next.ho6ResidenceUse !== ho6ResidenceUse) setHo6ResidenceUse(next.ho6ResidenceUse);
+    if (next.ho6RentalTerm !== ho6RentalTerm) setHo6RentalTerm(next.ho6RentalTerm);
+    if (currentlyInsured !== null) setCurrentlyInsured(null);
+    if (currentCarrier) setCurrentCarrier("");
+    if (!homeMortgage && embeddedPurchase.financed !== undefined) setHomeMortgage(embeddedPurchase.financed ? "yes" : "no");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answersHydratedFor, embeddedPurchase?.price, embeddedPurchase?.priceSource, embeddedPurchase?.occupancy, embeddedPurchase?.financed]);
 
   // ── Autosave ─────────────────────────────────────────────────────────────
   // Every answer is saved to this user's own scenario row as soon as it
@@ -1856,7 +1916,8 @@ export default function InsuranceDashboard() {
 
   function sendAutosave(updated: InsuranceScenario, flush: boolean) {
     if (!getSession()) {
-      rememberAnonymousAccountDraft("insurance", updated);
+      // Embedded on another page: that page owns the guest draft slot.
+      if (!embedded) rememberAnonymousAccountDraft("insurance", updated);
       return;
     }
     confirmAnonymousAccountDraftSaved("insurance", () => saveInsuranceScenarioAnswers(updated, { flush })).catch(err => {
@@ -2217,6 +2278,7 @@ export default function InsuranceDashboard() {
       return;
     }
 
+    if (embedded) undismissInsuranceAddress(getSession()?.id, address, normalizePropertyKey(address).key);
     await submitQuoteRush();
   }
 
@@ -2504,108 +2566,10 @@ export default function InsuranceDashboard() {
   });
   const displayedEstimateAnnual = generalEstimate.source === "recent_live_quote" ? generalEstimate.annual : calc.mid;
 
-  // ─────────────────────────────────────────────────────────────────────────
-
-  return (
-    <>
-      <Helmet><title>Insurance Estimate — {address || "Havo"}</title></Helmet>
-
-      {showInsuranceEmptyState ? (
-        <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4 py-12">
-          <Card className="w-full max-w-md">
-            <CardContent className="py-10 px-6 flex flex-col items-center text-center gap-4">
-              <Shield className="h-12 w-12 text-primary" />
-              <div className="space-y-1">
-                <h2 className="text-xl font-bold">No properties added yet</h2>
-                <p className="text-sm text-muted-foreground">
-                  Add a property address to get an insurance estimate
-                </p>
-              </div>
-              {!showEmptyAddInput ? (
-                <Button
-                  className="mt-2"
-                  onClick={() => setShowEmptyAddInput(true)}
-                  data-testid="insurance-empty-add-property"
-                >
-                  Add Property Address
-                </Button>
-              ) : (
-                <div className="w-full mt-2">
-                  <div className="flex items-center gap-2 border rounded-md px-3 py-2 bg-white">
-                    <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <input
-                      ref={addressInputRef}
-                      type="text"
-                      placeholder="Enter a property address"
-                      onKeyDown={e => {
-                        if (e.key === "Enter") {
-                          const val = (e.target as HTMLInputElement).value.trim();
-                          if (val) {
-                            setShowEmptyAddInput(false);
-                            openInsuranceAddress(val);
-                          }
-                        } else if (e.key === "Escape") {
-                          setShowEmptyAddInput(false);
-                        }
-                      }}
-                      className="flex-1 bg-transparent outline-none text-sm"
-                      autoComplete="off"
-                      data-testid="insurance-empty-address-input"
-                    />
-                  </div>
-                  <button
-                    onClick={() => setShowEmptyAddInput(false)}
-                    className="text-xs text-muted-foreground hover:text-foreground mt-2"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      ) : (
-      <div className="min-h-screen bg-gray-50">
-
-        {/* ── Sticky top bar (same pattern as estimate page) ── */}
-        <div className="bg-white border-b shadow-sm sticky top-[73px] z-40">
-
-          {/* Scenario tabs */}
-          <div className="container mx-auto px-4 pt-2 flex items-center gap-1 overflow-x-auto scrollbar-none">
-            {scenarios.map((sc) => (
-              <div
-                key={sc.id}
-                onClick={() => switchScenario(sc.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t-md text-xs font-medium cursor-pointer whitespace-nowrap border border-b-0 transition-colors ${
-                  sc.id === activeScenarioId
-                    ? "bg-white border-border text-foreground shadow-sm -mb-px relative z-10"
-                    : "bg-gray-100 border-transparent text-muted-foreground hover:bg-gray-200"
-                }`}
-              >
-                <MapPin className="h-3 w-3 shrink-0" />
-                <span>{shortLabel(sc.address) || "New property"}</span>
-                {scenarios.length > 1 && (
-                  <button
-                    onClick={(e) => removeScenario(sc.id, e)}
-                    className="ml-0.5 rounded-full hover:bg-black/10 p-0.5 transition-colors"
-                    aria-label="Remove"
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                )}
-              </div>
-            ))}
-            {scenarios.length < 5 && (
-              <button
-                onClick={requestAddScenario}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-t-md text-xs text-muted-foreground hover:text-primary hover:bg-gray-100 border border-transparent border-b-0 transition-colors"
-                title="Compare another property"
-              >
-                <Plus className="h-3.5 w-3.5" /> Add Property
-              </button>
-            )}
-          </div>
-
+  // Questionnaire and live-quote pieces shared by the Insurance tab and the
+  // embedded purchase-page view.
+  const currentHomeSection = (
+  <>
           {newPurchase===true?
             <CurrentHomeForm address={currentHome} onAddress={setCurrentHome} mortgage={homeMortgage} onMortgage={setHomeMortgage} newPurchase={true}/>:
             <div className="container mx-auto px-4 py-2">
@@ -2613,211 +2577,10 @@ export default function InsuranceDashboard() {
                 <option value="">Please select</option><option value="yes">Yes — financed purchase or refinance</option><option value="no">No — owned outright or cash purchase</option>
               </select></label>
             </div>}
-          {/* Address + action bar */}
-          <div className="container mx-auto px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div className="flex items-center gap-3">
-              {/* Back routing matches Cash Buy / Seller / Purchase: a
-                  logged-in user is always inside a dashboard scenario, so
-                  Back returns to Dashboard → Insurance tab. Only the
-                  logged-out flow (entered via the six-service picker)
-                  should land back on /select-service. */}
-              <button
-                onClick={() => {
-                  if (isAuthenticated) {
-                    setLocation("/dashboard?tab=insurance");
-                  } else {
-                    setLocation(
-                      `/select-service${addressParam ? `?address=${encodeURIComponent(addressParam)}` : ""}`
-                    );
-                  }
-                }}
-                className="text-muted-foreground hover:text-primary transition-colors"
-                aria-label={isAuthenticated ? "Back to Insurance dashboard" : "Back to Services"}
-              >
-                <ArrowLeft className="h-5 w-5" />
-              </button>
-              <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wide font-medium flex items-center gap-1.5">
-                  <Shield className="h-3 w-3" /> Insurance Estimate
-                </p>
-                {isEditingAddress ? (
-                  <div className="flex items-center gap-1.5 mt-0.5">
-                    <MapPin className="h-3.5 w-3.5 text-primary shrink-0" />
-                    <input
-                      ref={addressInputRef}
-                      type="text"
-                      value={editAddressVal}
-                      onChange={e => setEditAddressVal(e.target.value)}
-                      onKeyDown={async e => {
-                        if (e.key === "Enter") {
-                          const val = editAddressVal.trim();
-                          if (val && await authorize("insurance", val)) openInsuranceAddress(val);
-                          setIsEditingAddress(false);
-                        } else if (e.key === "Escape") {
-                          setIsEditingAddress(false);
-                        }
-                      }}
-                      onBlur={() => setTimeout(() => setIsEditingAddress(false), 200)}
-                      className="text-sm font-semibold bg-transparent border-b border-primary outline-none w-72 max-w-full leading-tight pb-0.5"
-                      autoComplete="off"
-                    />
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setIsEditingAddress(true)}
-                    className="group flex items-center gap-1.5 mt-0.5 hover:text-primary transition-colors text-left"
-                  >
-                    <MapPin className="h-3.5 w-3.5 text-muted-foreground group-hover:text-primary shrink-0" />
-                    <span className="font-semibold text-sm leading-tight">{address || "Enter an address"}</span>
-                    <Pencil className="h-3 w-3 text-muted-foreground/50 group-hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity" />
-                  </button>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {/* Standard Share + Save Scenario pair, identical to
-                  the other four detail views. Save persists one row
-                  per address into `insurance_scenarios`; the call is
-                  awaited so the success toast only fires after the
-                  Supabase write returns OK. */}
-              <ScenarioActions
-                scenarioType="insurance"
-                getPdfData={() => {
-                  if (!address || !address.trim()) return null;
-                  const annualPremium =
-                    manualAnnualPremium != null
-                      ? manualAnnualPremium
-                      : Math.round(displayedEstimateAnnual);
-                  // Occupancy / structure type aren't held in component
-                  // state — derive them from the saved source scenarios
-                  // for this address, mirroring the default-policy helper.
-                  const pdfKey = address.trim().toLowerCase();
-                  const pdfPurchase = getPurchaseScenarios().find(
-                    p => (p.address ?? "").trim().toLowerCase() === pdfKey,
-                  );
-                  const pdfCash = getCashBuyScenarios().find(
-                    c => (c.address ?? "").trim().toLowerCase() === pdfKey,
-                  );
-                  const pdfLoan = getTrackedLoans().find(
-                    l => (l.propertyAddress ?? "").trim().toLowerCase() === pdfKey,
-                  );
-                  const occupancy =
-                    pdfCash?.occupancyType ??
-                    (pdfLoan?.propertyType as string | undefined) ??
-                    (pdfPurchase ? "primary" : undefined);
-                  const propertyType =
-                    pdfPurchase?.propertyType ?? pdfLoan?.physicalPropertyType;
-                  const POLICY_LABELS: Record<string, string> = {
-                    HO3: "HO-3 (Homeowners)",
-                    HO6: "HO-6 (Condo / Townhome)",
-                    DP3: "DP-3 (Dwelling / Rental)",
-                  };
-                  const OCCUPANCY_LABELS: Record<string, string> = {
-                    primary: "Primary residence",
-                    secondary: "Secondary home",
-                    investment: "Investment property",
-                  };
-                  return {
-                    address,
-                    sections: [
-                      {
-                        heading: "Policy Summary",
-                        rows: [
-                          { label: "Policy type", value: policyType ? POLICY_LABELS[policyType] ?? policyType : "—" },
-                          { label: "Occupancy", value: occupancy ? OCCUPANCY_LABELS[occupancy] ?? occupancy : "—" },
-                          { label: "Property type", value: propertyType || "—" },
-                          { label: "Coverage A / Rebuild cost", value: fmt(rebuild) },
-                          { label: "Annual premium", value: fmt(annualPremium) },
-                          { label: "AOP deductible", value: fmt(aopDeductible) },
-                          { label: "Flood zone", value: floodZone || "—" },
-                        ],
-                      },
-                    ],
-                    disclaimer:
-                      "These are estimates only based on regional data, property characteristics, and standard assumptions. Results vary by specific property inspection and market availability. Not a binding quote. Coverage is not effective until confirmed by a licensed agent. Tateo Insurance Corp (Company) - License #L132640. Paul Christian Tateo (Agent) - License #W142842.",
-                  };
-                }}
-                onSave={async () => {
-                  if (!address || !address.trim()) {
-                    throw new Error("Enter an address before saving.");
-                  }
-                  const key = address.trim().toLowerCase();
-                  const existing = getInsuranceScenarios();
-                  const match = existing.find(
-                    s => s.address.trim().toLowerCase() === key
-                  );
-                  const updated: InsuranceScenario = {
-                    id: match?.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-                    address,
-                    savedAt: new Date().toISOString(),
-                    // If the user has typed a manual Annual Premium,
-                    // persist that exact value and stamp the source.
-                    // Otherwise fall back to the calculated midpoint
-                    // (Coverage A × 0.75% × factor adjustment) — the
-                    // sync helper is free to recompute this later.
-                    annualPremium:
-                      manualAnnualPremium != null
-                        ? manualAnnualPremium
-                        : match?.premiumSource === "quote" && typeof match.annualPremium === "number"
-                          ? match.annualPremium
-                          : Math.round(displayedEstimateAnnual),
-                    // Persist Coverage A so the Phase 1 cross-tab value
-                    // sync can read/protect it. Source carries forward
-                    // from the saved scenario; if the user moved the
-                    // Rebuild Cost slider this save call,
-                    // `_stampManualOnValueDiff` in saveInsuranceScenarios
-                    // will detect the diff vs `match.coverageA` and
-                    // stamp coverageASource = "manual". If unchanged,
-                    // the prior source ("property_value_sync" /
-                    // "default" / "manual") is preserved.
-                    coverageA: rebuild,
-                    coverageASource: manualCoverageA.current ? "manual" : "default",
-                    // Stamp premium provenance from the manual-input
-                    // state, preserving any prior "quote" upload that
-                    // the page can't override today.
-                    premiumSource:
-                      manualAnnualPremium != null
-                        ? "manual"
-                        : match?.premiumSource === "quote"
-                          ? "quote"
-                          : "default_0_75_percent",
-                    coverageType: region.name,
-                    ...(policyType
-                      ? {
-                          policyType,
-                          policyTypeSource: policyTypeSource ?? "default_rule",
-                        }
-                      : {}),
-                    ...(match?.occupancyType ? { occupancyType: match.occupancyType } : {}),
-                    ...(match?.propertyType ? { propertyType: match.propertyType } : {}),
-                    userAnswerSources: withQuotePropertyAnswers(
-                      match?.userAnswerSources,
-                    ),
-                  };
-                  const next = match
-                    ? existing.map(s => (s.id === match.id ? updated : s))
-                    : [...existing, updated];
-                  await confirmAnonymousAccountDraftSaved("insurance", () => saveInsuranceScenarios(next));
-                }}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* ── Main content ── */}
-        <div className="container mx-auto px-4 py-6 space-y-6">
-
-          {/* Page indicator */}
-          <div className="max-w-2xl mx-auto lg:max-w-none">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-semibold text-foreground">Insurance Estimate</p>
-              <p className="text-xs text-muted-foreground font-medium">Page 1 of 1</p>
-            </div>
-            <div className="h-1.5 w-full rounded-full bg-primary" />
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-
+  </>
+  );
+  const estimateCard = (
+  <>
             {/* ── SECTION 1: General estimate ── */}
             <Card className="border shadow-sm overflow-hidden">
               <CardHeader className="pb-3">
@@ -2982,6 +2745,10 @@ export default function InsuranceDashboard() {
               </CardContent>
             </Card>
 
+  </>
+  );
+  const liveQuotesCard = (
+  <>
             {/* ── SECTION 2: Live carrier quotes ── */}
             <Card className="border shadow-sm">
                 <CardHeader className="pb-3">
@@ -3002,7 +2769,7 @@ export default function InsuranceDashboard() {
                         {qrStatus === "starting" &&
                           "Checking county permits and records… Report drafts and permit clues do not confirm credits."}
                         {qrStatus === "pending" &&
-                          `We're getting your quotes. This takes a few minutes. We'll email you the results, and they'll be here when you come back. ${qrQuoteCounter} quote${qrQuoteCounter !== 1 ? "s" : ""} so far · ${qrElapsed}s`}
+                          `${RUNNING_QUOTES_TITLE} ${RUNNING_QUOTES_DETAIL} ${qrQuoteCounter} quote${qrQuoteCounter !== 1 ? "s" : ""} so far.`}
                         {qrStatus === "success" &&
                           `${qrQuoteCounter} carrier${qrQuoteCounter !== 1 ? "s" : ""} quoted${
                             qrExpiresAt
@@ -3248,7 +3015,7 @@ export default function InsuranceDashboard() {
                             : qrCarrierTotal != null
                               ? `Carriers quoting ${qrRespondedCarriers ?? qrQuoteCounter} of ${qrCarrierTotal}`
                               : `Carriers quoting · ${qrQuoteCounter} quote${qrQuoteCounter === 1 ? "" : "s"} received`}
-                        {!qrStillWorking && ` · ${Math.floor(qrElapsed / 60)}:${String(qrElapsed % 60).padStart(2, "0")} elapsed. Usually 2–5 minutes. You can close this page; we'll email your top 3.`}
+                        {!qrStillWorking && ` · ${RUNNING_QUOTES_DETAIL}`}
                       </p>
                     </div>
                   )}
@@ -3264,7 +3031,7 @@ export default function InsuranceDashboard() {
                         />
                       </div>
                       <p className="text-xs text-muted-foreground text-center">
-                        {Math.floor(persistedElapsed / 60)}:{String(persistedElapsed % 60).padStart(2, "0")} elapsed · {RUNNING_QUOTES_DETAIL}
+                        {RUNNING_QUOTES_DETAIL}
                       </p>
                     </div>
                   )}
@@ -3497,16 +3264,18 @@ export default function InsuranceDashboard() {
 
                 </CardContent>
             </Card>
-          </div>
-
+  </>
+  );
+  const estimateDisclaimer = (
+  <>
           <p className="text-xs text-muted-foreground text-center leading-relaxed pb-4">
             These are estimates only based on regional data, property characteristics, and standard assumptions. Results vary by specific property inspection and market availability. Not a binding quote. Coverage not effective until confirmed by a licensed agent. Tateo Insurance Corp (Company) - License #L132640. Paul Christian Tateo (Agent) - License #W142842.
           </p>
+  </>
+  );
 
-        </div>
-      </div>
-      )}
-
+  const dialogs = (
+  <>
       {/* ── Lead capture dialog ── */}
       <LeadCaptureDialog
         open={leadDialogOpen}
@@ -3639,6 +3408,341 @@ export default function InsuranceDashboard() {
           </div>
         </DialogContent>
       </Dialog>
+  </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="space-y-4" data-testid="embedded-insurance-quote">
+        <div className="rounded-xl border bg-white">{currentHomeSection}</div>
+        {estimateCard}
+        {liveQuotesCard}
+        {estimateDisclaimer}
+        {dialogs}
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+
+  return (
+    <>
+      <Helmet><title>Insurance Estimate — {address || "Havo"}</title></Helmet>
+
+      {showInsuranceEmptyState ? (
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4 py-12">
+          <Card className="w-full max-w-md">
+            <CardContent className="py-10 px-6 flex flex-col items-center text-center gap-4">
+              <Shield className="h-12 w-12 text-primary" />
+              <div className="space-y-1">
+                <h2 className="text-xl font-bold">No properties added yet</h2>
+                <p className="text-sm text-muted-foreground">
+                  Add a property address to get an insurance estimate
+                </p>
+              </div>
+              {!showEmptyAddInput ? (
+                <Button
+                  className="mt-2"
+                  onClick={() => setShowEmptyAddInput(true)}
+                  data-testid="insurance-empty-add-property"
+                >
+                  Add Property Address
+                </Button>
+              ) : (
+                <div className="w-full mt-2">
+                  <div className="flex items-center gap-2 border rounded-md px-3 py-2 bg-white">
+                    <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <input
+                      ref={addressInputRef}
+                      type="text"
+                      placeholder="Enter a property address"
+                      onKeyDown={e => {
+                        if (e.key === "Enter") {
+                          const val = (e.target as HTMLInputElement).value.trim();
+                          if (val) {
+                            setShowEmptyAddInput(false);
+                            openInsuranceAddress(val);
+                          }
+                        } else if (e.key === "Escape") {
+                          setShowEmptyAddInput(false);
+                        }
+                      }}
+                      className="flex-1 bg-transparent outline-none text-sm"
+                      autoComplete="off"
+                      data-testid="insurance-empty-address-input"
+                    />
+                  </div>
+                  <button
+                    onClick={() => setShowEmptyAddInput(false)}
+                    className="text-xs text-muted-foreground hover:text-foreground mt-2"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      ) : (
+      <div className="min-h-screen bg-gray-50">
+
+        {/* ── Sticky top bar (same pattern as estimate page) ── */}
+        <div className="bg-white border-b shadow-sm sticky top-[73px] z-40">
+
+          {/* Scenario tabs */}
+          <div className="container mx-auto px-4 pt-2 flex items-center gap-1 overflow-x-auto scrollbar-none">
+            {scenarios.map((sc) => (
+              <div
+                key={sc.id}
+                onClick={() => switchScenario(sc.id)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t-md text-xs font-medium cursor-pointer whitespace-nowrap border border-b-0 transition-colors ${
+                  sc.id === activeScenarioId
+                    ? "bg-white border-border text-foreground shadow-sm -mb-px relative z-10"
+                    : "bg-gray-100 border-transparent text-muted-foreground hover:bg-gray-200"
+                }`}
+              >
+                <MapPin className="h-3 w-3 shrink-0" />
+                <span>{shortLabel(sc.address) || "New property"}</span>
+                {scenarios.length > 1 && (
+                  <button
+                    onClick={(e) => removeScenario(sc.id, e)}
+                    className="ml-0.5 rounded-full hover:bg-black/10 p-0.5 transition-colors"
+                    aria-label="Remove"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                )}
+              </div>
+            ))}
+            {scenarios.length < 5 && (
+              <button
+                onClick={requestAddScenario}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-t-md text-xs text-muted-foreground hover:text-primary hover:bg-gray-100 border border-transparent border-b-0 transition-colors"
+                title="Compare another property"
+              >
+                <Plus className="h-3.5 w-3.5" /> Add Property
+              </button>
+            )}
+          </div>
+
+          {currentHomeSection}
+          {/* Address + action bar */}
+          <div className="container mx-auto px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-3">
+              {/* Back routing matches Cash Buy / Seller / Purchase: a
+                  logged-in user is always inside a dashboard scenario, so
+                  Back returns to Dashboard → Insurance tab. Only the
+                  logged-out flow (entered via the six-service picker)
+                  should land back on /select-service. */}
+              <button
+                onClick={() => {
+                  if (isAuthenticated) {
+                    setLocation("/dashboard?tab=insurance");
+                  } else {
+                    setLocation(
+                      `/select-service${addressParam ? `?address=${encodeURIComponent(addressParam)}` : ""}`
+                    );
+                  }
+                }}
+                className="text-muted-foreground hover:text-primary transition-colors"
+                aria-label={isAuthenticated ? "Back to Insurance dashboard" : "Back to Services"}
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </button>
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wide font-medium flex items-center gap-1.5">
+                  <Shield className="h-3 w-3" /> Insurance Estimate
+                </p>
+                {isEditingAddress ? (
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <MapPin className="h-3.5 w-3.5 text-primary shrink-0" />
+                    <input
+                      ref={addressInputRef}
+                      type="text"
+                      value={editAddressVal}
+                      onChange={e => setEditAddressVal(e.target.value)}
+                      onKeyDown={async e => {
+                        if (e.key === "Enter") {
+                          const val = editAddressVal.trim();
+                          if (val && await authorize("insurance", val)) openInsuranceAddress(val);
+                          setIsEditingAddress(false);
+                        } else if (e.key === "Escape") {
+                          setIsEditingAddress(false);
+                        }
+                      }}
+                      onBlur={() => setTimeout(() => setIsEditingAddress(false), 200)}
+                      className="text-sm font-semibold bg-transparent border-b border-primary outline-none w-72 max-w-full leading-tight pb-0.5"
+                      autoComplete="off"
+                    />
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setIsEditingAddress(true)}
+                    className="group flex items-center gap-1.5 mt-0.5 hover:text-primary transition-colors text-left"
+                  >
+                    <MapPin className="h-3.5 w-3.5 text-muted-foreground group-hover:text-primary shrink-0" />
+                    <span className="font-semibold text-sm leading-tight">{address || "Enter an address"}</span>
+                    <Pencil className="h-3 w-3 text-muted-foreground/50 group-hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {/* Standard Share + Save Scenario pair, identical to
+                  the other four detail views. Save persists one row
+                  per address into `insurance_scenarios`; the call is
+                  awaited so the success toast only fires after the
+                  Supabase write returns OK. */}
+              <ScenarioActions
+                scenarioType="insurance"
+                getPdfData={() => {
+                  if (!address || !address.trim()) return null;
+                  const annualPremium =
+                    manualAnnualPremium != null
+                      ? manualAnnualPremium
+                      : Math.round(displayedEstimateAnnual);
+                  // Occupancy / structure type aren't held in component
+                  // state — derive them from the saved source scenarios
+                  // for this address, mirroring the default-policy helper.
+                  const pdfKey = address.trim().toLowerCase();
+                  const pdfPurchase = getPurchaseScenarios().find(
+                    p => (p.address ?? "").trim().toLowerCase() === pdfKey,
+                  );
+                  const pdfCash = getCashBuyScenarios().find(
+                    c => (c.address ?? "").trim().toLowerCase() === pdfKey,
+                  );
+                  const pdfLoan = getTrackedLoans().find(
+                    l => (l.propertyAddress ?? "").trim().toLowerCase() === pdfKey,
+                  );
+                  const occupancy =
+                    pdfCash?.occupancyType ??
+                    (pdfLoan?.propertyType as string | undefined) ??
+                    (pdfPurchase ? "primary" : undefined);
+                  const propertyType =
+                    pdfPurchase?.propertyType ?? pdfLoan?.physicalPropertyType;
+                  const POLICY_LABELS: Record<string, string> = {
+                    HO3: "HO-3 (Homeowners)",
+                    HO6: "HO-6 (Condo / Townhome)",
+                    DP3: "DP-3 (Dwelling / Rental)",
+                  };
+                  const OCCUPANCY_LABELS: Record<string, string> = {
+                    primary: "Primary residence",
+                    secondary: "Secondary home",
+                    investment: "Investment property",
+                  };
+                  return {
+                    address,
+                    sections: [
+                      {
+                        heading: "Policy Summary",
+                        rows: [
+                          { label: "Policy type", value: policyType ? POLICY_LABELS[policyType] ?? policyType : "—" },
+                          { label: "Occupancy", value: occupancy ? OCCUPANCY_LABELS[occupancy] ?? occupancy : "—" },
+                          { label: "Property type", value: propertyType || "—" },
+                          { label: "Coverage A / Rebuild cost", value: fmt(rebuild) },
+                          { label: "Annual premium", value: fmt(annualPremium) },
+                          { label: "AOP deductible", value: fmt(aopDeductible) },
+                          { label: "Flood zone", value: floodZone || "—" },
+                        ],
+                      },
+                    ],
+                    disclaimer:
+                      "These are estimates only based on regional data, property characteristics, and standard assumptions. Results vary by specific property inspection and market availability. Not a binding quote. Coverage is not effective until confirmed by a licensed agent. Tateo Insurance Corp (Company) - License #L132640. Paul Christian Tateo (Agent) - License #W142842.",
+                  };
+                }}
+                onSave={async () => {
+                  if (!address || !address.trim()) {
+                    throw new Error("Enter an address before saving.");
+                  }
+                  const key = address.trim().toLowerCase();
+                  const existing = getInsuranceScenarios();
+                  const match = existing.find(
+                    s => s.address.trim().toLowerCase() === key
+                  );
+                  const updated: InsuranceScenario = {
+                    id: match?.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                    address,
+                    savedAt: new Date().toISOString(),
+                    // If the user has typed a manual Annual Premium,
+                    // persist that exact value and stamp the source.
+                    // Otherwise fall back to the calculated midpoint
+                    // (Coverage A × 0.75% × factor adjustment) — the
+                    // sync helper is free to recompute this later.
+                    annualPremium:
+                      manualAnnualPremium != null
+                        ? manualAnnualPremium
+                        : match?.premiumSource === "quote" && typeof match.annualPremium === "number"
+                          ? match.annualPremium
+                          : Math.round(displayedEstimateAnnual),
+                    // Persist Coverage A so the Phase 1 cross-tab value
+                    // sync can read/protect it. Source carries forward
+                    // from the saved scenario; if the user moved the
+                    // Rebuild Cost slider this save call,
+                    // `_stampManualOnValueDiff` in saveInsuranceScenarios
+                    // will detect the diff vs `match.coverageA` and
+                    // stamp coverageASource = "manual". If unchanged,
+                    // the prior source ("property_value_sync" /
+                    // "default" / "manual") is preserved.
+                    coverageA: rebuild,
+                    coverageASource: manualCoverageA.current ? "manual" : "default",
+                    // Stamp premium provenance from the manual-input
+                    // state, preserving any prior "quote" upload that
+                    // the page can't override today.
+                    premiumSource:
+                      manualAnnualPremium != null
+                        ? "manual"
+                        : match?.premiumSource === "quote"
+                          ? "quote"
+                          : "default_0_75_percent",
+                    coverageType: region.name,
+                    ...(policyType
+                      ? {
+                          policyType,
+                          policyTypeSource: policyTypeSource ?? "default_rule",
+                        }
+                      : {}),
+                    ...(match?.occupancyType ? { occupancyType: match.occupancyType } : {}),
+                    ...(match?.propertyType ? { propertyType: match.propertyType } : {}),
+                    userAnswerSources: withQuotePropertyAnswers(
+                      match?.userAnswerSources,
+                    ),
+                  };
+                  const next = match
+                    ? existing.map(s => (s.id === match.id ? updated : s))
+                    : [...existing, updated];
+                  await confirmAnonymousAccountDraftSaved("insurance", () => saveInsuranceScenarios(next));
+                }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* ── Main content ── */}
+        <div className="container mx-auto px-4 py-6 space-y-6">
+
+          {/* Page indicator */}
+          <div className="max-w-2xl mx-auto lg:max-w-none">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-semibold text-foreground">Insurance Estimate</p>
+              <p className="text-xs text-muted-foreground font-medium">Page 1 of 1</p>
+            </div>
+            <div className="h-1.5 w-full rounded-full bg-primary" />
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+
+            {estimateCard}
+
+            {liveQuotesCard}
+          </div>
+
+          {estimateDisclaimer}
+
+        </div>
+      </div>
+      )}
+
+      {dialogs}
     </>
   );
 }

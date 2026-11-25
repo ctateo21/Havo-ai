@@ -31,7 +31,15 @@ import { checkLoanLimit, canDowngradeFromJumbo, CONFORMING_LOAN_LIMIT_2026, FHA_
 import { FeeWorksheetDialog } from "@/components/fee-worksheet-dialog";
 import { useQuery } from "@tanstack/react-query";
 import { useSharedLiveQuoteEstimate } from "@/hooks/use-shared-live-quote-estimate";
-import { sharedEstimateNote } from "@/lib/saved-insurance-quotes";
+import {
+  SAVED_QUOTES_QUERY_KEY,
+  fetchSavedQuoteState,
+  formatQuotedDate,
+  selectReusableLiveQuote,
+  sharedEstimateNote,
+} from "@/lib/saved-insurance-quotes";
+import { InsuranceQuoteWorkspace } from "@/pages/insurance";
+import type { PurchaseQuoteContext } from "@/lib/purchase-insurance-prefill";
 import { useSearch, useLocation } from "wouter";
 import { Helmet } from "react-helmet";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -2835,11 +2843,30 @@ export default function Estimate() {
     insurancePolicyType,
     inputs.occupancy,
   );
-  const sharedInsuranceAnnual = sharedInsuranceEstimate ? Math.round(sharedInsuranceEstimate.annual) : null;
+  // The user's own saved live quotes (same cache as the Insurance tab, so a
+  // run started from the inline questionnaire refreshes this page too).
+  const ownSavedQuotesQuery = useQuery({
+    queryKey: [...SAVED_QUOTES_QUERY_KEY, "state", authUser?.id ?? "guest"],
+    queryFn: () => fetchSavedQuoteState(path => authedFetch(path)),
+    enabled: !!authUser,
+    staleTime: 60_000,
+  });
+  // A matching live quote from the last 90 days: the user's own first, else
+  // the shared lowest estimate (number and date only).
+  const reusableLiveQuote = useMemo(() => selectReusableLiveQuote({
+    address: address !== "Unknown Address" ? address : "",
+    policyType: insurancePolicyType,
+    occupancy: inputs.occupancy,
+    own: authUser ? ownSavedQuotesQuery.data?.results : null,
+    shared: sharedInsuranceEstimate,
+  }), [address, insurancePolicyType, inputs.occupancy, authUser, ownSavedQuotesQuery.data, sharedInsuranceEstimate]);
+  const sharedInsuranceAnnual = reusableLiveQuote ? Math.round(reusableLiveQuote.annual) : null;
+  const liveInsuranceSource = reusableLiveQuote?.kind === "own" ? "live_quote" : "recent_live_quote";
   useEffect(() => {
     if (userTouchedInsuranceSimRef.current) return;
     setInputs(prev => {
       const src = prev.userAnswerSources?.annual_ho_ins;
+      const fromLiveQuote = src === "recent_live_quote" || src === "live_quote";
       if (src === "manual" || src === "simulator") {
         // Treat a restored saved value as a touched simulator so the
         // midpoint wire-up takes over for subsequent edits without
@@ -2849,11 +2876,11 @@ export default function Estimate() {
       }
       if (sharedInsuranceAnnual != null) {
         // Stamp the source so a reload does not mistake it for a manual value.
-        if (prev.annualHOIns === sharedInsuranceAnnual && src === "recent_live_quote") return prev;
+        if (prev.annualHOIns === sharedInsuranceAnnual && src === liveInsuranceSource) return prev;
         return {
           ...prev,
           annualHOIns: sharedInsuranceAnnual,
-          userAnswerSources: { ...(prev.userAnswerSources ?? {}), annual_ho_ins: "recent_live_quote" },
+          userAnswerSources: { ...(prev.userAnswerSources ?? {}), annual_ho_ins: liveInsuranceSource },
         };
       }
       const target = Math.round(
@@ -2863,19 +2890,21 @@ export default function Estimate() {
           isFrameConstruction: insConstIdx === 2,
         }),
       );
-      if (prev.annualHOIns === target && src !== "recent_live_quote") return prev;
+      if (prev.annualHOIns === target && !fromLiveQuote) return prev;
       const { annual_ho_ins: _dropped, ...restSources } = prev.userAnswerSources ?? {};
       return {
         ...prev,
         annualHOIns: target,
-        ...(src === "recent_live_quote" ? { userAnswerSources: restSources } : {}),
+        ...(fromLiveQuote ? { userAnswerSources: restSources } : {}),
       };
     });
-  }, [inputs.purchasePrice, insuranceYearBuilt, insConstIdx, sharedInsuranceAnnual]);
+  }, [inputs.purchasePrice, insuranceYearBuilt, insConstIdx, sharedInsuranceAnnual, liveInsuranceSource]);
   const sharedInsuranceNote =
-    sharedInsuranceEstimate && inputs.userAnswerSources?.annual_ho_ins === "recent_live_quote"
+    reusableLiveQuote && inputs.userAnswerSources?.annual_ho_ins === liveInsuranceSource
       && inputs.annualHOIns === sharedInsuranceAnnual
-      ? sharedEstimateNote(sharedInsuranceEstimate.quotedDate) : null;
+      ? (reusableLiveQuote.kind === "own"
+          ? `Your lowest live carrier quote (${formatQuotedDate(reusableLiveQuote.quotedDate)})`
+          : sharedEstimateNote(reusableLiveQuote.quotedDate)) : null;
 
   // Purchase-price changes always preserve the selected down-payment
   // percentage. The dollar amount changes with the price even when the
@@ -3982,6 +4011,15 @@ export default function Estimate() {
   });
   const [feeWorksheetOpen, setFeeWorksheetOpen] = useState(false);
   const [openingLiveQuote, setOpeningLiveQuote] = useState(false);
+  const [showInlineInsuranceQuote, setShowInlineInsuranceQuote] = useState(false);
+  const inlineInsurancePurchase = useMemo<PurchaseQuoteContext>(() => ({
+    price: inputs.purchasePrice,
+    priceSource: inputs.purchasePriceSource === "user"
+      ? "user"
+      : inputs.purchasePriceSource === "zillow_listing" ? "listing" : "estimate",
+    occupancy: inputs.occupancy,
+    financed: true,
+  }), [inputs.purchasePrice, inputs.purchasePriceSource, inputs.occupancy]);
   useEffect(() => {
     if (!calc.taxVerified) setFeeWorksheetOpen(false);
   }, [calc.taxVerified]);
@@ -4056,35 +4094,25 @@ export default function Estimate() {
     });
   }
 
+  // Best-effort team alert; the response never blocks the quote flow.
+  const notifyLiveQuoteClick = () => {
+    void authedFetch("/api/insurance/live-quote-click", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address }),
+      keepalive: true,
+    }).catch(() => console.warn("[insurance-live-quote] click alert not sent"));
+  };
+
   const handleGetLiveInsuranceQuote = async () => {
     if (!getSession() && !await requireAccount()) return;
     if (openingLiveQuote) return;
     setOpeningLiveQuote(true);
     try {
-      const response = await authedFetch("/api/insurance/live-quote-click", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address }),
-        keepalive: true,
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || (!result.delivered && !result.deduped)) {
-        throw new Error(
-          response.status === 401
-            ? "Please sign in again before requesting a live quote."
-            : result.error || "The insurance team alert could not be confirmed.",
-        );
-      }
-      setLocation(`/insurance?address=${encodeURIComponent(address)}`);
-    } catch (error) {
-      console.warn("[insurance-live-quote] FUB click alert failed:", error);
-      toast({
-        variant: "destructive",
-        title: "Live quote request not sent",
-        description:
-          error instanceof Error
-            ? error.message
-            : "Please try again so we can alert the insurance team.",
+      notifyLiveQuoteClick();
+      setShowInlineInsuranceQuote(true);
+      requestAnimationFrame(() => {
+        document.getElementById("inline-insurance-quote")?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
     } finally {
       setOpeningLiveQuote(false);
@@ -6548,6 +6576,24 @@ export default function Estimate() {
                       </p>
                     </div>
 
+                    {reusableLiveQuote && (
+                      <div className="rounded-xl border border-green-200 bg-green-50 p-4" data-testid="reusable-live-quote">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-green-900">
+                          {reusableLiveQuote.kind === "own" ? "Your lowest live quote" : "Recent live carrier quote"}
+                        </p>
+                        <p className="mt-2 font-mono text-2xl font-bold text-green-900">
+                          {fmt(reusableLiveQuote.annual)}
+                          <span className="ml-1 text-sm font-medium text-green-800">/yr</span>
+                        </p>
+                        <p className="mt-1 text-xs text-green-900">
+                          {reusableLiveQuote.kind === "own" && reusableLiveQuote.result.quotes[0]?.siteName
+                            ? `${reusableLiveQuote.result.quotes[0].siteName} · `
+                            : ""}
+                          Quoted {formatQuotedDate(reusableLiveQuote.quotedDate)}
+                        </p>
+                      </div>
+                    )}
+
                     <div className="space-y-2 text-xs text-muted-foreground">
                       <div className="flex items-start gap-2">
                         <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600" />
@@ -6580,14 +6626,21 @@ export default function Estimate() {
                           Opening Live Quotes…
                         </>
                       ) : (
-                        authUser ? "Get a Live Quote" : "Sign In to Get Live Quotes"
+                        authUser
+                          ? reusableLiveQuote ? "Re-run quotes" : "Get a Live Quote"
+                          : "Sign In to Get Live Quotes"
                       )}
                     </Button>
                     <p className="text-center text-[10px] leading-relaxed text-muted-foreground">
-                      A licensed team member will be alerted to call you within 60 seconds.
+                      Real-time carrier rates via Tateo &amp; Co. A licensed team member may follow up to review coverage.
                     </p>
                   </CardContent>
                 </Card>
+                {showInlineInsuranceQuote && authUser && address && address !== "Unknown Address" && (
+                  <div id="inline-insurance-quote" className="scroll-mt-20" data-testid="inline-insurance-quote">
+                    <InsuranceQuoteWorkspace embedded={{ address, purchase: inlineInsurancePurchase }} />
+                  </div>
+                )}
               </div>
 
               <p className="text-xs text-muted-foreground text-center px-4 pb-4">

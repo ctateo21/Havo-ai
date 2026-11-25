@@ -1,4 +1,11 @@
 import { normalizeQuoteAddress } from "@shared/quote-address";
+import {
+  isPolicyForm,
+  isWithinReuseWindow,
+  normalizeOccupancy,
+  runMatchesScenario,
+  sharedEstimateRequest,
+} from "@shared/live-quote-reuse";
 
 /** One carrier row as returned by GET /api/insurance/my-quotes. */
 export interface SavedQuote {
@@ -21,6 +28,8 @@ export interface SavedQuoteResult {
   stale: boolean;
   bestCarrier: string | null;
   bestAnnual: number | null;
+  /** Occupancy this run was quoted for (the user's own runs only). */
+  occupancy?: string | null;
   quotes: SavedQuote[];
 }
 
@@ -143,7 +152,7 @@ export const QUOTE_RUN_POLL_MS = 12_000;
 export const QUOTE_RUN_WINDOW_SECONDS = 12 * 60;
 export const RUNNING_QUOTES_TITLE = "Getting your quotes…";
 export const RUNNING_QUOTES_DETAIL =
-  "This takes a few minutes. We'll email you the results, and they'll be here when you come back.";
+  "We'll email you when your quotes are ready, and they'll be here when you come back.";
 export const AGENT_FOLLOW_UP_MESSAGE =
   "An agent will finish your quotes — carrier submission could not be confirmed.";
 
@@ -259,4 +268,55 @@ export function resolveGeneralInsuranceEstimate(args: {
     return { annual: args.shared.annual, source: "recent_live_quote", note: sharedEstimateNote(args.shared.quotedDate) };
   }
   return { annual: args.calculatedAnnual, source: "calculated", note: null };
+}
+
+
+// ── Reusing a recent live quote on the purchase page ──────────────────────
+export type ReusableLiveQuote =
+  | { kind: "own"; annual: number; monthly: number; quotedDate: string; result: SavedQuoteResult }
+  /** Another user's run: the number and date only, never carriers/answers. */
+  | { kind: "shared"; annual: number; monthly: number; quotedDate: string };
+
+/**
+ * A live quote for this address that may be shown instead of re-running:
+ * the user's own saved result first, then the shared lowest-premium estimate.
+ * Both must be within the shared 90-day window and match the policy form +
+ * occupancy rule used by the shared estimate.
+ */
+export function selectReusableLiveQuote(args: {
+  address: string;
+  policyType: string | null | undefined;
+  occupancy: string | null | undefined;
+  own: readonly SavedQuoteResult[] | null | undefined;
+  shared: SharedLiveQuoteEstimate | null | undefined;
+  now?: Date;
+}): ReusableLiveQuote | null {
+  const now = args.now ?? new Date();
+  if (!args.address.trim() || !isPolicyForm(args.policyType)) return null;
+  const request = sharedEstimateRequest(args.policyType, normalizeOccupancy(args.occupancy));
+  const key = normalizeQuoteAddress(args.address);
+  const ownMatches = (args.own ?? [])
+    .filter(r => r.addressNormalized === key && r.quotes.length > 0 && r.quotes[0].annualPremium > 0)
+    .filter(r => isWithinReuseWindow(r.completedAt, now))
+    .filter(r => runMatchesScenario(
+      { policyType: r.policyType, occupancy: normalizeOccupancy(r.occupancy) }, request,
+    ))
+    .sort((a, b) => a.quotes[0].annualPremium - b.quotes[0].annualPremium
+      || (b.completedAt ?? "").localeCompare(a.completedAt ?? ""));
+  const own = ownMatches[0];
+  if (own) {
+    const best = own.quotes[0];
+    return {
+      kind: "own",
+      annual: best.annualPremium,
+      monthly: best.monthlyPremium > 0 ? best.monthlyPremium : Math.round((best.annualPremium / 12) * 100) / 100,
+      quotedDate: own.completedAt!,
+      result: own,
+    };
+  }
+  const shared = args.shared;
+  if (shared && shared.annual > 0 && isWithinReuseWindow(shared.quotedDate, now)) {
+    return { kind: "shared", annual: shared.annual, monthly: shared.monthly, quotedDate: shared.quotedDate };
+  }
+  return null;
 }
