@@ -637,6 +637,52 @@ export const insuranceQuoteCache = pgTable(
 export type InsuranceQuoteCache =
   typeof insuranceQuoteCache.$inferSelect;
 
+export type SavedInsuranceQuote = {
+  siteName: string;
+  annualPremium: number;
+  monthlyPremium: number;
+  coverageA: number;
+  hurricaneDeductible: string;
+  aop: string;
+  quoteUrl: string | null;
+  quoteDate: string;
+  rank: number;
+};
+
+// A user's own saved live-carrier results, one row per property + policy
+// type. Separate from the shared address cache because a cache row can be
+// reused across users. estimate_snapshot is the pre-quote Havo estimate and
+// must never contain name, email, phone, or DOB. pending_* holds the next
+// run's snapshot until that run succeeds, so completed results are not
+// replaced by an in-flight or failed run.
+export const userInsuranceQuoteResults = pgTable(
+  "user_insurance_quote_results",
+  {
+    userId: text("user_id").notNull(),
+    addressNormalized: text("address_normalized").notNull(),
+    policyType: text("policy_type").notNull(),
+    leadId: integer("lead_id"),
+    quotes: jsonb("quotes").$type<SavedInsuranceQuote[]>().notNull().default([]),
+    bestCarrier: text("best_carrier"),
+    bestAnnual: numeric("best_annual"),
+    completedAt: timestamp("completed_at"),
+    estimateSnapshot: jsonb("estimate_snapshot").$type<Record<string, unknown>>(),
+    pendingEstimateSnapshot: jsonb("pending_estimate_snapshot")
+      .$type<Record<string, unknown>>(),
+    pendingStartedAt: timestamp("pending_started_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  table => ({
+    pk: primaryKey({
+      columns: [table.userId, table.addressNormalized, table.policyType],
+    }),
+  }),
+);
+
+export type UserInsuranceQuoteResult =
+  typeof userInsuranceQuoteResults.$inferSelect;
+
 // Cached non-ad valorem assessments (CDD, solid waste, stormwater, etc.)
 // scraped from the Hillsborough Tax Collector's latest annual bill via
 // Apify. Keyed by folio; refreshed yearly.

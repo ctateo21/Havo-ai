@@ -34,6 +34,14 @@ import {
 import { searchProperties, getPropertyDetails, ZillowSearchParams, ZillowProperty } from "./integrations/zillow";
 import { isHillsboroughCountyAddress } from "@shared/hillsborough-county";
 import {insuranceContact} from "./insurance-contact";
+import { normalizeQuoteAddress } from "@shared/quote-address";
+import { registerSavedQuoteResultRoutes } from "./integrations/saved-quote-results-routes";
+import {
+  buildEstimateSnapshot,
+  parseEstimateInput,
+  recordPendingQuoteRun,
+  saveCompletedQuoteRun,
+} from "./integrations/saved-quote-results";
 
 /**
  * ZIP-only Hillsborough matches that another supported county also claims
@@ -845,12 +853,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Normalizes an address into a stable cache key (lowercased, single
   // spaces, punctuation stripped, capped at 200 chars).
   function normalizeAddr(addr: string): string {
-    return addr
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .replace(/[,\.#]+/g, "")
-      .slice(0, 200);
+    return normalizeQuoteAddress(addr);
   }
 
   function topThreePositiveQuotes(
@@ -1351,6 +1354,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     optionalUser,
     normalizeAddress: normalizeAddr,
   });
+  registerSavedQuoteResultRoutes(app, {
+    optionalUser,
+    normalizeAddress: normalizeAddr,
+  });
 
   app.get(
     "/api/insurance/qr-agent-verification",
@@ -1511,6 +1518,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // the result email but before its durable sent marker. Re-enter
             // the idempotent delivery worker on a cache hit.
             scheduleQuoteJob(row.id, 0);
+            // Reused results are saved to this user's account as well.
+            await saveCompletedQuoteRun(row, {
+              userId: user.id,
+              estimateSnapshot: buildEstimateSnapshot(
+                b, parseEstimateInput(req.body?.estimate),
+                { usageType: propertyDefaults.usageType },
+              ),
+            });
             return res.json({
               status:"success",
               leadId: row.leadId,
@@ -2031,6 +2046,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         const [run]=await readQuoteCache({id:activeCacheRowId},1);
         if(!run)throw Error("Quote run unavailable");
+        // Pre-quote estimate snapshot (no PII). Held as pending so earlier
+        // completed results remain until this run succeeds.
+        await recordPendingQuoteRun({
+          userId: user.id,
+          addressNormalized: norm,
+          policyType: b.policyType,
+          startedAt: run.triggeredAt,
+          snapshot: buildEstimateSnapshot(
+            b, parseEstimateInput(req.body?.estimate),
+            { usageType: propertyDefaults.usageType, county },
+          ),
+        });
         try{await enqueueInsuranceImport(run,params);}
         catch(error){await updateClaimedCache({status:"error"});throw error;}
         res.status(202).json({status:"pending",leadId:null,quoteAccessToken:issueQuoteAccess(run,user.id)});
@@ -2153,6 +2180,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
               leadId: cacheLead.leadId,
               expectedStatus: cacheLead.status,
             });
+          await saveCompletedQuoteRun({
+            ...cacheLead,
+            leadId: cacheLead.leadId ?? leadId,
+            quotes: result.quotes,
+            completedAt: new Date(),
+          }, { userId: user.id });
         }
 
         res.json({

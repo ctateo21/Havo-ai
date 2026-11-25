@@ -11,6 +11,18 @@ import {
 } from "@/lib/auth";
 import { notifyNewScenario } from "@/lib/notify-scenario";
 import { authedFetch } from "@/lib/authed-fetch";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  COVERAGE_DETAILS_SUMMARY,
+  EXPLAINERS_OPEN_BY_DEFAULT,
+  GUEST_LIVE_QUOTE_PROMPT,
+  SAVED_QUOTES_QUERY_KEY,
+  STALE_QUOTE_MESSAGE,
+  fetchSavedQuoteResults,
+  findSavedQuoteForAddress,
+  formatQuotedDate,
+  quoteEstimatePayload,
+} from "@/lib/saved-insurance-quotes";
 import { WindEvidenceForm } from "@/components/insurance/wind-evidence-form";
 import {CurrentHomeForm} from "@/components/insurance/current-home-form";
 import { resolveWind,windAnswersSchema,type WindAnswers,type CoastalEvidence,type PermitEvidence } from "@shared/wind-mitigation";
@@ -1031,6 +1043,18 @@ export default function InsuranceDashboard() {
   });
 
   const address = scenarios.find(s => s.id === activeScenarioId)?.address || addressParam;
+
+  // ── Saved live-carrier results (account only) ────────────────────────────
+  const queryClient = useQueryClient();
+  const savedQuotesQuery = useQuery({
+    queryKey: [...SAVED_QUOTES_QUERY_KEY, user?.id ?? "guest"],
+    queryFn: () => fetchSavedQuoteResults(path => authedFetch(path)),
+    enabled: isAuthenticated,
+    staleTime: 60_000,
+  });
+  const savedQuote = isAuthenticated
+    ? findSavedQuoteForAddress(savedQuotesQuery.data, address, policyType || null)
+    : null;
   const windPreview=useMemo(()=>windAnswersSchema.safeParse(windAnswers).success?resolveWind({
     county:rebuildRate?.county??getCountyName(address)??"",yearBuilt:Number(yearBuilt),roofYear:Number(roofYear),
     answers:windAnswers,permits:windSupporting?.permits.permits,coastal:windSupporting?.coastal,
@@ -2106,6 +2130,11 @@ export default function InsuranceDashboard() {
     setQrStillWorking(false);
     qrTimerRef.current = setInterval(() => setQrElapsed(value => value + 1), 1000);
     clearQRCache(address, policyType);
+    const quoteEstimate = quoteEstimatePayload(
+      manualAnnualPremium,
+      calc.mid,
+      rebuildRate?.countyName || rebuildRate?.county,
+    );
 
     try {
       const startRes = await authedFetch(
@@ -2146,6 +2175,7 @@ export default function InsuranceDashboard() {
             sqFt: squareFeet,
             sqFtConfirmed: true,
             assumedCredit: "Excellent (no credit check performed)",
+            ...(quoteEstimate ? { estimate: quoteEstimate } : {}),
             propertyCharacteristicLocks: propertyCharacteristicLocksRef.current,
             newPurchase: propertyDefaults.newPurchase === "Yes",
             ...(propertyDefaults.newPurchase === "No"
@@ -2292,6 +2322,18 @@ export default function InsuranceDashboard() {
     setDobInput("");
     await submitQuoteRush();
   }
+
+  // A finished run is saved server-side; refresh the saved list now and once
+  // more shortly after, since the worker saves alongside the results email.
+  useEffect(() => {
+    if (qrStatus !== "success" || !isAuthenticated) return;
+    void queryClient.invalidateQueries({ queryKey: SAVED_QUOTES_QUERY_KEY });
+    const timer = setTimeout(
+      () => void queryClient.invalidateQueries({ queryKey: SAVED_QUOTES_QUERY_KEY }),
+      15_000,
+    );
+    return () => clearTimeout(timer);
+  }, [qrStatus, isAuthenticated, queryClient]);
 
   // ── Calculations ─────────────────────────────────────────────────────────
   const region = REGIONS[regionKey];
@@ -2897,7 +2939,15 @@ export default function InsuranceDashboard() {
                   <p className="mb-3 text-xs text-muted-foreground">Assumed credit: {assumedCreditScore} (no credit check performed).</p>
                   {user&&<a className="text-xs underline" href="/admin/rebuild-cost-rates">Rebuild rates (admin only)</a>}
                   {quoteValidationMessages.length > 0 && <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950" aria-label="Required quote information"><strong>Before sending to carriers</strong><ul className="mt-2 list-disc space-y-1 pl-4">{quoteValidationMessages.map(message => <li key={message}>{message}</li>)}</ul></div>}
-                  <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50/60 p-3 text-xs leading-relaxed text-blue-950">
+                  <details
+                    className="mb-4 rounded-lg border border-blue-100 bg-blue-50/60 p-3 text-xs leading-relaxed text-blue-950"
+                    open={EXPLAINERS_OPEN_BY_DEFAULT.coverageDetails}
+                    data-testid="coverage-details-assumptions"
+                  >
+                    <summary className="cursor-pointer font-semibold text-blue-900">
+                      {COVERAGE_DETAILS_SUMMARY}
+                    </summary>
+                    <div className="mt-2">
                     {qrSharedContext && qrResultsEpoch === quoteEpochRef.current ? (
                       <>
                         <strong>Original preliminary quote inputs:</strong>{" "}
@@ -3030,7 +3080,8 @@ export default function InsuranceDashboard() {
                     </details>
                       </>
                     )}
-                  </div>
+                    </div>
+                  </details>
                   {agentVerification.length > 0 ? (
                     <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
                       <strong className="block">Agent-only verification</strong>
@@ -3071,9 +3122,73 @@ export default function InsuranceDashboard() {
                   {/* Not authenticated */}
                   {!isAuthenticated &&
                     qrStatus === "idle" && (
-                    <p className="text-xs text-muted-foreground text-center py-3">
-                      Create a free account to get live carrier quotes from your Florida-appointed insurers.
-                    </p>
+                    <div className="py-3 text-center">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void requireAccount()}
+                        data-testid="guest-live-quote-prompt"
+                      >
+                        {GUEST_LIVE_QUOTE_PROMPT}
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Saved results from the account (shown when no live run is on screen) */}
+                  {savedQuote &&
+                    qrStatus !== "starting" &&
+                    qrStatus !== "pending" &&
+                    !(qrQuotes.length > 0 && qrResultsEpoch === quoteEpochRef.current) && (
+                    <div className="mb-4 space-y-2" data-testid="saved-quote-results">
+                      <p className="text-xs font-semibold text-primary">
+                        Your saved carrier quotes · Quoted {formatQuotedDate(savedQuote.completedAt)}
+                      </p>
+                      {savedQuote.stale && (
+                        <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-950" data-testid="saved-quote-stale">
+                          {STALE_QUOTE_MESSAGE}
+                        </p>
+                      )}
+                      {savedQuote.quotes.slice(0, 3).map((q, i) => (
+                        <div
+                          key={q.siteName + i}
+                          className={`p-3 rounded-lg border ${i === 0 ? "border-yellow-300 bg-yellow-50" : "border-border bg-muted/20"}`}
+                        >
+                          <div className="flex items-start justify-between">
+                            <div className="flex items-start gap-3">
+                              <span className="text-base mt-0.5">{i + 1}</span>
+                              <div>
+                                <div className="text-sm font-semibold">{q.siteName}</div>
+                                <div className="text-xs text-muted-foreground mt-0.5 space-y-0.5">
+                                  <div>Coverage A: {q.coverageA > 0 ? fmt(q.coverageA) : "Unavailable"}</div>
+                                  <div>Hurricane deductible: {q.hurricaneDeductible || "—"}</div>
+                                  <div>AOP deductible: {q.aop || "—"}</div>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="text-right shrink-0 ml-2">
+                              <div className="text-base font-bold font-mono text-primary">{fmt(q.annualPremium)}/yr</div>
+                              <div className="text-xs text-muted-foreground">{fmt(q.monthlyPremium)}/mo</div>
+                              {q.quoteUrl && (
+                                <a
+                                  href={q.quoteUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-primary underline mt-1 block"
+                                >
+                                  View quote →
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      <p className="text-[10px] text-muted-foreground text-center leading-relaxed pt-1">
+                        Real-time carrier rates via Tateo &amp; Co ·
+                        Tateo Insurance Corp · License #L132640 ·
+                        Not a binding quote. Coverage not effective
+                        until confirmed by a licensed agent.
+                      </p>
+                    </div>
                   )}
 
                   {/* Quotes (top 3) */}

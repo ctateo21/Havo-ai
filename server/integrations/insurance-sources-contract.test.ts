@@ -65,7 +65,7 @@ test("transactional zero-quote content has agency disclosures and schedule link"
   assert.match(r.subject,/finishing your insurance quotes/);
   assert.doesNotMatch(r.subject,/carrier quotes/);
   assert.doesNotMatch(r.html,/Your preliminary insurance carrier quotes/);
-  assert.match(r.text,/finishing your quotes manually/);assert.match(r.text,/no credit check performed/);assert.match(r.text,/not a binder/);assert.match(r.text,/W142842/);assert.match(r.html,/Schedule a call/);
+  assert.match(r.text,/finishing your quotes manually/);assert.match(r.text,/no credit check performed/);assert.match(r.text,/not a binder/i);assert.match(r.text,/W142842/);assert.match(r.html,/Schedule a call/);
   const source=readFileSync(new URL("./property-alert-emails.ts",import.meta.url),"utf8").split("export async function sendQuoteRushResultsEmail")[1].split("export async function sendInternalAlert")[0];
   assert.doesNotMatch(source,/isUnsubscribed/);assert.match(source,/QUOTE_RESULTS_BCC/);
 });
@@ -74,4 +74,45 @@ test("rebuild migration seeds exactly 67 counties without invented rates",()=>{
   assert.equal([...sql.matchAll(/\('\d{3}','[^']+'\)/g)].length,67);
   assert.match(sql,/ENABLE ROW LEVEL SECURITY/);assert.match(sql,/FOR EACH ROW/);
   assert.match(sql,/INSERT INTO public.rebuild_cost_rates\(county_slug,county_name,county_fips,supported\)/);
+});
+test("client results email is compact: required disclosures present, internal agency lines absent", () => {
+  const oldPhone = process.env.AGENCY_PHONE;
+  delete process.env.AGENCY_PHONE;
+  try {
+    const r = quoteRushResultsContent({
+      propertyAddress: "100 Example St, Tampa, FL 33602",
+      quotes: [
+        { siteName: "Carrier B", annualPremium: 3000, monthlyPremium: 250, coverageA: 400000, hurricaneDeductible: "2%", aop: "$2,500" },
+        { siteName: "Carrier A", annualPremium: 2000, monthlyPremium: 166.67, coverageA: 400000, hurricaneDeductible: "2%", aop: "$2,500" },
+        { siteName: "Carrier C", annualPremium: 2500, monthlyPremium: 208.33, coverageA: 400000, hurricaneDeductible: "5%", aop: "$1,000" },
+        { siteName: "Carrier D", annualPremium: 4000, monthlyPremium: 333.33, coverageA: 400000, hurricaneDeductible: "2%", aop: "$2,500" },
+      ],
+      physicalAddress: "1 Agency Example Way, Tampa, FL",
+      unsubscribeUrl: "https://example.test/preferences",
+      assumptions: ["Credit permission — assumed, confirm with client", "Agency default: no alarms", "Cached quote reused for 30 days."],
+    });
+    for (const body of [r.text, r.html]) {
+      assert.match(body, /100 Example St/);
+      assert.match(body, /Carrier A/); assert.match(body, /Carrier C/); assert.match(body, /Carrier B/);
+      assert.doesNotMatch(body, /Carrier D/);
+      assert.match(body, /View your quotes on Havo/);
+      assert.match(body, /\/insurance\?address=/);
+      assert.match(body, /Schedule a call/);
+      assert.match(body, /preliminary quotes, subject to underwriting and inspection; premiums can change/);
+      assert.match(body, /Excellent credit \(no credit check performed\) and estimated wind mitigation features/);
+      assert.match(body, /Not a binder or proof of insurance\. Coverage is not in force until a carrier accepts an application and issues a binder or policy\./);
+      assert.match(body, /OIR-B1-1802/);
+      assert.match(body, /Tateo Insurance Corp \(License #L132640\) · Agent Paul Christian Tateo \(W142842\) · Real-time carrier rates via Tateo &(amp;)? Co\./);
+      assert.match(body, /1 Agency Example Way, Tampa, FL · \(813\) 214-8356/);
+      assert.match(body, /example\.test\/preferences/);
+      assert.match(body, /Unsubscribe/);
+      assert.doesNotMatch(body, /Credit permission|Agency default|no alarms|Cached quote/);
+      assert.doesNotMatch(body, /(^|\s)days\./m);
+    }
+    assert.ok(r.text.indexOf("Carrier A") < r.text.indexOf("Carrier C"));
+    const confirmed = quoteRushResultsContent({ propertyAddress: "100 Example St", quotes: [], physicalAddress: "x", unsubscribeUrl: "https://example.test/u", windMitigationReportConfirmed: true });
+    assert.doesNotMatch(confirmed.text, /OIR-B1-1802/);
+  } finally {
+    if (oldPhone === undefined) delete process.env.AGENCY_PHONE; else process.env.AGENCY_PHONE = oldPhone;
+  }
 });
