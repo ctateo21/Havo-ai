@@ -43,6 +43,7 @@ import {
 import { calculateDefaultHomeownersInsurance } from "@/lib/insurance-default";
 import {
   readDismissedInsuranceKeys,
+  undismissInsuranceAddress,
   writeDismissedInsuranceKeys,
 } from "@/lib/insurance-dismissals";
 import {
@@ -528,12 +529,16 @@ function AddressSearchBar({ onNavigate, compact = false }: {
   onNavigate: (addr: string) => void;
   compact?: boolean;
 }) {
-  const { bindInputRef, inputRef } = useGooglePlaces({
+  const { bindInputRef, inputRef, isSelectionPending } = useGooglePlaces({
     onPlaceSelected: place => onNavigate(place.formatted_address),
   });
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // A picked suggestion is still loading its full address. The input
+    // holds only the partial text typed so far; the selection navigates
+    // with the complete address as soon as it resolves.
+    if (isSelectionPending()) return;
     const val = inputRef.current?.value?.trim();
     if (val) onNavigate(val);
   }
@@ -1402,6 +1407,10 @@ function InsuranceTab() {
     const trimmed = addr.trim();
     if (!trimmed) return;
     const incomingKey = normalizePropertyKey(trimmed).key;
+    // Re-adding an address the user deleted earlier must clear that
+    // dismissal first; otherwise the card stays hidden and the insurance
+    // page redirects to the first remaining saved card instead.
+    setDismissedKeys(undismissInsuranceAddress(userId, trimmed, incomingKey));
     const existing = insurance.find(s => {
       if (s.address.toLowerCase().trim() === trimmed.toLowerCase()) return true;
       if (!incomingKey) return false;
