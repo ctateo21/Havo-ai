@@ -53,3 +53,13 @@ test("durable import worker sends the operational agent alert", () => {
   assert.match(worker,/await sendLiveInsuranceLeadAlert/);
   assert.match(worker,/import requires manual reconciliation/);
 });
+test("team alert lists internal agency defaults only when notes are present", () => {
+  const content = liveInsuranceLeadContent({
+    ...lead,
+    agencyNotes: ["Credit score — assumed Excellent, not verified", "Cached quote valid for 30 days.\nline"],
+  });
+  assert.match(content.text, /Agency defaults and assumptions \(verify before binding\):\n- Credit score — assumed Excellent, not verified\n- Cached quote valid for 30 days\. line/);
+  assert.match(content.html, /<li>Credit score — assumed Excellent, not verified<\/li>/);
+  const empty = liveInsuranceLeadContent({ ...lead, agencyNotes: [] });
+  assert.doesNotMatch(empty.text + empty.html, /Agency defaults/);
+});

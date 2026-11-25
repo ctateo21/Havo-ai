@@ -17,6 +17,7 @@ import {
 import { sendQuoteRushResultsEmail,sendInternalAlert } from "./property-alert-emails";
 import {sendLiveInsuranceLeadAlert} from "./live-insurance-lead-alert";
 import {quoteRushPaused} from "./quoterush-pause";
+import {saveCompletedQuoteRun} from "./saved-quote-results";
 
 export const QUOTE_POLL_INTERVAL_MS = 20_000;
 export const MAX_QUOTE_POLL_ATTEMPTS = 36;
@@ -59,6 +60,9 @@ export interface QuotePollingDependencies {
     idempotencyKey: string;
     assumptions?: string[];
   }) => Promise<{ status: "sent" | "failed" | "skipped"; error: string | null }>;
+  /** Saves a successful run to the requesting user's account. Must never
+   * throw; idempotent because it can run again on recovery passes. */
+  saveOwnerResult?: (row: QuoteCacheRow) => Promise<void>;
 }
 
 const defaultDependencies: QuotePollingDependencies = {
@@ -73,7 +77,7 @@ const defaultDependencies: QuotePollingDependencies = {
     const contact=insuranceContact(profile,metadata,row.emailRecipient??"");
     await notifyInsuranceCrm(row,contact,"No usable carrier quotes; agent follow-up requested");
     await sendLiveInsuranceLeadAlert({address:row.addressDisplay,name:contact.name||"Contact details need review",email:contact.email,phone:contact.phone,
-      requestId:`manual-${row.id}-${row.triggeredAt.getTime()}`});
+      agencyNotes:row.assumptions??[],requestId:`manual-${row.id}-${row.triggeredAt.getTime()}`});
   },
   getQuotes,
   readQuoteCache,
@@ -81,6 +85,7 @@ const defaultDependencies: QuotePollingDependencies = {
   claimQuotePoll: claimQuotePollJob,
   claimQuoteResultEmail,
   sendResultsEmail: sendQuoteRushResultsEmail,
+  saveOwnerResult: row => saveCompletedQuoteRun(row),
 };
 
 type PollState = {
@@ -159,6 +164,12 @@ async function deliverResultsEmail(
   row: QuoteCacheRow,
   dependencies: QuotePollingDependencies,
 ): Promise<void> {
+  // Every success path reaches here. Save before the email so the account
+  // shows the result even if delivery fails; a failure here is swallowed.
+  if (row.status === "success") {
+    try { await dependencies.saveOwnerResult?.(row); }
+    catch { console.error("[qr-background] saved result failed"); }
+  }
   const claimed = await dependencies.claimQuoteResultEmail(row.id);
   if (!claimed) return;
   if (claimed.emailDeliveryStatus === "quarantined") return;

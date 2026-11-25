@@ -8,6 +8,9 @@ export interface LiveInsuranceLead {
   email: string;
   requestId: string;
   reviewReason?: string;
+  /** Internal agency defaults/assumptions and field-confidence notes. These
+   * are kept out of the client results email and belong here. */
+  agencyNotes?: string[];
 }
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, character => ({
@@ -23,11 +26,20 @@ export function liveInsuranceLeadContent(lead: LiveInsuranceLead) {
     ["Email", singleLine(lead.email) || "Not provided"],
     ...(lead.reviewReason ? [["Agent review", singleLine(lead.reviewReason)]] : []),
   ];
+  const sections = ([
+    ["Agency defaults and assumptions (verify before binding)", lead.agencyNotes],
+  ] as const)
+    .map(([title, lines]) => [title, (lines ?? []).map(singleLine).filter(Boolean)] as const)
+    .filter(([, lines]) => lines.length > 0);
   return {
     subject: `LIVE INSURANCE LEAD: ${singleLine(lead.address)}`,
-    text: fields.map(([label, value]) => `${label}: ${value}`).join("\n"),
+    text: fields.map(([label, value]) => `${label}: ${value}`).join("\n") +
+      sections.map(([title, lines]) => `\n\n${title}:\n${lines.map(l => `- ${l}`).join("\n")}`).join(""),
     html: `<div style="font-family:Arial,sans-serif;font-size:14px">${fields
       .map(([label, value]) => `<p><strong>${label}:</strong> ${escapeHtml(value)}</p>`)
+      .join("")}${sections
+      .map(([title, lines]) => `<p><strong>${escapeHtml(title)}:</strong></p><ul>${lines
+        .map(l => `<li>${escapeHtml(l)}</li>`).join("")}</ul>`)
       .join("")}</div>`,
   };
 }

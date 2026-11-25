@@ -1,4 +1,5 @@
 import type { ComponentProps } from "react";
+import { EXPLAINERS_OPEN_BY_DEFAULT, REBUILD_EXPLANATION_SUMMARY } from "@/lib/saved-insurance-quotes";
 import { InsuranceEstimateForm } from "./insurance-estimate-form";
 
 export type FieldEvidence = { value: unknown; source: string; sourceUrl?: string; fetchedAt?: string };
@@ -91,9 +92,13 @@ export function SourcedInsuranceForm(p: Props) {
       </div>
     </details>
     <div className="space-y-3 border-t border-border pt-5">
-      <label className="block space-y-1.5"><span className={labelClass}>Estimated rebuild / replacement cost (Coverage A)</span><input type="number" min="1" value={p.rebuild || ""} onChange={e => p.onRebuildChange(Number(e.target.value))} className={inputClass} data-testid="input-coverage-a" /><span className="block text-xs leading-relaxed text-muted-foreground">{p.rebuildExplanation}</span></label>
+      <label className="block space-y-1.5"><span className={labelClass}>Estimated rebuild / replacement cost (Coverage A)</span><input type="number" min="1" value={p.rebuild || ""} onChange={e => p.onRebuildChange(Number(e.target.value))} className={inputClass} data-testid="input-coverage-a" /></label>
       {p.onResetRebuild && <button type="button" className="text-xs font-medium text-primary underline underline-offset-2" onClick={p.onResetRebuild}>Reset to calculated rebuild cost</button>}
-      <p className="text-xs leading-relaxed text-muted-foreground">Rebuild cost is not market value. Safer construction and mitigation may lower premiums even when rebuilding costs more. Carriers may adjust Coverage A after reviewing the home.</p>
+      <details className="text-xs leading-relaxed text-muted-foreground" open={EXPLAINERS_OPEN_BY_DEFAULT.rebuild} data-testid="rebuild-cost-explanation">
+        <summary className="cursor-pointer font-medium text-foreground">{REBUILD_EXPLANATION_SUMMARY}</summary>
+        <span className="mt-1 block">{p.rebuildExplanation}</span>
+        <p className="mt-1">Rebuild cost is not market value. Safer construction and mitigation may lower premiums even when rebuilding costs more. Carriers may adjust Coverage A after reviewing the home.</p>
+      </details>
     </div>
     <div className="rounded-2xl bg-primary p-6 text-primary-foreground shadow-lg">
       <div className="text-xs font-semibold uppercase tracking-widest opacity-70">Estimated annual premium</div>

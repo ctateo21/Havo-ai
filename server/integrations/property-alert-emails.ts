@@ -460,9 +460,20 @@ export interface QuoteRushEmailQuote {
 }
 
 export const WIND_MITIGATION_DISCLOSURE =
-  "This estimate assumes wind mitigation credits based on the home's age. " +
-  "A wind mitigation inspection is required to confirm them — without one, " +
-  "your premium may be higher.";
+  "Wind mitigation credits require a signed Uniform Mitigation Verification " +
+  "Inspection form (OIR-B1-1802) from a qualified inspector.";
+export const QUOTE_PRELIMINARY_DISCLOSURE =
+  "These are preliminary quotes, subject to underwriting and inspection; premiums can change.";
+export const QUOTE_ASSUMPTIONS_DISCLOSURE =
+  "Quotes assume Excellent credit (no credit check performed) and estimated wind mitigation features.";
+export const QUOTE_BINDER_DISCLOSURE =
+  "Not a binder or proof of insurance. Coverage is not in force until a carrier accepts an application and issues a binder or policy.";
+export const QUOTE_LICENSE_LINE =
+  "Quotes provided by Tateo Insurance Corp (License #L132640) · Agent Paul Christian Tateo (W142842) · Real-time carrier rates via Tateo & Co.";
+/** The agency phone published in the site header/footer; AGENCY_PHONE overrides. */
+export function agencyPhone(): string {
+  return process.env.AGENCY_PHONE?.trim() || "(813) 214-8356";
+}
 
 function quoteRushMoney(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—";
@@ -473,75 +484,88 @@ function quoteRushMoney(value: number | null | undefined): string {
   }).format(value);
 }
 
+/** Compact client results email. Internal agency defaults and field notes
+ * are intentionally absent; they go to the team alert instead. */
 export function quoteRushResultsContent(args: {
   propertyAddress: string;
   quotes: QuoteRushEmailQuote[];
   windMitigationReportConfirmed?: boolean;
   unsubscribeUrl: string;
   physicalAddress: string;
+  phone?: string;
+  viewQuotesUrl?: string;
+  /** Accepted for compatibility; never rendered to the client. */
   assumptions?: string[];
 }): { subject: string; html: string; text: string } {
-  const quotes = args.quotes.filter(q=>q.annualPremium>0).sort((a,b)=>a.annualPremium-b.annualPremium).slice(0, 3);
-  const license="Quotes provided by Tateo Insurance Corp (License #L132640) · Agent Paul Christian Tateo (W142842) · Real-time carrier rates via Tateo & Co.";
-  const binder="These are preliminary quotes, not a binder or proof of insurance. Coverage is not in force until a carrier accepts an application and issues a binder or policy. Premiums can change after underwriting and inspections.";
-  const assumptions=[`Assumed credit: Excellent (no credit check performed)`,...(args.assumptions??[])];
-  const rawSchedule=process.env.SCHEDULE_CALL_URL??"https://calendar.app.google/bGd2q1fVCsmzPgPb6";
-  let schedule="";try{const u=new URL(rawSchedule);if(u.protocol==="https:")schedule=u.toString();}catch{/* No unsafe link. */}
-  const noQuotes="Our agents are finishing your quotes manually and will contact you.";
-  const rows = quotes.map((quote, index) => ({
-    ...quote,
-    rank: index + 1,
-  }));
-  const textRows = rows.map(quote =>
-    `${quote.rank}. ${quote.siteName}\n` +
-    `Annual premium: ${quoteRushMoney(quote.annualPremium)}\n` +
-    `Monthly equivalent: ${quoteRushMoney(quote.monthlyPremium)}\n` +
-    `Coverage A: ${quote.coverageA>0?quoteRushMoney(quote.coverageA):"Unavailable"}\n` +
-    `Hurricane deductible: ${quote.hurricaneDeductible || "—"}\n` +
-    `AOP deductible: ${quote.aop || "—"}`
-  );
-  const disclosure = args.windMitigationReportConfirmed === true
-    ? ""
-    : `\n\n${WIND_MITIGATION_DISCLOSURE}`;
-  const subject = args.quotes.length
+  const rows = args.quotes
+    .filter(q => q.annualPremium > 0)
+    .sort((a, b) => a.annualPremium - b.annualPremium)
+    .slice(0, 3)
+    .map((quote, index) => ({ ...quote, rank: index + 1 }));
+  const phone = args.phone?.trim() || agencyPhone();
+  const rawSchedule = process.env.SCHEDULE_CALL_URL ?? "https://calendar.app.google/bGd2q1fVCsmzPgPb6";
+  let schedule = "";
+  try { const u = new URL(rawSchedule); if (u.protocol === "https:") schedule = u.toString(); } catch { /* No unsafe link. */ }
+  const appUrl = (process.env.APP_URL ?? "https://havofl.com").replace(/\/$/, "");
+  const viewUrl = args.viewQuotesUrl ??
+    `${appUrl}/insurance?address=${encodeURIComponent(args.propertyAddress)}`;
+  const noQuotes = "Our agents are finishing your quotes manually and will contact you.";
+  const heading = rows.length ? "Your preliminary insurance carrier quotes" : "We're finishing your insurance quotes";
+  const subject = rows.length
     ? `Your insurance carrier quotes for ${args.propertyAddress}`
     : `We're finishing your insurance quotes for ${args.propertyAddress}`;
-  const text =
-    (rows.length ? `Your preliminary insurance carrier quotes\n\n` : `We're finishing your insurance quotes\n\n`) +
-    `Property: ${args.propertyAddress}\n\n` +
-    textRows.join("\n\n") +
-    (rows.length?"":noQuotes)+
-    disclosure +
-    `\n\n${assumptions.join("\n")}\n${schedule?`Schedule a call: ${schedule}`:"Contact your agent to schedule a call."}\n\n${license}\n${binder}\n` +
-    `${args.physicalAddress}\n` +
-    `Unsubscribe: ${args.unsubscribeUrl}`;
-  const htmlRows = rows.map(quote =>
-    `<tr>` +
-    `<td style="padding:8px 10px;vertical-align:top"><strong>${quote.rank}. ${esc(quote.siteName)}</strong></td>` +
-    `<td style="padding:8px 10px;vertical-align:top">` +
-    `Annual premium: ${esc(quoteRushMoney(quote.annualPremium))}<br/>` +
-    `Monthly equivalent: ${esc(quoteRushMoney(quote.monthlyPremium))}<br/>` +
-    `Coverage A: ${quote.coverageA>0?esc(quoteRushMoney(quote.coverageA)):"Unavailable"}<br/>` +
-    `Hurricane deductible: ${esc(quote.hurricaneDeductible || "—")}<br/>` +
-    `AOP deductible: ${esc(quote.aop || "—")}` +
-    `</td></tr>`
-  ).join("");
-  const htmlDisclosure = args.windMitigationReportConfirmed === true
-    ? ""
-    : `<p style="color:#6b4e00;background:#fff8e1;padding:10px;border-radius:6px">${esc(WIND_MITIGATION_DISCLOSURE)}</p>`;
+  const disclosures = [
+    QUOTE_PRELIMINARY_DISCLOSURE,
+    QUOTE_ASSUMPTIONS_DISCLOSURE,
+    QUOTE_BINDER_DISCLOSURE,
+    ...(args.windMitigationReportConfirmed === true ? [] : [WIND_MITIGATION_DISCLOSURE]),
+  ];
+  const cov = (n: number) => (n > 0 ? quoteRushMoney(n) : "—");
+
+  const text = [
+    heading,
+    `Property: ${args.propertyAddress}`,
+    rows.length
+      ? rows.map(q =>
+          `${q.rank}. ${q.siteName} — ${quoteRushMoney(q.annualPremium)}/yr (${quoteRushMoney(q.monthlyPremium)}/mo) · ` +
+          `Coverage A ${cov(q.coverageA)} · Hurricane ${q.hurricaneDeductible || "—"} · AOP ${q.aop || "—"}`).join("\n")
+      : noQuotes,
+    `View your quotes on Havo: ${viewUrl}\n` +
+      (schedule ? `Schedule a call: ${schedule}` : `Call us to schedule: ${phone}`),
+    disclosures.join("\n"),
+    `${QUOTE_LICENSE_LINE}\n${args.physicalAddress} · ${phone}\nUnsubscribe: ${args.unsubscribeUrl}`,
+  ].join("\n\n");
+
+  const th = `style="text-align:left;padding:6px 8px;border-bottom:1px solid #ddd;font-weight:bold"`;
+  const td = `style="padding:6px 8px;border-bottom:1px solid #eee;vertical-align:top"`;
+  const table = rows.length
+    ? `<table cellpadding="0" style="border-collapse:collapse;width:100%;font-size:13px">` +
+      `<tr><th ${th}>Carrier</th><th ${th}>Annual</th><th ${th}>Monthly</th><th ${th}>Coverage A</th>` +
+      `<th ${th}>Hurricane</th><th ${th}>AOP</th></tr>` +
+      rows.map(q =>
+        `<tr><td ${td}><strong>${q.rank}. ${esc(q.siteName)}</strong></td>` +
+        `<td ${td}>${esc(quoteRushMoney(q.annualPremium))}</td>` +
+        `<td ${td}>${esc(quoteRushMoney(q.monthlyPremium))}</td>` +
+        `<td ${td}>${esc(cov(q.coverageA))}</td>` +
+        `<td ${td}>${esc(q.hurricaneDeductible || "—")}</td>` +
+        `<td ${td}>${esc(q.aop || "—")}</td></tr>`).join("") +
+      `</table>`
+    : `<p>${esc(noQuotes)}</p>`;
   const html =
-    `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">` +
-    `<p style="font-size:22px;font-weight:bold;color:${HAVO_NAVY}">Havo</p>` +
-    `<h1 style="font-size:20px;color:${HAVO_NAVY}">${rows.length?"Your preliminary insurance carrier quotes":"We're finishing your insurance quotes"}</h1>` +
-    `<p>Property: <strong>${esc(args.propertyAddress)}</strong></p>` +
-    `<table cellpadding="0" style="border-collapse:collapse;width:100%;font-size:14px">${htmlRows}</table>` +
-    htmlDisclosure +
-    (rows.length?"":`<p>${esc(noQuotes)}</p>`)+
-    `<ul>${assumptions.map(a=>`<li>${esc(a)}</li>`).join("")}</ul>`+
-    (schedule?`<p><a href="${esc(schedule)}" style="display:inline-block;padding:12px;background:#007f77;color:white">Schedule a call</a></p>`:"<p>Contact your agent to schedule a call.</p>")+
-    `<p style="font-size:12px;color:#888;margin-top:20px">` +
-    `${esc(license)}<br/>${esc(binder)}<br/>` +
-    `${esc(args.physicalAddress)}<br/>` +
+    `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#222">` +
+    `<p style="font-size:22px;font-weight:bold;color:${HAVO_NAVY};margin:0 0 8px">Havo</p>` +
+    `<h1 style="font-size:19px;color:${HAVO_NAVY};margin:0 0 8px">${esc(heading)}</h1>` +
+    `<p style="margin:0 0 12px">Property: <strong>${esc(args.propertyAddress)}</strong></p>` +
+    table +
+    `<p style="margin:16px 0">` +
+    `<a href="${esc(viewUrl)}" style="display:inline-block;padding:10px 14px;background:${HAVO_NAVY};color:#fff;text-decoration:none;border-radius:6px">View your quotes on Havo</a> ` +
+    (schedule
+      ? `<a href="${esc(schedule)}" style="display:inline-block;padding:10px 14px;background:#007f77;color:#fff;text-decoration:none;border-radius:6px">Schedule a call</a>`
+      : `<span>Call us to schedule: ${esc(phone)}</span>`) +
+    `</p>` +
+    `<p style="font-size:12px;color:#555;line-height:1.5;margin:0 0 12px">${disclosures.map(esc).join("<br/>")}</p>` +
+    `<p style="font-size:12px;color:#888;line-height:1.5;margin:0">${esc(QUOTE_LICENSE_LINE)}<br/>` +
+    `${esc(args.physicalAddress)} · ${esc(phone)}<br/>` +
     `<a href="${esc(args.unsubscribeUrl)}" style="color:#888">Unsubscribe</a></p>` +
     `</div>`;
   return { subject, html, text };
@@ -573,7 +597,6 @@ export async function sendQuoteRushResultsEmail(args: {
     windMitigationReportConfirmed: args.windMitigationReportConfirmed,
     unsubscribeUrl,
     physicalAddress,
-    assumptions:args.assumptions,
   });
   const result = await sendOne({
     to: args.to,

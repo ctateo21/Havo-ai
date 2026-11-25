@@ -74,6 +74,14 @@ import {
 import { AlertBell } from "@/components/dashboard/alert-bell";
 import { effectiveAnnualFloodInsurance } from "@shared/flood-insurance-policy";
 import { BuyerAffordability } from "@/components/buyer-affordability";
+import { authedFetch } from "@/lib/authed-fetch";
+import {
+  SAVED_QUOTES_QUERY_KEY,
+  fetchSavedQuoteResults,
+  findSavedQuoteForAddress,
+  insuranceCardSummary,
+  type SavedQuoteResult,
+} from "@/lib/saved-insurance-quotes";
 
 interface LiveRatesResponse { rates: LiveRate[]; source: string; disclaimer: string; asOf: string; }
 
@@ -973,6 +981,12 @@ function InsuranceTab() {
   const { toast } = useToast();
   const { user } = useAuth();
   const userId = user?.id ?? null;
+  const savedQuotesQuery = useQuery({
+    queryKey: [...SAVED_QUOTES_QUERY_KEY, userId ?? "guest"],
+    queryFn: () => fetchSavedQuoteResults(path => authedFetch(path)),
+    enabled: !!userId,
+    staleTime: 60_000,
+  });
 
   // Mirror auth caches into state so the tab re-renders when scenarios
   // load from Supabase or when other tabs update them.
@@ -1457,6 +1471,11 @@ function InsuranceTab() {
           <InsuranceRowCard
             key={row.key}
             row={row}
+            savedQuote={findSavedQuoteForAddress(
+              savedQuotesQuery.data,
+              row.address,
+              row.insurance?.policyType ?? null,
+            )}
             onOccupancyChange={next => handleOccupancyChange(row.key, next)}
             onOpen={() => setLocation(`/insurance?address=${encodeURIComponent(row.address)}`)}
             onDelete={() =>
@@ -1470,9 +1489,11 @@ function InsuranceTab() {
 }
 
 function InsuranceRowCard({
-  row, onOccupancyChange, onOpen, onDelete,
+  row, savedQuote = null, onOccupancyChange, onOpen, onDelete,
 }: {
   row: InsuranceRow;
+  /** The user's saved live-carrier result for this address, if any. */
+  savedQuote?: SavedQuoteResult | null;
   onOccupancyChange: (next: OccupancyType) => void;
   onOpen: () => void;
   /** Removes the property from the Insurance tab: deletes the
@@ -1482,8 +1503,11 @@ function InsuranceRowCard({
   onDelete?: () => void;
 }) {
   const ins = row.insurance;
-  const annual = ins?.annualPremium;
-  const monthly = typeof annual === "number" ? annual / 12 : undefined;
+  // A saved live carrier quote replaces the estimate figures; "Estimate"
+  // shows only when no live quote exists for this address.
+  const summary = insuranceCardSummary(ins?.annualPremium, !!ins, savedQuote);
+  const annual = summary.annual;
+  const monthly = summary.monthly;
   // Policy type display rules (spec: insurance-overview-occupancy-policy-type-live-update):
   //   - If `policyTypeSource === "manual"`, ALWAYS show the persisted
   //     `ins.policyType` — never recompute, never overwrite. This is
@@ -1533,7 +1557,7 @@ function InsuranceRowCard({
   const floodRaw = typeof ua?.flood_zone === "string" ? ua.flood_zone.trim() : "";
   const floodDisplay = floodRaw || "—";
   const carrierRaw = typeof ua?.carrier === "string" ? ua.carrier.trim() : "";
-  const carrierDisplay = ins ? (carrierRaw || "TBD") : "—";
+  const carrierDisplay = summary.carrier ?? (ins ? (carrierRaw || "TBD") : "—");
   console.debug("[insurance-overview] detail line", {
     key: row.key,
     rebuild: rebuildDisplay,
@@ -1596,7 +1620,12 @@ function InsuranceRowCard({
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Status</p>
-              <p className="font-semibold">{ins ? "Estimate" : "Not started"}</p>
+              <p className="font-semibold" data-testid={`insurance-status-${row.key}`}>{summary.status}</p>
+              {summary.quotedDate && (
+                <p className="text-[10px] text-muted-foreground">
+                  Quoted {summary.quotedDate}{summary.stale ? " · may have changed" : ""}
+                </p>
+              )}
             </div>
             {/* Detail-line: Rebuild, Hurricane, AOP deductible, Flood
                 zone, and Carrier all mirror the detail view's stored
