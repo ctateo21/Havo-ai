@@ -1705,17 +1705,20 @@ export default function Dashboard() {
     <div className="min-h-screen bg-muted/30">
       {/* Dashboard header bar */}
       <div className="bg-white border-b">
-        <div className="container mx-auto px-4 py-5 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
+        {/* Wraps on phones: the name block shrinks (long emails truncate)
+            and the action buttons drop to their own row instead of pushing
+            the page wider than the screen. */}
+        <div className="container mx-auto px-4 py-5 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="h-10 w-10 rounded-full bg-primary text-white flex items-center justify-center font-bold text-sm shrink-0">
               {initials}
             </div>
-            <div>
-              <p className="font-semibold">{user.name}</p>
-              <p className="text-xs text-muted-foreground">{user.email}</p>
+            <div className="min-w-0">
+              <p className="font-semibold truncate">{user.name}</p>
+              <p className="text-xs text-muted-foreground truncate">{user.email}</p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 flex-wrap items-center gap-3">
             <Button
               variant="outline"
               size="sm"
