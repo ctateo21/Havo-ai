@@ -71,9 +71,11 @@ import { normalizePropertyKey } from "@/lib/property-key";
 import {
   isInsuranceAddressDismissed,
   readDismissedInsuranceKeys,
+  undismissInsuranceAddress,
 } from "@/lib/insurance-dismissals";
 import { useGooglePlaces } from "@/hooks/use-google-places";
 import LeadCaptureDialog from "@/components/ui/lead-capture-dialog";
+import AgentVerificationSummary from "@/components/insurance/agent-verification-summary";
 import { trackEvent } from "@/lib/posthog";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -1069,6 +1071,12 @@ export default function InsuranceDashboard() {
 
   // ── Address editing ──────────────────────────────────────────────────────
   const [isEditingAddress, setIsEditingAddress] = useState(false);
+  // Explicitly entering an address overrides an earlier delete of it;
+  // otherwise tab hydration treats it as dismissed and jumps to another card.
+  function openInsuranceAddress(addr: string) {
+    undismissInsuranceAddress(getSession()?.id ?? null, addr, normalizePropertyKey(addr).key);
+    setLocation(`/insurance?address=${encodeURIComponent(addr)}`);
+  }
   const [editAddressVal, setEditAddressVal] = useState(addressParam);
   const [showEmptyAddInput, setShowEmptyAddInput] = useState(false);
   const {
@@ -1080,7 +1088,7 @@ export default function InsuranceDashboard() {
       if (!await authorize("insurance", place.formatted_address)) return;
       setIsEditingAddress(false);
       setShowEmptyAddInput(false);
-      setLocation(`/insurance?address=${encodeURIComponent(place.formatted_address)}`);
+      openInsuranceAddress(place.formatted_address);
     },
   });
 
@@ -1397,7 +1405,7 @@ export default function InsuranceDashboard() {
       { id: newId, address: addr, savedSettings: null },
     ]);
     setActiveScenarioId(newId);
-    setLocation(`/insurance?address=${encodeURIComponent(addr)}`);
+    openInsuranceAddress(addr);
     setRegionKey(getRegionFromAddress(addr));
     setRebuild(defaultRebuildFor(addr, null));
     setRoofYear(0);
@@ -2534,7 +2542,7 @@ export default function InsuranceDashboard() {
                           const val = (e.target as HTMLInputElement).value.trim();
                           if (val) {
                             setShowEmptyAddInput(false);
-                            setLocation(`/insurance?address=${encodeURIComponent(val)}`);
+                            openInsuranceAddress(val);
                           }
                         } else if (e.key === "Escape") {
                           setShowEmptyAddInput(false);
@@ -2601,7 +2609,7 @@ export default function InsuranceDashboard() {
           {newPurchase===true?
             <CurrentHomeForm address={currentHome} onAddress={setCurrentHome} mortgage={homeMortgage} onMortgage={setHomeMortgage} newPurchase={true}/>:
             <div className="container mx-auto px-4 py-2">
-              <label className="text-sm">Will this home have a mortgage? <select aria-label="Will this home have a mortgage?" value={homeMortgage} onChange={e=>setHomeMortgage(e.target.value)} className="border rounded p-2">
+              <label className="flex flex-wrap items-center gap-2 text-sm">Will this home have a mortgage? <select aria-label="Will this home have a mortgage?" value={homeMortgage} onChange={e=>setHomeMortgage(e.target.value)} className="max-w-full min-w-0 border rounded p-2">
                 <option value="">Please select</option><option value="yes">Yes — financed purchase or refinance</option><option value="no">No — owned outright or cash purchase</option>
               </select></label>
             </div>}
@@ -2643,7 +2651,7 @@ export default function InsuranceDashboard() {
                       onKeyDown={async e => {
                         if (e.key === "Enter") {
                           const val = editAddressVal.trim();
-                          if (val && await authorize("insurance", val)) setLocation(`/insurance?address=${encodeURIComponent(val)}`);
+                          if (val && await authorize("insurance", val)) openInsuranceAddress(val);
                           setIsEditingAddress(false);
                         } else if (e.key === "Escape") {
                           setIsEditingAddress(false);
@@ -3217,16 +3225,7 @@ export default function InsuranceDashboard() {
                     )}
                     </div>
                   </details>
-                  {agentVerification.length > 0 ? (
-                    <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
-                      <strong className="block">Agent-only verification</strong>
-                      <ul className="mt-1 list-disc space-y-0.5 pl-4">
-                        {agentVerification.map(field => (
-                          <li key={field}>{field}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
+                  <AgentVerificationSummary fields={agentVerification} />
 
                   {/* Progress bar */}
                   {(qrStatus === "starting" ||
@@ -3277,6 +3276,7 @@ export default function InsuranceDashboard() {
                       <Button
                         size="sm"
                         variant="outline"
+                        className="h-auto max-w-full whitespace-normal py-2 text-center"
                         onClick={() => void requireAccount()}
                         data-testid="guest-live-quote-prompt"
                       >

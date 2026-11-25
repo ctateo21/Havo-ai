@@ -24,7 +24,7 @@ export function CurrentHomeForm({address,onAddress,mortgage,onMortgage,newPurcha
         </label>)}</div>
       </fieldset>}
       <label className="block py-2 text-sm">Will this home have a mortgage?
-        <select aria-label="Will this home have a mortgage?" value={mortgage} onChange={e=>onMortgage(e.target.value)} className="block border rounded p-2">
+        <select aria-label="Will this home have a mortgage?" value={mortgage} onChange={e=>onMortgage(e.target.value)} className="block max-w-full border rounded p-2">
           <option value="">Please select</option><option value="yes">Yes</option><option value="no">No</option>
         </select>
       </label>

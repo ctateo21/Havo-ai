@@ -43,6 +43,7 @@ import {
 import { calculateDefaultHomeownersInsurance } from "@/lib/insurance-default";
 import {
   readDismissedInsuranceKeys,
+  undismissInsuranceAddress,
   writeDismissedInsuranceKeys,
 } from "@/lib/insurance-dismissals";
 import {
@@ -528,12 +529,16 @@ function AddressSearchBar({ onNavigate, compact = false }: {
   onNavigate: (addr: string) => void;
   compact?: boolean;
 }) {
-  const { bindInputRef, inputRef } = useGooglePlaces({
+  const { bindInputRef, inputRef, isSelectionPending } = useGooglePlaces({
     onPlaceSelected: place => onNavigate(place.formatted_address),
   });
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // A picked suggestion is still loading its full address. The input
+    // holds only the partial text typed so far; the selection navigates
+    // with the complete address as soon as it resolves.
+    if (isSelectionPending()) return;
     const val = inputRef.current?.value?.trim();
     if (val) onNavigate(val);
   }
@@ -1402,6 +1407,10 @@ function InsuranceTab() {
     const trimmed = addr.trim();
     if (!trimmed) return;
     const incomingKey = normalizePropertyKey(trimmed).key;
+    // Re-adding an address the user deleted earlier must clear that
+    // dismissal first; otherwise the card stays hidden and the insurance
+    // page redirects to the first remaining saved card instead.
+    setDismissedKeys(undismissInsuranceAddress(userId, trimmed, incomingKey));
     const existing = insurance.find(s => {
       if (s.address.toLowerCase().trim() === trimmed.toLowerCase()) return true;
       if (!incomingKey) return false;
@@ -1705,17 +1714,20 @@ export default function Dashboard() {
     <div className="min-h-screen bg-muted/30">
       {/* Dashboard header bar */}
       <div className="bg-white border-b">
-        <div className="container mx-auto px-4 py-5 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
+        {/* Wraps on phones: the name block shrinks (long emails truncate)
+            and the action buttons drop to their own row instead of pushing
+            the page wider than the screen. */}
+        <div className="container mx-auto px-4 py-5 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="h-10 w-10 rounded-full bg-primary text-white flex items-center justify-center font-bold text-sm shrink-0">
               {initials}
             </div>
-            <div>
-              <p className="font-semibold">{user.name}</p>
-              <p className="text-xs text-muted-foreground">{user.email}</p>
+            <div className="min-w-0">
+              <p className="font-semibold truncate">{user.name}</p>
+              <p className="text-xs text-muted-foreground truncate">{user.email}</p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 flex-wrap items-center gap-3">
             <Button
               variant="outline"
               size="sm"

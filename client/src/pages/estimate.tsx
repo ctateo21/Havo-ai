@@ -774,7 +774,7 @@ function SliderInput({ label, value, onChange, min, max, step = 1, prefix, suffi
 
   if (compact) {
     return (
-      <div className={`w-[132px] ${disabled ? "opacity-40 pointer-events-none" : ""}`}>
+      <div className={`w-[132px] min-w-0 max-w-full shrink ${disabled ? "opacity-40 pointer-events-none" : ""}`}>
         {valueInput}
       </div>
     );
@@ -3274,9 +3274,9 @@ export default function Estimate() {
     if (compact) {
       return (
         <div>
-          <div className="flex items-center justify-between gap-3 px-2 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2 py-2">
             <span className="text-xs text-muted-foreground">Seller Concessions</span>
-            <div className="flex items-center gap-2">
+            <div className="ml-auto flex min-w-0 items-center gap-2">
               <div className="inline-flex shrink-0 overflow-hidden rounded border border-border text-[10px] leading-none">
                 <button
                   type="button"
@@ -3458,11 +3458,11 @@ export default function Estimate() {
     const minAmt = price > 0 ? Math.round(price * (minDown / 100)) : 0;
     const maxAmt = Math.max(minAmt, Math.floor(price * (MAX_DOWN_PAYMENT_PCT / 100)));
     return (
-      <div className="flex items-center justify-between gap-3 px-2 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2 py-2">
         <span className="text-xs text-muted-foreground">
           Down Payment ({fmt(dpAmt)} · {Number(inputs.downPaymentPct).toFixed(2)}%)
         </span>
-        <div className="flex items-center gap-2">
+        <div className="ml-auto flex min-w-0 items-center gap-2">
           <div className="inline-flex shrink-0 overflow-hidden rounded border border-border text-[10px] leading-none">
             <button
               type="button"
@@ -4320,11 +4320,11 @@ export default function Estimate() {
     const subColor = status === "green" ? "text-green-600" : status === "yellow" ? "text-yellow-600" : status === "red" ? "text-red-600" : "text-muted-foreground";
     return (
       <div
-        className={`flex justify-between items-center py-2 px-2 rounded-md transition-colors ${bg} ${onClick ? "cursor-pointer hover:bg-primary/5 group" : ""}`}
+        className={`flex justify-between items-center gap-3 py-2 px-2 rounded-md transition-colors ${bg} ${onClick ? "cursor-pointer hover:bg-primary/5 group" : ""}`}
         onClick={onClick}
         data-testid={testId}
       >
-        <span className={`min-w-0 text-sm ${labelColor} flex flex-wrap items-center gap-x-1.5 gap-y-0`}>
+        <span className={`min-w-0 flex-1 text-sm ${labelColor} flex flex-wrap items-center gap-x-1.5 gap-y-0`}>
           {label}
           {onClick && <ChevronDown className="h-3 w-3 opacity-0 group-hover:opacity-60 transition-opacity" />}
           {link && (
@@ -4338,8 +4338,10 @@ export default function Estimate() {
             </a>
           )}
         </span>
-        <span className={`shrink-0 text-sm text-right ${valueColor}`} data-testid={testId ? `${testId}-value` : undefined}>
-          {value}
+        {/* The value may carry a long status note (sub); cap its width and
+            let it wrap so it can never push the row past a phone screen. */}
+        <span className={`min-w-0 max-w-[60%] text-sm text-right [overflow-wrap:anywhere] ${valueColor}`} data-testid={testId ? `${testId}-value` : undefined}>
+          <span className="whitespace-nowrap">{value}</span>
           {sub && <span className={`block text-xs font-normal ${subColor}`}>{sub}</span>}
         </span>
       </div>
@@ -6128,7 +6130,7 @@ export default function Estimate() {
                       <Building2 className="h-4 w-4 text-primary" />
                       Purchase &amp; Loan
                     </h3>
-                  <div className="flex items-center justify-between gap-3 px-2 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2 py-2">
                     <span className="text-xs text-muted-foreground">Purchase Price</span>
                     <SliderInput
                       label=""

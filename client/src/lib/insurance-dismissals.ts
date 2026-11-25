@@ -31,6 +31,26 @@ export function writeDismissedInsuranceKeys(
   }
 }
 
+/**
+ * Explicitly adding or opening an address is a newer decision than an
+ * earlier delete, so it clears that address's dismissal. Without this the
+ * insurance page treats the address as deleted and jumps to another card.
+ */
+export function undismissInsuranceAddress(
+  userId: string | null | undefined,
+  address: string,
+  normalizedKey?: string | null,
+): Set<string> {
+  const dismissed = readDismissedInsuranceKeys(userId);
+  const addressKey = address.trim().toLowerCase();
+  let changed = false;
+  for (const identity of [normalizedKey, addressKey]) {
+    if (identity && dismissed.delete(identity)) changed = true;
+  }
+  if (changed) writeDismissedInsuranceKeys(userId, dismissed);
+  return dismissed;
+}
+
 export function isInsuranceAddressDismissed(
   dismissedKeys: Set<string>,
   address: string,
