@@ -8,6 +8,8 @@ import { userInsuranceQuoteResults, type UserInsuranceQuoteResult } from "@share
 import { normalizeQuoteAddress } from "@shared/quote-address";
 import {
   buildEstimateSnapshot,
+  computeQuoteDelta,
+  resolveCompletedSnapshot,
   parseEstimateInput,
   publicSavedQuoteResult,
   saveCompletedQuoteRun,
@@ -38,6 +40,7 @@ function savedRow(overrides: Partial<UserInsuranceQuoteResult> = {}): UserInsura
     bestCarrier: "Carrier A", bestAnnual: "2000",
     completedAt: new Date("2026-11-20T12:00:00Z"),
     estimateSnapshot: { annual: 2500 }, pendingEstimateSnapshot: null, pendingStartedAt: null,
+    estimateAnnual: "2500", lowestAnnual: "2000", quoteDelta: "-500", quoteDeltaPct: "-0.2",
     createdAt: new Date(), updatedAt: new Date(),
     ...overrides,
   };
@@ -50,13 +53,16 @@ test("schema: per-user saved results table with a composite owner key", () => {
   for (const name of [
     "user_id", "address_normalized", "policy_type", "lead_id", "quotes", "best_carrier",
     "best_annual", "completed_at", "estimate_snapshot", "pending_estimate_snapshot",
-    "pending_started_at", "created_at", "updated_at",
+    "pending_started_at", "estimate_annual", "lowest_annual", "quote_delta", "quote_delta_pct",
+    "created_at", "updated_at",
   ]) assert.ok(columns.includes(name), `missing ${name}`);
   assert.deepEqual(config.primaryKeys[0].columns.map(c => c.name), ["user_id", "address_normalized", "policy_type"]);
   const sql = readFileSync(new URL("../../migrations/20261125_user_insurance_quote_results.sql", import.meta.url), "utf8");
   assert.match(sql, /create table if not exists user_insurance_quote_results/);
   assert.match(sql, /primary key \(user_id, address_normalized, policy_type\)/);
   assert.doesNotMatch(sql, /\b(drop|delete|truncate)\b/i);
+  for (const column of ["estimate_annual", "lowest_annual", "quote_delta", "quote_delta_pct"])
+    assert.match(sql, new RegExp(`add column if not exists ${column} numeric`));
   const supabaseSql = readFileSync(new URL("../../supabase/migrations/2026_11_25_user_insurance_quote_results.sql", import.meta.url), "utf8");
   assert.match(supabaseSql, /enable row level security/i);
   assert.match(supabaseSql, /revoke all .* from anon, authenticated/i);
@@ -83,9 +89,75 @@ test("estimate snapshot keeps property facts and drops identity, contact, and re
   assert.equal(snapshot.monthly, 216.67);
   assert.equal(snapshot.hurricaneDeductible, "5%");
   assert.equal(snapshot.construction, "Masonry");
-  assert.deepEqual((snapshot.windAnswers as any).reportValues, { roofToWall: "clips" });
+  assert.equal(snapshot.windMitigationReport, false, "report values are ignored unless a report is declared");
+  assert.equal(snapshot.county, "Hillsborough");
+  assert.equal(snapshot.modelVersion, "m1");
+  for (const key of ["policyType", "coverageA", "yearBuilt", "roofYear", "construction", "floodZone", "aopDeductible", "hurricaneDeductible"])
+    assert.ok(snapshot[key] != null, `missing ${key}`);
+  assert.doesNotMatch(json, /address|email|phone|dob|dateOfBirth|inspector|uploadId|reference|inspectionDate/i);
   assert.equal(parseEstimateInput({ annual: -5 }), null);
   assert.equal(parseEstimateInput("nope"), null);
+});
+
+test("snapshot records each wind-mitigation input as user-provided, report-confirmed, or assumed", () => {
+  const base = {
+    policyType: "HO3", coverageA: 350_000, yearBuilt: 2010, roofYear: 2020, constIdx: 0, hurrIdx: 0,
+    aopDeductible: 2500, floodZone: "AE", roofCovering: "Meets FBC 2001", roofShape: "Gable",
+    secondaryWaterResistance: "No", openingProtection: false,
+  };
+  const assumed = buildEstimateSnapshot({ ...base, windAnswers: { shape: "Not sure", allOpenings: "unsure", peelAndStick: "unsure" } }, null, { county: "Pinellas" });
+  const wind = assumed.windMitigation as any;
+  for (const key of ["roofCovering", "roofDeck", "roofToWall", "roofShape", "secondaryWaterResistance", "openingProtection"]) {
+    assert.equal(wind[key].userProvided, false, key);
+    assert.equal(wind[key].source, "assumed", key);
+  }
+  assert.equal(wind.roofDeck.value, "C");
+  assert.equal(wind.roofToWall.value, "Clips");
+  assert.equal(assumed.annual, null);
+
+  const user = buildEstimateSnapshot({
+    ...base, roofShape: "Hip", roofShapeUserSet: true, openingProtection: true, secondaryWaterResistance: "Yes",
+    windMitigationLocks: { openingProtection: true, secondaryWaterResistance: true },
+    windAnswers: { shape: "Hip", roofDeck: "B", roofToWall: "Single Wraps", roofCovering: "Meets FBC 1994" },
+  }, null, { county: "Pinellas" }).windMitigation as any;
+  assert.deepEqual(user.roofShape, { value: "Hip", userProvided: true, source: "user" });
+  assert.deepEqual(user.roofDeck, { value: "B", userProvided: true, source: "user" });
+  assert.deepEqual(user.roofToWall, { value: "Single Wraps", userProvided: true, source: "user" });
+  assert.deepEqual(user.roofCovering, { value: "Meets FBC 1994", userProvided: true, source: "user" });
+  assert.deepEqual(user.openingProtection, { value: true, userProvided: true, source: "user" });
+  assert.deepEqual(user.secondaryWaterResistance, { value: "Yes", userProvided: true, source: "user" });
+
+  const reported = buildEstimateSnapshot({ ...base, windAnswers: { reportAvailable: true, report: {
+    reference: "REF-123", uploadId: "upl-9", inspector: "Inspector Example", inspectionDate: "2025-01-01",
+    roofToWall: "Clips", roofDeck: "C", swr: "Yes", opening: "A", shape: "Hip", productApproval: "Meets FBC 2001",
+    assumedFields: ["swr"],
+  } } }, null);
+  const r = reported.windMitigation as any;
+  assert.equal(reported.windMitigationReport, true);
+  assert.deepEqual(r.roofToWall, { value: "Clips", userProvided: true, source: "report" });
+  assert.deepEqual(r.secondaryWaterResistance, { value: "Yes", userProvided: false, source: "assumed" });
+  assert.doesNotMatch(JSON.stringify(reported), /REF-123|upl-9|Inspector Example|2025-01-01/);
+});
+
+test("estimate vs lowest quote delta math, including missing and zero estimates", () => {
+  assert.deepEqual(computeQuoteDelta(2500, 2000), { estimateAnnual: 2500, lowestAnnual: 2000, quoteDelta: -500, quoteDeltaPct: -0.2 });
+  assert.deepEqual(computeQuoteDelta(2000, 2600), { estimateAnnual: 2000, lowestAnnual: 2600, quoteDelta: 600, quoteDeltaPct: 0.3 });
+  assert.deepEqual(computeQuoteDelta("3000", "2000.5"), { estimateAnnual: 3000, lowestAnnual: 2000.5, quoteDelta: -999.5, quoteDeltaPct: -0.3332 });
+  assert.deepEqual(computeQuoteDelta(null, 2000), { estimateAnnual: null, lowestAnnual: 2000, quoteDelta: null, quoteDeltaPct: null });
+  assert.deepEqual(computeQuoteDelta(undefined, 2000), { estimateAnnual: null, lowestAnnual: 2000, quoteDelta: null, quoteDeltaPct: null });
+  assert.deepEqual(computeQuoteDelta(0, 2000), { estimateAnnual: 0, lowestAnnual: 2000, quoteDelta: null, quoteDeltaPct: null });
+  assert.deepEqual(computeQuoteDelta(Number.NaN, 2000).quoteDelta, null);
+});
+
+test("a completed run keeps its own estimate snapshot and never adopts a newer run's pending one", () => {
+  const started = new Date("2026-11-20T10:00:00Z");
+  const own = { annual: 1 }, pending = { annual: 2 }, old = { annual: 3 };
+  assert.deepEqual(resolveCompletedSnapshot(null, own, started), { snapshot: own, consumedPending: false });
+  assert.deepEqual(resolveCompletedSnapshot({ estimateSnapshot: old, pendingEstimateSnapshot: pending, pendingStartedAt: started }, null, started),
+    { snapshot: pending, consumedPending: true });
+  assert.deepEqual(resolveCompletedSnapshot({ estimateSnapshot: old, pendingEstimateSnapshot: pending, pendingStartedAt: new Date(started.getTime() + 1000) }, null, started),
+    { snapshot: old, consumedPending: false });
+  assert.deepEqual(resolveCompletedSnapshot(null, null, started), { snapshot: null, consumedPending: false });
 });
 
 test("worker saves a successful run for the requesting user before the results email", async () => {
@@ -190,7 +262,7 @@ test("my-quotes: 401 for guests; own completed rows only, newest first, stale fl
     assert.equal(body.results[0].stale, false);
     assert.equal(body.results[1].stale, true);
     const json = JSON.stringify(body);
-    assert.doesNotMatch(json, /estimateSnapshot|estimate_snapshot|pending|userId|someone-else/);
+    assert.doesNotMatch(json, /estimateSnapshot|estimate_snapshot|pending|userId|someone-else|quoteDelta|estimateAnnual/);
     const bad = await fetch(`${base}/api/insurance/my-quotes?policyType=XX`);
     assert.equal(bad.status, 400);
   });

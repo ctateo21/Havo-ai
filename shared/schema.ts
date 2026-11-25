@@ -670,6 +670,11 @@ export const userInsuranceQuoteResults = pgTable(
     pendingEstimateSnapshot: jsonb("pending_estimate_snapshot")
       .$type<Record<string, unknown>>(),
     pendingStartedAt: timestamp("pending_started_at"),
+    // Estimate vs. lowest carrier quote, captured for analysis only.
+    estimateAnnual: numeric("estimate_annual"),
+    lowestAnnual: numeric("lowest_annual"),
+    quoteDelta: numeric("quote_delta"),
+    quoteDeltaPct: numeric("quote_delta_pct"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },

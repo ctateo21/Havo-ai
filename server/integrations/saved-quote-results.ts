@@ -6,6 +6,7 @@ import {
   type UserInsuranceQuoteResult,
 } from "@shared/schema";
 import { normalizeQuoteAddress } from "@shared/quote-address";
+import { assumeWindAttachments } from "@shared/wind-mitigation";
 
 export const SAVED_QUOTE_STALE_MS = 30 * 24 * 60 * 60 * 1000;
 export const ESTIMATE_SNAPSHOT_VERSION = "estimate-snapshot-v1";
@@ -26,32 +27,60 @@ export function parseEstimateInput(value: unknown): EstimateInput | null {
   return parsed.success ? parsed.data : null;
 }
 
-/** Only the wind-mitigation answer values, never report identifiers,
- * inspector names, upload ids, or dates. */
-function windAnswerValues(answers: unknown): Record<string, unknown> | null {
-  if (!answers || typeof answers !== "object") return null;
-  const a = answers as Record<string, unknown>;
-  const pick = (source: Record<string, unknown>, keys: string[]) =>
-    Object.fromEntries(keys.filter(k => source[k] !== undefined).map(k => [k, source[k]]));
-  const out: Record<string, unknown> = pick(a, [
-    "reportAvailable", "shape", "roofDeck", "roofToWall", "roofCovering",
-    "allOpenings", "openingsConfirmed", "peelAndStick", "gated",
-  ]);
-  if (a.report && typeof a.report === "object") {
-    const report = a.report as Record<string, unknown>;
-    out.reportValues = pick(report, [
-      "roofToWall", "roofDeck", "swr", "opening", "shape",
-      "productApproval", "assumedFields", "yearBuilt",
-    ]);
-  }
-  return out;
+type WindSource = "report" | "user" | "assumed";
+export interface WindFactSnapshot { value: string | boolean | null; userProvided: boolean; source: WindSource }
+
+/** Wind-mitigation inputs with provenance. Values only: never report
+ * references, upload ids, inspector names, or inspection dates. */
+export function windMitigationSnapshot(
+  request: Record<string, any>,
+  county: string | null,
+): Record<"roofCovering" | "roofDeck" | "roofToWall" | "roofShape" | "secondaryWaterResistance" | "openingProtection", WindFactSnapshot> {
+  const answers = request.windAnswers && typeof request.windAnswers === "object" ? request.windAnswers : {};
+  const report = answers.reportAvailable === true && answers.report && typeof answers.report === "object"
+    ? answers.report as Record<string, any> : null;
+  const reportAssumed: string[] = Array.isArray(report?.assumedFields) ? report!.assumedFields : [];
+  const locks = request.windMitigationLocks && typeof request.windMitigationLocks === "object"
+    ? request.windMitigationLocks : {};
+  const yearBuilt = Number(request.yearBuilt), roofYear = Number(request.roofYear);
+  const assumed = assumeWindAttachments(county ?? "", yearBuilt, roofYear);
+  const fact = (value: unknown, source: WindSource): WindFactSnapshot => ({
+    value: typeof value === "string" || typeof value === "boolean" ? value : null,
+    userProvided: source !== "assumed",
+    source,
+  });
+  const fromReport = (key: string, reportValue: unknown) =>
+    report && reportValue !== undefined
+      ? fact(reportValue, reportAssumed.includes(key) ? "assumed" : "report")
+      : null;
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  return {
+    roofCovering: fromReport("roofCovering", report?.productApproval ?? report?.roofCovering) ??
+      (str(answers.roofCovering) ? fact(answers.roofCovering, "user") : fact(str(request.roofCovering) ?? null, "assumed")),
+    roofDeck: fromReport("roofDeck", report?.roofDeck) ??
+      (str(answers.roofDeck) ? fact(answers.roofDeck, "user") : fact(assumed.roofDeck, "assumed")),
+    roofToWall: fromReport("roofToWall", report?.roofToWall) ??
+      (str(answers.roofToWall) ? fact(answers.roofToWall, "user") : fact(assumed.roofToWall, "assumed")),
+    roofShape: fromReport("shape", report?.shape) ??
+      ((request.roofShapeUserSet === true || (str(answers.shape) && answers.shape !== "Not sure"))
+        ? fact(str(request.roofShape) ?? answers.shape, "user")
+        : fact(str(request.roofShape) ?? null, "assumed")),
+    secondaryWaterResistance: fromReport("swr", report?.swr) ??
+      ((locks.secondaryWaterResistance === true || (str(answers.peelAndStick) && answers.peelAndStick !== "unsure"))
+        ? fact(str(request.secondaryWaterResistance) ?? null, "user")
+        : fact(str(request.secondaryWaterResistance) ?? null, "assumed")),
+    openingProtection: fromReport("opening", report?.opening) ??
+      ((locks.openingProtection === true || answers.openingsConfirmed === true)
+        ? fact(typeof request.openingProtection === "boolean" ? request.openingProtection : null, "user")
+        : fact(typeof request.openingProtection === "boolean" ? request.openingProtection : null, "assumed")),
+  };
 }
 
 const CONSTRUCTION = ["Masonry", "Mixed", "Frame"];
 const HURRICANE = ["2%", "5%", "10%"];
 
 /** Explicit allowlist. Every value is a property/estimate fact; nothing from
- * the request's identity, contact, claims, or prior-carrier fields. */
+ * the request's identity, contact, address, claims, or prior-carrier fields. */
 export function buildEstimateSnapshot(
   request: Record<string, any>,
   estimate: EstimateInput | null,
@@ -59,29 +88,22 @@ export function buildEstimateSnapshot(
 ): Record<string, unknown> {
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const county = str(extra.county) ?? estimate?.county ?? null;
   return {
     version: ESTIMATE_SNAPSHOT_VERSION,
     modelVersion: estimate?.modelVersion ?? null,
     annual: estimate?.annual ?? null,
     monthly: estimate?.monthly ?? (estimate ? Math.round((estimate.annual / 12) * 100) / 100 : null),
-    county: str(extra.county) ?? estimate?.county ?? null,
+    county,
     policyType: str(request.policyType),
     coverageA: num(request.coverageA),
     yearBuilt: num(request.yearBuilt),
     roofYear: num(request.roofYear),
     sqFt: num(request.sqFt),
     construction: typeof request.constIdx === "number" ? CONSTRUCTION[request.constIdx] ?? null : null,
-    roofShape: str(request.roofShape),
     roofMaterial: str(request.roofMaterial),
-    openingProtection: typeof request.openingProtection === "boolean" ? request.openingProtection : null,
-    secondaryWaterResistance: str(request.secondaryWaterResistance),
-    windMitigationLocks: request.windMitigationLocks && typeof request.windMitigationLocks === "object"
-      ? {
-          openingProtection: request.windMitigationLocks.openingProtection === true,
-          secondaryWaterResistance: request.windMitigationLocks.secondaryWaterResistance === true,
-        }
-      : null,
-    windAnswers: windAnswerValues(request.windAnswers),
+    windMitigationReport: request.windAnswers?.reportAvailable === true,
+    windMitigation: windMitigationSnapshot(request, county),
     hurricaneDeductible: typeof request.hurrIdx === "number" ? HURRICANE[request.hurrIdx] ?? null : null,
     aopDeductible: num(request.aopDeductible),
     floodZone: str(request.floodZone),
@@ -90,6 +112,49 @@ export function buildEstimateSnapshot(
     occupancy: str(extra.usageType) ?? str(request.usageType),
     rentalTerm: str(request.rentalTerm),
   };
+}
+
+// ── Estimate vs. lowest quote (data capture only) ───────────────────────
+export interface QuoteDelta {
+  estimateAnnual: number | null;
+  lowestAnnual: number | null;
+  quoteDelta: number | null;
+  quoteDeltaPct: number | null;
+}
+
+/** delta = lowest - estimate; pct = delta / estimate, null when the
+ * estimate is missing or zero. Rounded to cents / 4 decimal places. */
+export function computeQuoteDelta(estimateAnnual: unknown, lowestAnnual: unknown): QuoteDelta {
+  const valid = (v: unknown) => {
+    const n = typeof v === "string" && v.trim() ? Number(v) : v;
+    return typeof n === "number" && Number.isFinite(n) ? n : null;
+  };
+  const estimate = valid(estimateAnnual);
+  const lowest = valid(lowestAnnual);
+  const usable = estimate != null && estimate > 0 ? estimate : null;
+  const delta = usable != null && lowest != null ? Math.round((lowest - usable) * 100) / 100 : null;
+  return {
+    estimateAnnual: estimate,
+    lowestAnnual: lowest,
+    quoteDelta: delta,
+    quoteDeltaPct: delta != null && usable != null ? Math.round((delta / usable) * 10_000) / 10_000 : null,
+  };
+}
+
+/** Which estimate snapshot a completed run keeps: the run's own, else the
+ * pending one started by this run (or earlier), else the existing one. */
+export function resolveCompletedSnapshot(
+  existing: Pick<UserInsuranceQuoteResult, "estimateSnapshot" | "pendingEstimateSnapshot" | "pendingStartedAt"> | null,
+  direct: Record<string, unknown> | null | undefined,
+  runStartedAt: Date,
+): { snapshot: Record<string, unknown> | null; consumedPending: boolean } {
+  const pendingBelongs = !!existing?.pendingStartedAt &&
+    new Date(existing.pendingStartedAt).getTime() <= runStartedAt.getTime();
+  if (direct) return { snapshot: direct, consumedPending: pendingBelongs };
+  if (pendingBelongs && existing?.pendingEstimateSnapshot) {
+    return { snapshot: existing.pendingEstimateSnapshot as Record<string, unknown>, consumedPending: true };
+  }
+  return { snapshot: (existing?.estimateSnapshot as Record<string, unknown> | null) ?? null, consumedPending: pendingBelongs };
 }
 
 // ── Persistence ──────────────────────────────────────────────────────────
@@ -144,31 +209,32 @@ export function createDbSavedQuoteStore(db: any): SavedQuoteStore {
     async saveCompleted({ userId, addressNormalized, policyType, leadId, quotes, completedAt, runStartedAt, estimateSnapshot }) {
       if (!quotes.length) return;
       const best = quotes[0];
-      const direct = estimateSnapshot ? JSON.stringify(estimateSnapshot) : null;
-      // The pending snapshot is promoted only when it belongs to this run
-      // (started at or before it). A late-finishing older run never
-      // replaces newer completed results.
-      const pendingBelongs = sql`(${t.pendingStartedAt} is not null and ${t.pendingStartedAt} <= ${runStartedAt})`;
-      await db.insert(t).values({
-        userId, addressNormalized, policyType, leadId, quotes,
-        bestCarrier: best.siteName, bestAnnual: String(best.annualPremium),
-        completedAt, estimateSnapshot: estimateSnapshot ?? null,
-      }).onConflictDoUpdate({
-        target: [t.userId, t.addressNormalized, t.policyType],
-        set: {
+      const key = and(eq(t.userId, userId), eq(t.addressNormalized, addressNormalized), eq(t.policyType, policyType));
+      await db.transaction(async (tx: any) => {
+        const [existing] = await tx.select().from(t).where(key).for("update");
+        // A late-finishing older run never replaces newer completed results.
+        if (existing?.completedAt && new Date(existing.completedAt).getTime() > completedAt.getTime()) return;
+        const { snapshot, consumedPending } = resolveCompletedSnapshot(existing ?? null, estimateSnapshot, runStartedAt);
+        const delta = computeQuoteDelta(snapshot?.annual, best.annualPremium);
+        const values = {
           leadId, quotes,
           bestCarrier: best.siteName,
           bestAnnual: String(best.annualPremium),
           completedAt,
-          estimateSnapshot: sql`case
-            when ${direct}::jsonb is not null then ${direct}::jsonb
-            when ${pendingBelongs} then ${t.pendingEstimateSnapshot}
-            else ${t.estimateSnapshot} end`,
-          pendingEstimateSnapshot: sql`case when ${pendingBelongs} then null else ${t.pendingEstimateSnapshot} end`,
-          pendingStartedAt: sql`case when ${pendingBelongs} then null else ${t.pendingStartedAt} end`,
+          estimateSnapshot: snapshot,
+          estimateAnnual: delta.estimateAnnual != null ? String(delta.estimateAnnual) : null,
+          lowestAnnual: delta.lowestAnnual != null ? String(delta.lowestAnnual) : null,
+          quoteDelta: delta.quoteDelta != null ? String(delta.quoteDelta) : null,
+          quoteDeltaPct: delta.quoteDeltaPct != null ? String(delta.quoteDeltaPct) : null,
+          ...(consumedPending ? { pendingEstimateSnapshot: null, pendingStartedAt: null } : {}),
           updatedAt: new Date(),
-        },
-        setWhere: sql`${t.completedAt} is null or ${t.completedAt} <= ${completedAt}`,
+        };
+        await tx.insert(t).values({ userId, addressNormalized, policyType, ...values })
+          .onConflictDoUpdate({
+            target: [t.userId, t.addressNormalized, t.policyType],
+            set: values,
+            setWhere: sql`${t.completedAt} is null or ${t.completedAt} <= ${completedAt}`,
+          });
       });
     },
     async listForUser(userId, filter = {}) {
