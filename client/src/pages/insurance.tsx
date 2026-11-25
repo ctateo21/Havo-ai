@@ -2478,7 +2478,7 @@ export default function InsuranceDashboard() {
           {newPurchase===true?
             <CurrentHomeForm address={currentHome} onAddress={setCurrentHome} mortgage={homeMortgage} onMortgage={setHomeMortgage} newPurchase={true}/>:
             <div className="container mx-auto px-4 py-2">
-              <label className="text-sm">Will this home have a mortgage? <select aria-label="Will this home have a mortgage?" value={homeMortgage} onChange={e=>setHomeMortgage(e.target.value)} className="border rounded p-2">
+              <label className="flex flex-wrap items-center gap-2 text-sm">Will this home have a mortgage? <select aria-label="Will this home have a mortgage?" value={homeMortgage} onChange={e=>setHomeMortgage(e.target.value)} className="max-w-full min-w-0 border rounded p-2">
                 <option value="">Please select</option><option value="yes">Yes — financed purchase or refinance</option><option value="no">No — owned outright or cash purchase</option>
               </select></label>
             </div>}
@@ -3125,6 +3125,7 @@ export default function InsuranceDashboard() {
                       <Button
                         size="sm"
                         variant="outline"
+                        className="h-auto max-w-full whitespace-normal py-2 text-center"
                         onClick={() => void requireAccount()}
                         data-testid="guest-live-quote-prompt"
                       >
