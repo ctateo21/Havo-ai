@@ -1,3 +1,4 @@
+import { normalizeOccupancy } from "@shared/live-quote-reuse";
 import { and, eq, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
@@ -414,6 +415,9 @@ export function publicSavedQuoteResult(row: UserInsuranceQuoteResult, now = new 
     stale: completedAt ? now.getTime() - completedAt.getTime() > SAVED_QUOTE_STALE_MS : false,
     bestCarrier: row.bestCarrier ?? null,
     bestAnnual: row.bestAnnual != null ? Number(row.bestAnnual) : null,
+    // The user's own run occupancy (from their pre-quote snapshot) so the
+    // client can apply the same reuse rule as the shared estimate.
+    occupancy: normalizeOccupancy((row.estimateSnapshot as Record<string, unknown> | null)?.occupancy),
     quotes: topThreeSavedQuotes(row.quotes, true),
   };
 }

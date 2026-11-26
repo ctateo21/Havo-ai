@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
+import { checkCrmConsent } from "./crm-consent-gate";
 
 const routes = readFileSync("server/routes.ts", "utf8");
 const sourceFile = ts.createSourceFile("routes.ts", routes, ts.ScriptTarget.Latest, true);
@@ -37,7 +38,7 @@ test("FUB event source override leaves defaults and event type unchanged", async
   const send = new Function(
     "process", "console", "fetch", "FUB_AGENT_IDS", "normalizePhoneDigits",
     "formatReferralBlock", "findFubPersonByEmail", "fubHeaders", "formatPhoneDisplay",
-    "supabaseAdmin",
+    "supabaseAdmin", "checkCrmConsent",
     `${helperJs}; return createFollowUpBossContact;`,
   )(
     { env: { FOLLOWUPBOSS_API_KEY: "mock-only" } },
@@ -49,6 +50,7 @@ test("FUB event source override leaves defaults and event type unchanged", async
     {}, (phone: string) => phone, () => "", async () => null,
     () => ({}), (phone: string) => phone,
     {from(){const q:any={select(){return q;},eq(){return q;},in(){return q;},order(){return q;},limit:async()=>({data:[{marketing_consent:true,consent:true,consent_at:"2026-11-12",recorded_at:"2026-11-12"}],error:null})};return q;}},
+    checkCrmConsent,
   );
   const input = {
     firstName: "Test", lastName: "Only", email: "test@example.com", phone: "",
