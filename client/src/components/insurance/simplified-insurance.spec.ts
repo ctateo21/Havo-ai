@@ -252,6 +252,9 @@ test("only an actual extracted report X is preserved as X after review", async (
 
 test("permits do not silently suggest SWR and legacy claims cannot gate a quote", async ({ page }) => {
   const { submissions } = await mockInsurance(page, { swrPermit: true, legacyClaims: true });
+  // Let the county-permit roof year (2022) land first; typing while it
+  // arrives appends to it ("20222018") instead of replacing it.
+  await expect(page.getByTestId("input-roof-year")).toHaveValue("2022");
   await page.getByTestId("input-roof-year").fill("2018");
   const swr = page.getByTestId("select-wind-peelAndStick");
   await expect(swr).toHaveValue("no");

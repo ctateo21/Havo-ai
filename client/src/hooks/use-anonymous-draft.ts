@@ -1,6 +1,14 @@
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { getSession } from "@/lib/auth";
 import { hasPendingAnonymousAccountDraft, rememberAnonymousAccountDraft } from "@/lib/anonymous-account-draft";
+
+/**
+ * Disables per-field guest drafts for a subtree. Used when the insurance
+ * questionnaire is embedded on another page for a signed-in user, so a guest
+ * draft saved on that page (same path + address) is never read as an
+ * insurance answer.
+ */
+export const AnonymousDraftsDisabledContext = createContext(false);
 
 export function useAnonymousAccountDraft(type: Parameters<typeof rememberAnonymousAccountDraft>[0], payload: unknown) {
   useEffect(() => { rememberAnonymousAccountDraft(type, payload); });
@@ -19,9 +27,10 @@ export function readAnonymousDraft<T>(field: string, fallback: T): T {
 }
 
 export function useAnonymousDraftRef<T>(field: string, initial: T) {
-  const ref = useRef(readAnonymousDraft(field, initial));
+  const disabled = useContext(AnonymousDraftsDisabledContext);
+  const ref = useRef(disabled ? initial : readAnonymousDraft(field, initial));
   const key = useRef(draftKey(field));
-  const anonymous = useRef(!getSession() || hasPendingAnonymousAccountDraft());
+  const anonymous = useRef(!disabled && (!getSession() || hasPendingAnonymousAccountDraft()));
   useEffect(() => {
     if (!anonymous.current || getSession()) return;
     try { localStorage.setItem(key.current, JSON.stringify(ref.current)); } catch { /* Storage unavailable. */ }
@@ -35,8 +44,9 @@ export function useAnonymousDraftRef<T>(field: string, initial: T) {
  * only after AuthContext receives a real session.
  */
 export function useAnonymousDraft<T>(field: string, initial: T | (() => T)): [T, Dispatch<SetStateAction<T>>] {
+  const disabled = useContext(AnonymousDraftsDisabledContext);
   const storageKey = useRef(draftKey(field));
-  const anonymous = useRef(!getSession() || hasPendingAnonymousAccountDraft());
+  const anonymous = useRef(!disabled && (!getSession() || hasPendingAnonymousAccountDraft()));
   const [value, setValue] = useState<T>(() => {
     if (anonymous.current) {
       try {

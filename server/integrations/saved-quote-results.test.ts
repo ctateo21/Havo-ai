@@ -222,6 +222,8 @@ async function withServer(store: SavedQuoteStore, userId: string | null, run: (b
     normalizeAddress: normalizeQuoteAddress,
     store,
     now: () => new Date("2026-11-25T12:00:00Z"),
+    readCacheRuns: async () => [],
+    mirror: null,
   });
   const server = app.listen(0, "127.0.0.1");
   await new Promise(resolve => server.once("listening", resolve));

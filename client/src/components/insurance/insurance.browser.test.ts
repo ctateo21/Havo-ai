@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { normalizeQuoteAddress } from "../../../../shared/quote-address";
 
 test("mobile current home form closes blank and populated without assuming mortgage",async({page})=>{
   await page.setViewportSize({width:390,height:844});
@@ -291,11 +292,21 @@ test("complete answers send confirmation and assumed credit; only server-validat
   await expect(page.getByText("Lower Premium Carrier")).toHaveCount(0);
 });
 
-test("carrier reads use ten-second intervals and stop at six minutes without declaring failure", async ({ page }) => {
+test("carrier reads use ten-second intervals and hand off to the saved run status at six minutes without declaring failure", async ({ page }) => {
   await page.clock.install();
   const calls = await fixture(page, { rate: 250 });
   let polls = 0;
-  await page.route("**/api/insurance/qr-start", route => route.fulfill({ contentType: "application/json", body: JSON.stringify({ quoteAccessToken: "poll-run-secret", status: "pending", leadId: 82, expectedCarriers: 14, respondedCarriers: 0 }) }));
+  let runStartedAt: string | null = null;
+  let runReads = 0;
+  // The server persists the run when qr-start accepts it; my-quotes reports it.
+  await page.route("**/api/insurance/my-quotes", route => {
+    if (runStartedAt) runReads++;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      results: [],
+      runs: runStartedAt ? [{ addressNormalized: normalizeQuoteAddress(ADDRESS), policyType: "HO3", status: "running", startedAt: runStartedAt, finishedAt: null }] : [],
+    }) });
+  });
+  await page.route("**/api/insurance/qr-start", async route => { runStartedAt = new Date(await page.evaluate(() => Date.now())).toISOString(); return route.fulfill({ contentType: "application/json", body: JSON.stringify({ quoteAccessToken: "poll-run-secret", status: "pending", leadId: 82, expectedCarriers: 14, respondedCarriers: 0 }) }); });
   await page.route("**/api/insurance/qr-quotes", route => {
     polls++;
     expect(route.request().headers()["x-quote-access"]).toBe("poll-run-secret");
@@ -314,7 +325,12 @@ test("carrier reads use ten-second intervals and stop at six minutes without dec
   await expect.poll(() => polls).toBe(1);
   await expect(page.getByText(/Carriers quoting 3 of 14/)).toBeVisible();
   await page.clock.fastForward(350000);
-  await expect(page.getByText(/Still working — we'll email your top 3/)).toBeVisible();
+  // At six minutes the page stops its own reads and shows the server-saved
+  // run status instead (same view as a reload or another device).
+  await expect(page.getByTestId("persisted-quote-run")).toBeVisible();
+  await expect(page.getByTestId("persisted-quote-run")).toContainText("Getting your quotes…");
+  expect(runReads).toBeGreaterThan(0);
+  await expect(page.getByText(/could not be confirmed|Carrier status unavailable/)).toHaveCount(0);
   const atTimeout = polls;
   await page.clock.runFor(30000);
   expect(polls).toBe(atTimeout);

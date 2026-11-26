@@ -36,6 +36,8 @@ import { isHillsboroughCountyAddress } from "@shared/hillsborough-county";
 import {insuranceContact} from "./insurance-contact";
 import { normalizeQuoteAddress } from "@shared/quote-address";
 import { registerSavedQuoteResultRoutes } from "./integrations/saved-quote-results-routes";
+import { registerInsuranceAnswerRoutes } from "./integrations/insurance-answers-routes";
+import { registerSharedLiveQuoteEstimateRoute } from "./integrations/shared-live-quote-estimate";
 import {
   buildEstimateSnapshot,
   parseEstimateInput,
@@ -85,6 +87,8 @@ import {
 } from "./stripe";
 import { sendWelcomeEmail, sendInternalAlert } from "./integrations/property-alert-emails";
 import { sendLiveInsuranceLeadAlert } from "./integrations/live-insurance-lead-alert";
+import { createLiveQuoteClickAlerter, LIVE_QUOTE_ALERT_DEDUPE_MS, registerLiveQuoteClickRoute } from "./integrations/live-quote-click-alert";
+import { checkCrmConsent } from "./integrations/crm-consent-gate";
 import { startOnboardingCampaign, resumeOnboardingCampaigns, unsubscribeFromCampaign } from "./integrations/onboarding-emails";
 import { getOrGenerateMarketAnalysis, type ListingInput } from "./integrations/listing-market-analysis";
 import { enrichListingFromPropertyCache } from "./integrations/listing-enrichment";
@@ -1170,87 +1174,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  const liveQuoteAlertRequests = new Map<
-    string,
-    { createdAt: number; delivery: Promise<boolean> }
-  >();
+  const liveQuoteClickAlert = createLiveQuoteClickAlerter({
+    sendCrm: contact => createFollowUpBossContact({
+      firstName: contact.firstName,
+      lastName: contact.lastName,
+      email: contact.email,
+      phone: contact.phone,
+      address: contact.address,
+      agent: "Christian Tateo",
+      messageHeader: "Get a Live Quote clicked — please follow up",
+      scenarioDetails:
+        `The user requested live insurance quotes for ${contact.address} from Havo.`,
+    }),
+    sendTeamEmail: contact => sendLiveInsuranceLeadAlert({
+      address: contact.address,
+      name: contact.name,
+      email: contact.email,
+      phone: contact.phone,
+      requestId: `live-quote-click:${contact.userId}:${contact.normalizedAddress}:${Math.floor(Date.now() / LIVE_QUOTE_ALERT_DEDUPE_MS)}`,
+      reviewReason: "Get a Live Quote tapped; follow up on this request.",
+    }),
+  });
 
-  app.post(
-    "/api/insurance/live-quote-click",
-    async (req, res) => {
-      try {
-        const user = await optionalUser(req);
-        if (!user) {
-          return res.status(401).json({ error: "Sign in required" });
-        }
-        const input = z.object({
-          address: z.string().trim().min(1).max(500),
-        }).parse(req.body);
-        const { data: profile } = supabaseAdmin
-          ? await supabaseAdmin
-              .from("profiles")
-              .select("email,name,phone")
-              .eq("id", user.id)
-              .maybeSingle()
-          : { data: null };
-        const metadata = (user.user_metadata ?? {}) as Record<string, any>;
-        const email = String(profile?.email ?? user.email ?? "").trim();
-        if (!email) {
-          return res.status(422).json({ error: "User email unavailable" });
-        }
-        const name = String(profile?.name ?? metadata.name ?? "").trim();
-        const nameParts = name.split(/\s+/).filter(Boolean);
-        const firstName = nameParts[0] ?? email.split("@")[0] ?? "Havo";
-        const lastName = nameParts.slice(1).join(" ") || "Lead";
-        const alertKey = `${user.id}:${normalizeAddr(input.address)}`;
-        const now = Date.now();
-        for (const [key, request] of liveQuoteAlertRequests) {
-          if (now - request.createdAt > 60_000) {
-            liveQuoteAlertRequests.delete(key);
-          }
-        }
-        const existingRequest = liveQuoteAlertRequests.get(alertKey);
-        if (existingRequest && now - existingRequest.createdAt <= 60_000) {
-          const delivered = await existingRequest.delivery;
-          if (!delivered) {
-            return res.status(503).json({ error: "FUB alert delivery failed" });
-          }
-          return res.json({ delivered: true, deduped: true });
-        }
-
-        const delivery = createFollowUpBossContact({
-          firstName,
-          lastName,
-          email,
-          phone: String(profile?.phone ?? metadata.phone ?? ""),
-          address: input.address,
-          agent: "Christian Tateo",
-          messageHeader: "URGENT: Get a Live Quote clicked — call within 60 seconds",
-          scenarioDetails:
-            `The user clicked Get a Live Quote for ${input.address}. ` +
-            "Please call them within 60 seconds to assist with the insurance quote.",
-        })
-          .then(result => result.ok && !result.skipped)
-          .catch(error => {
-            console.error("[FUB] live-quote delivery failed:", error);
-            return false;
-          });
-        liveQuoteAlertRequests.set(alertKey, { createdAt: now, delivery });
-        const delivered = await delivery;
-        if (!delivered) {
-          liveQuoteAlertRequests.delete(alertKey);
-          return res.status(503).json({ error: "FUB alert delivery failed" });
-        }
-        return res.json({ delivered: true, deduped: false });
-      } catch (error: any) {
-        if (error instanceof z.ZodError) {
-          return res.status(400).json({ error: "Invalid live-quote request" });
-        }
-        console.error("[FUB] live-quote click alert failed:", error);
-        return res.status(500).json({ error: "Live-quote alert failed" });
-      }
+  // The team alert is best effort: the user's quote request always proceeds.
+  registerLiveQuoteClickRoute(app, {
+    optionalUser,
+    alert: liveQuoteClickAlert,
+    loadContact: async (user, address) => {
+      const { data: profile } = supabaseAdmin
+        ? await supabaseAdmin
+            .from("profiles")
+            .select("email,name,phone")
+            .eq("id", user.id)
+            .maybeSingle()
+        : { data: null };
+      const metadata = (user.user_metadata ?? {}) as Record<string, any>;
+      const email = String(profile?.email ?? user.email ?? "").trim();
+      const name = String(profile?.name ?? metadata.name ?? "").trim();
+      const nameParts = name.split(/\s+/).filter(Boolean);
+      return {
+        userId: user.id,
+        address,
+        normalizedAddress: normalizeAddr(address),
+        firstName: nameParts[0] ?? email.split("@")[0] ?? "Havo",
+        lastName: nameParts.slice(1).join(" ") || "Lead",
+        name,
+        email,
+        phone: String(profile?.phone ?? metadata.phone ?? ""),
+      };
     },
-  );
+  });
 
   app.get(
     "/api/profile/status",
@@ -1358,6 +1331,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     optionalUser,
     normalizeAddress: normalizeAddr,
   });
+  registerInsuranceAnswerRoutes(app, { optionalUser });
+  registerSharedLiveQuoteEstimateRoute(app, { normalizeAddress: normalizeAddr });
 
   app.get(
     "/api/insurance/qr-agent-verification",
@@ -2734,15 +2709,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Contact storage is retained internally. Never enroll a person in CRM
     // calling/texting workflows unless a server-owned consent record permits it.
     if(!supabaseAdmin)return {ok:false,noteAdded:false,personId:null,skipped:true,error:"Consent store unavailable"};
-    const consentPhoneDigits=params.phone.replace(/\D/g,"");
-    const phoneE164=consentPhoneDigits.startsWith("1")?`+${consentPhoneDigits}`:`+1${consentPhoneDigits}`;
-    const [leadConsent,accountConsent]=await Promise.all([
-      supabaseAdmin.from("private_leads").select("marketing_consent,consent_at").eq("phone",phoneE164).order("consent_at",{ascending:false}).limit(1),
-      supabaseAdmin.from("marketing_consent_records").select("consent,recorded_at").in("phone",[params.phone,phoneE164,consentPhoneDigits]).order("recorded_at",{ascending:false}).limit(1),
-    ]);
-    if(leadConsent.error||accountConsent.error)return {ok:false,noteAdded:false,personId:null,skipped:true,error:"Consent could not be checked"};
-    const consentHistory=[...(leadConsent.data??[]).map(r=>({yes:r.marketing_consent,at:r.consent_at})),...(accountConsent.data??[]).map(r=>({yes:r.consent,at:r.recorded_at}))].sort((a,b)=>Date.parse(b.at)-Date.parse(a.at));
-    if(consentHistory[0]?.yes!==true)return {ok:true,noteAdded:false,personId:null,skipped:true,error:null};
+    const db=supabaseAdmin;
+    const consent=await checkCrmConsent({
+      latestLeadConsent:async phoneE164=>await db.from("private_leads").select("marketing_consent,consent_at").eq("phone",phoneE164).order("consent_at",{ascending:false}).limit(1),
+      latestAccountConsent:async phones=>await db.from("marketing_consent_records").select("consent,recorded_at").in("phone",phones).order("recorded_at",{ascending:false}).limit(1),
+    },params.phone);
+    if(consent==="unavailable")return {ok:false,noteAdded:false,personId:null,skipped:true,error:"Consent could not be checked"};
+    if(consent!=="allowed")return {ok:true,noteAdded:false,personId:null,skipped:true,error:null};
     const apiKey = process.env.FOLLOWUPBOSS_API_KEY;
     if (!apiKey) {
       console.log("[FUB] FOLLOWUPBOSS_API_KEY not set — skipping contact creation.");

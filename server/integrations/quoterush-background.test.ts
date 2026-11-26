@@ -402,3 +402,35 @@ test("email recovery is bounded after the first attempt and periodic sweeper rep
   stopQuoteJobSweeper();
   assert.ok(sweeps >= 2);
 });
+
+test("worker clears the requester's pending marker when a run ends without usable quotes", async () => {
+  const cleared: number[] = [];
+  const saved: number[] = [];
+  const track = (deps: QuotePollingDependencies) => {
+    deps.clearOwnerPending = async r => { cleared.push(r.id); };
+    deps.saveOwnerResult = async r => { saved.push(r.id); };
+    return deps;
+  };
+
+  // Window expired with no positive quotes: success with 0 quotes → cleared.
+  const empty = row({ id: 2001, triggeredAt: new Date(Date.now() - MAX_QUOTE_POLL_AGE_MS - 1) });
+  assert.equal(await pollQuoteJob(2001, track(fakeDependencies(empty, [])), new Date()), "completed");
+  assert.deepEqual(cleared, [2001]);
+
+  // A failed/error row observed by the worker → cleared.
+  const failed = row({ id: 2002, status: "failed" });
+  assert.equal(await pollQuoteJob(2002, track(fakeDependencies(failed, [])), new Date()), "failed");
+  assert.deepEqual(cleared, [2001, 2002]);
+
+  // A usable result keeps the marker for the saved-results write instead.
+  const usable = row({ id: 2003, triggeredAt: new Date(Date.now() - MAX_QUOTE_POLL_AGE_MS - 1), quotes: [quote()] });
+  assert.equal(await pollQuoteJob(2003, track(fakeDependencies(usable, [])), new Date()), "completed");
+  assert.deepEqual(cleared, [2001, 2002]);
+  assert.ok(saved.includes(2003));
+
+  // A failing clear never breaks the worker.
+  const throwing = row({ id: 2004, status: "error" });
+  const deps = fakeDependencies(throwing, []);
+  deps.clearOwnerPending = async () => { throw new Error("db down"); };
+  assert.equal(await pollQuoteJob(2004, deps, new Date()), "failed");
+});

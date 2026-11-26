@@ -58,6 +58,8 @@ export interface InsuranceEstimateFormProps {
   }>;
   onClaimRecordsChange?: (records: NonNullable<InsuranceEstimateFormProps["claimRecords"]>) => void;
   annualPremium: number;
+  /** Replaces the default caption, e.g. when a recent live quote is used. */
+  premiumNote?: string;
 }
 
 const CURRENT_YEAR = new Date().getFullYear();
@@ -540,8 +542,8 @@ export function InsuranceEstimateForm(props: InsuranceEstimateFormProps) {
         >
           ${Math.round(props.annualPremium).toLocaleString()}
         </div>
-        <p className="mt-2 text-xs text-white/65">
-          Midpoint planning estimate based on the answers above.
+        <p className="mt-2 text-xs text-white/65" data-testid="estimated-annual-premium-note">
+          {props.premiumNote ?? "Midpoint planning estimate based on the answers above."}
         </p>
       </div>
     </div>
