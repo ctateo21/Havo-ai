@@ -30,6 +30,8 @@ import {
 import { checkLoanLimit, canDowngradeFromJumbo, CONFORMING_LOAN_LIMIT_2026, FHA_FLOOR_LIMIT_2026 } from "@/lib/loan-limits";
 import { FeeWorksheetDialog } from "@/components/fee-worksheet-dialog";
 import { useQuery } from "@tanstack/react-query";
+import { useSharedLiveQuoteEstimate } from "@/hooks/use-shared-live-quote-estimate";
+import { sharedEstimateNote } from "@/lib/saved-insurance-quotes";
 import { useSearch, useLocation } from "wouter";
 import { Helmet } from "react-helmet";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -2826,6 +2828,14 @@ export default function Estimate() {
   // is the only thing that prevents this effect from clobbering a
   // round-tripped insurance value on the very first render after
   // refresh / login.
+  // A recent live carrier quote for this address + policy form + occupancy
+  // (any user; number and date only) replaces the calculated baseline.
+  const sharedInsuranceEstimate = useSharedLiveQuoteEstimate(
+    address !== "Unknown Address" ? address : null,
+    insurancePolicyType,
+    inputs.occupancy,
+  );
+  const sharedInsuranceAnnual = sharedInsuranceEstimate ? Math.round(sharedInsuranceEstimate.annual) : null;
   useEffect(() => {
     if (userTouchedInsuranceSimRef.current) return;
     setInputs(prev => {
@@ -2837,6 +2847,15 @@ export default function Estimate() {
         if (!userTouchedInsuranceSimRef.current) userTouchedInsuranceSimRef.current = true;
         return prev;
       }
+      if (sharedInsuranceAnnual != null) {
+        // Stamp the source so a reload does not mistake it for a manual value.
+        if (prev.annualHOIns === sharedInsuranceAnnual && src === "recent_live_quote") return prev;
+        return {
+          ...prev,
+          annualHOIns: sharedInsuranceAnnual,
+          userAnswerSources: { ...(prev.userAnswerSources ?? {}), annual_ho_ins: "recent_live_quote" },
+        };
+      }
       const target = Math.round(
         prev.purchasePrice *
         getBaselineHomeownersInsuranceRate({
@@ -2844,10 +2863,19 @@ export default function Estimate() {
           isFrameConstruction: insConstIdx === 2,
         }),
       );
-      if (prev.annualHOIns === target) return prev;
-      return { ...prev, annualHOIns: target };
+      if (prev.annualHOIns === target && src !== "recent_live_quote") return prev;
+      const { annual_ho_ins: _dropped, ...restSources } = prev.userAnswerSources ?? {};
+      return {
+        ...prev,
+        annualHOIns: target,
+        ...(src === "recent_live_quote" ? { userAnswerSources: restSources } : {}),
+      };
     });
-  }, [inputs.purchasePrice, insuranceYearBuilt, insConstIdx]);
+  }, [inputs.purchasePrice, insuranceYearBuilt, insConstIdx, sharedInsuranceAnnual]);
+  const sharedInsuranceNote =
+    sharedInsuranceEstimate && inputs.userAnswerSources?.annual_ho_ins === "recent_live_quote"
+      && inputs.annualHOIns === sharedInsuranceAnnual
+      ? sharedEstimateNote(sharedInsuranceEstimate.quotedDate) : null;
 
   // Purchase-price changes always preserve the selected down-payment
   // percentage. The dollar amount changes with the price even when the
@@ -5922,6 +5950,9 @@ export default function Estimate() {
                           <SummaryRow label="Estimated Closing Costs" value={calc.taxComplete ? fmt(calc.closingCosts) : "Incomplete — enter taxes"} onEdit={() => setEditingPage(3)} />
                           <SummaryRow label="Annual Property Taxes" value={calc.taxComplete ? `${fmt(inputs.annualTaxes)}/yr (${taxSource()})` : "Unavailable — enter manually"} onEdit={() => setEditingPage(3)} />
                           <SummaryRow label="Homeowners Insurance" value={`${fmt(inputs.annualHOIns)}/yr`} onEdit={() => setEditingPage(3)} />
+                          {sharedInsuranceNote && (
+                            <p className="text-[11px] text-muted-foreground -mt-1 px-1" data-testid="note-shared-live-quote">{sharedInsuranceNote}</p>
+                          )}
                           {calc.monthlyFlood > 0 && (
                             <SummaryRow label="Flood Insurance" value={`${fmt(calc.monthlyFlood * 12)}/yr`} onEdit={() => setEditingPage(3)} />
                           )}
@@ -6198,6 +6229,9 @@ export default function Estimate() {
                     sub={`${fmt(inputs.annualHOIns)}/yr`}
                     onClick={() => insuranceSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
                   />
+                  {sharedInsuranceNote && (
+                    <p className="text-[11px] leading-relaxed text-muted-foreground -mt-1 mb-1 px-1" data-testid="note-shared-live-quote-monthly">{sharedInsuranceNote}</p>
+                  )}
                   {!suppressSeparateFloodInsurance(inputs.propertyType) && (
                     <Row label="Flood Insurance" value={`${fmt(calc.monthlyFlood)}/mo`} />
                   )}

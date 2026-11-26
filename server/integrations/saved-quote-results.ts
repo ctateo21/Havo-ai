@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   userInsuranceQuoteResults,
@@ -171,6 +171,12 @@ export interface SavedQuoteStore {
   listForUser(userId: string, filter?: {
     addressNormalized?: string; policyType?: string;
   }): Promise<UserInsuranceQuoteResult[]>;
+  /** Clears the in-flight marker of a run that ended without usable quotes.
+   * Only markers started at or before that run are cleared, so a newer run
+   * started meanwhile keeps showing as running. */
+  clearPending?(args: {
+    userId: string; addressNormalized: string; policyType: string; startedAtOrBefore: Date;
+  }): Promise<void>;
 }
 
 export function topThreeSavedQuotes(quotes: unknown, keepUrls: boolean): SavedInsuranceQuote[] {
@@ -243,6 +249,14 @@ export function createDbSavedQuoteStore(db: any): SavedQuoteStore {
       if (filter.policyType) conditions.push(eq(t.policyType, filter.policyType));
       return db.select().from(t).where(and(...conditions)).limit(200);
     },
+    async clearPending({ userId, addressNormalized, policyType, startedAtOrBefore }) {
+      await db.update(t)
+        .set({ pendingEstimateSnapshot: null, pendingStartedAt: null, updatedAt: new Date() })
+        .where(and(
+          eq(t.userId, userId), eq(t.addressNormalized, addressNormalized), eq(t.policyType, policyType),
+          lte(t.pendingStartedAt, startedAtOrBefore),
+        ));
+    },
   };
 }
 
@@ -308,6 +322,30 @@ export async function recordPendingQuoteRun(
     await (store ?? await getDefaultStore()).recordPending(args);
   } catch {
     console.error("[saved-quotes] pending snapshot save failed");
+  }
+}
+
+/** Clears the requester's pending marker for a run that ended without usable
+ * quotes, so the account shows the agent follow-up message instead of a
+ * spinner. Best effort; never throws. */
+export async function clearPendingQuoteRun(
+  run: Pick<CompletedRunLike, "emailUserId" | "ownerUserId" | "addressNormalized" | "policyType" | "triggeredAt">,
+  store?: SavedQuoteStore,
+): Promise<void> {
+  const userIds = Array.from(new Set([run.emailUserId, run.ownerUserId]
+    .map(id => (id ?? "").trim()).filter(Boolean)));
+  if (!userIds.length) return;
+  try {
+    const target = store ?? await getDefaultStore();
+    if (!target.clearPending) return;
+    for (const userId of userIds) {
+      await target.clearPending({
+        userId, addressNormalized: run.addressNormalized, policyType: run.policyType,
+        startedAtOrBefore: run.triggeredAt,
+      });
+    }
+  } catch {
+    console.error("[saved-quotes] pending marker clear failed");
   }
 }
 

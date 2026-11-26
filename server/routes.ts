@@ -36,6 +36,8 @@ import { isHillsboroughCountyAddress } from "@shared/hillsborough-county";
 import {insuranceContact} from "./insurance-contact";
 import { normalizeQuoteAddress } from "@shared/quote-address";
 import { registerSavedQuoteResultRoutes } from "./integrations/saved-quote-results-routes";
+import { registerInsuranceAnswerRoutes } from "./integrations/insurance-answers-routes";
+import { registerSharedLiveQuoteEstimateRoute } from "./integrations/shared-live-quote-estimate";
 import {
   buildEstimateSnapshot,
   parseEstimateInput,
@@ -1358,6 +1360,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     optionalUser,
     normalizeAddress: normalizeAddr,
   });
+  registerInsuranceAnswerRoutes(app, { optionalUser });
+  registerSharedLiveQuoteEstimateRoute(app, { normalizeAddress: normalizeAddr });
 
   app.get(
     "/api/insurance/qr-agent-verification",

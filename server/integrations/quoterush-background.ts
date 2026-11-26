@@ -17,7 +17,7 @@ import {
 import { sendQuoteRushResultsEmail,sendInternalAlert } from "./property-alert-emails";
 import {sendLiveInsuranceLeadAlert} from "./live-insurance-lead-alert";
 import {quoteRushPaused} from "./quoterush-pause";
-import {saveCompletedQuoteRun} from "./saved-quote-results";
+import {clearPendingQuoteRun,saveCompletedQuoteRun} from "./saved-quote-results";
 
 export const QUOTE_POLL_INTERVAL_MS = 20_000;
 export const MAX_QUOTE_POLL_ATTEMPTS = 36;
@@ -63,6 +63,9 @@ export interface QuotePollingDependencies {
   /** Saves a successful run to the requesting user's account. Must never
    * throw; idempotent because it can run again on recovery passes. */
   saveOwnerResult?: (row: QuoteCacheRow) => Promise<void>;
+  /** Clears the requester's in-flight marker when a run ends without usable
+   * quotes. Must never throw. */
+  clearOwnerPending?: (row: QuoteCacheRow) => Promise<void>;
 }
 
 const defaultDependencies: QuotePollingDependencies = {
@@ -86,7 +89,13 @@ const defaultDependencies: QuotePollingDependencies = {
   claimQuoteResultEmail,
   sendResultsEmail: sendQuoteRushResultsEmail,
   saveOwnerResult: row => saveCompletedQuoteRun(row),
+  clearOwnerPending: row => clearPendingQuoteRun(row),
 };
+
+async function clearPendingMarker(row: QuoteCacheRow, dependencies: QuotePollingDependencies) {
+  try { await dependencies.clearOwnerPending?.(row); }
+  catch { console.error("[qr-background] pending marker clear failed"); }
+}
 
 type PollState = {
   attempts: number;
@@ -169,6 +178,9 @@ async function deliverResultsEmail(
   if (row.status === "success") {
     try { await dependencies.saveOwnerResult?.(row); }
     catch { console.error("[qr-background] saved result failed"); }
+    if (!topThreePositiveQuotes((row.quotes ?? []) as QuoteRushQuote[]).length) {
+      await clearPendingMarker(row, dependencies);
+    }
   }
   const claimed = await dependencies.claimQuoteResultEmail(row.id);
   if (!claimed) return;
@@ -237,9 +249,11 @@ export async function pollQuoteJob(
       await deliverResultsEmail(row, dependencies);
       return "completed";
     }
-    return row.status === "failed" || row.status === "error"
-      ? "failed"
-      : "missing";
+    if (row.status === "failed" || row.status === "error") {
+      await clearPendingMarker(row, dependencies);
+      return "failed";
+    }
+    return "missing";
   }
   const leadId = leadIdOverride ?? row.leadId;
   if (leadId && dependencies.claimQuotePoll) {
@@ -466,6 +480,7 @@ export async function runQuotePollingJob(
         emailError: "No positive carrier quote stabilized before the polling window expired",
       }, dependencies);
       if (!updated) return "missing";
+      await clearPendingMarker(updated, dependencies);
       return "failed";
     }
   }

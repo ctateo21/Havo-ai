@@ -8,7 +8,10 @@ import {
   getInsuranceScenarios, saveInsuranceScenarios, type InsuranceScenario,
   getPurchaseScenarios, getCashBuyScenarios, getTrackedLoans,
   getSession, normalizeDateOfBirth, saveDateOfBirth, hasSavedDateOfBirth,
+  saveInsuranceScenarioAnswers, isAuthHydrated,
 } from "@/lib/auth";
+import { autosaveDelay, autosaveReady, restoreSavedWindAnswers } from "@/lib/insurance-answer-persistence";
+import { useSharedLiveQuoteEstimate } from "@/hooks/use-shared-live-quote-estimate";
 import { notifyNewScenario } from "@/lib/notify-scenario";
 import { authedFetch } from "@/lib/authed-fetch";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,10 +19,20 @@ import {
   COVERAGE_DETAILS_SUMMARY,
   EXPLAINERS_OPEN_BY_DEFAULT,
   GUEST_LIVE_QUOTE_PROMPT,
+  AGENT_FOLLOW_UP_MESSAGE,
+  QUOTE_RUN_POLL_MS,
+  RUNNING_QUOTES_DETAIL,
+  RUNNING_QUOTES_TITLE,
   SAVED_QUOTES_QUERY_KEY,
   STALE_QUOTE_MESSAGE,
-  fetchSavedQuoteResults,
+  anyQuoteRunRunning,
+  fetchSavedQuoteState,
+  findQuoteRunForAddress,
   findSavedQuoteForAddress,
+  quoteRunDisplay,
+  quoteRunElapsedSeconds,
+  quoteRunProgress,
+  resolveGeneralInsuranceEstimate,
   formatQuotedDate,
   quoteEstimatePayload,
 } from "@/lib/saved-insurance-quotes";
@@ -829,6 +842,15 @@ export default function InsuranceDashboard() {
       quote_currently_insured: currentlyInsured,
       quote_current_carrier: currentCarrier,
       roof_material: roofMaterial,
+      // Wind answers include confirmed report values (never file bytes).
+      ...(windAnswersSchema.safeParse(windAnswers).success ? { quote_wind_answers: windAnswers } : {}),
+      roof_shape_user_set: roofShapeUserSet.current,
+      roof_material_user_set: roofMaterialUserSet.current,
+      swr_user_selected: swrUserSelected.current,
+      quote_current_home: currentHome,
+      quote_home_mortgage: homeMortgage,
+      sq_ft_confirmed: sqFtConfirmed,
+      flood_zone_unknown: floodZoneUnknown,
     };
   }
 
@@ -932,8 +954,14 @@ export default function InsuranceDashboard() {
   // manual-premium / policy-type rehydration pattern above) so
   // switching between scenario tabs restores each property's saved
   // dropdown picks.
+  // Which address's saved answers have been applied. Autosave waits for it so
+  // placeholder defaults never overwrite a property's saved answers.
+  const [answersHydratedFor, setAnswersHydratedFor] = useState<string | null>(null);
   useEffect(() => {
-    if (anonymousDraftAddress.current === addressParam) return;
+    if (anonymousDraftAddress.current === addressParam) {
+      setAnswersHydratedFor(addressParam);
+      return;
+    }
     if (qrPollRef.current)
       clearInterval(qrPollRef.current);
     if (qrTimerRef.current)
@@ -1010,6 +1038,20 @@ export default function InsuranceDashboard() {
     setHo6RentalTerm(quoteProperty.ho6RentalTerm);
     setPurchasePrice(quoteProperty.purchasePrice);
     setPurchasePriceSource(quoteProperty.purchasePriceSource);
+    setSqFtConfirmed(answers.sq_ft_confirmed === true);
+    setFloodZoneUnknown(answers.flood_zone_unknown === true);
+    const savedHome = answers.quote_current_home;
+    setCurrentHome(savedHome && typeof savedHome === "object"
+      ? {
+          Address: typeof savedHome.Address === "string" ? savedHome.Address : "",
+          City: typeof savedHome.City === "string" ? savedHome.City : "",
+          State: typeof savedHome.State === "string" && savedHome.State ? savedHome.State : "FL",
+          Zip: typeof savedHome.Zip === "string" ? savedHome.Zip : "",
+        }
+      : { Address: "", City: "", State: "FL", Zip: "" });
+    setHomeMortgage(answers.quote_home_mortgage === "yes" || answers.quote_home_mortgage === "no"
+      ? answers.quote_home_mortgage : "");
+    setAnswersHydratedFor(addressParam);
     console.debug("[insurance-user-load] loaded user fields", {
       address: addressParam, factors: f, aop: ex.aop, quoteProperty,
     });
@@ -1054,15 +1096,35 @@ export default function InsuranceDashboard() {
 
   // ── Saved live-carrier results (account only) ────────────────────────────
   const queryClient = useQueryClient();
+  // Saved results plus persisted run status for this user. Polls while any of
+  // the user's runs is still in progress, from any tab or device.
   const savedQuotesQuery = useQuery({
-    queryKey: [...SAVED_QUOTES_QUERY_KEY, user?.id ?? "guest"],
-    queryFn: () => fetchSavedQuoteResults(path => authedFetch(path)),
+    queryKey: [...SAVED_QUOTES_QUERY_KEY, "state", user?.id ?? "guest"],
+    queryFn: () => fetchSavedQuoteState(path => authedFetch(path)),
     enabled: isAuthenticated,
     staleTime: 60_000,
+    refetchInterval: query => (anyQuoteRunRunning(query.state.data) ? QUOTE_RUN_POLL_MS : false),
   });
   const savedQuote = isAuthenticated
-    ? findSavedQuoteForAddress(savedQuotesQuery.data, address, policyType || null)
+    ? findSavedQuoteForAddress(savedQuotesQuery.data?.results, address, policyType || null)
     : null;
+  const persistedRun = isAuthenticated
+    ? findQuoteRunForAddress(savedQuotesQuery.data?.runs, address, policyType || "HO3")
+    : null;
+  const persistedRunDisplay = quoteRunDisplay(persistedRun);
+  const [persistedNow, setPersistedNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (persistedRunDisplay !== "running") return;
+    setPersistedNow(Date.now());
+    const timer = setInterval(() => setPersistedNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [persistedRunDisplay]);
+  const persistedElapsed = quoteRunElapsedSeconds(persistedRun, persistedNow);
+  const sharedEstimate = useSharedLiveQuoteEstimate(
+    address,
+    policyType || null,
+    policyType === "DP3" ? (ho6ResidenceUse || "investment") : ho6ResidenceUse || null,
+  );
   const windPreview=useMemo(()=>windAnswersSchema.safeParse(windAnswers).success?resolveWind({
     county:rebuildRate?.county??getCountyName(address)??"",yearBuilt:Number(yearBuilt),roofYear:Number(roofYear),
     answers:windAnswers,permits:windSupporting?.permits.permits,coastal:windSupporting?.coastal,
@@ -1073,11 +1135,20 @@ export default function InsuranceDashboard() {
     setSwrIdx(windPreview.fields.swr.value==="Yes"?2:windPreview.fields.swr.value==="No"?0:1);
     setRoofShapeIdx(windPreview.fields.shape.value==="Hip"?0:windPreview.fields.shape.value==="Flat"?1:windPreview.fields.shape.estimated?2:3);
   },[windPreview]);
+  const [windHydratedFor, setWindHydratedFor] = useState<string | null>(null);
   useEffect(()=>{
-    setWindAnswers(windAnswersSchema.parse({shape:"Not sure", gated:false, peelAndStick:"unsure"}));setWindSupporting(null);
-    swrUserSelected.current = false;
-    roofShapeUserSet.current = false;
-    roofMaterialUserSet.current = false;
+    // Restore this property's saved wind answers (signed-in users); guests
+    // and properties without saved answers start from the defaults.
+    const restored = getSession() && address
+      ? restoreSavedWindAnswers(getInsuranceScenarios().find(
+          s => (s.address ?? "").trim().toLowerCase() === address.trim().toLowerCase(),
+        )?.userAnswerSources)
+      : null;
+    setWindAnswers(restored?.windAnswers ?? windAnswersSchema.parse({shape:"Not sure", gated:false, peelAndStick:"unsure"}));setWindSupporting(null);
+    swrUserSelected.current = restored?.swrUserSelected ?? false;
+    roofShapeUserSet.current = restored?.roofShapeUserSet ?? false;
+    roofMaterialUserSet.current = restored?.roofMaterialUserSet ?? false;
+    setWindHydratedFor(address);
     setWindEvidenceUnavailable(false);
     if(!address)return;
     let stopped=false,timer:ReturnType<typeof setTimeout>,attempt=0;
@@ -1625,31 +1696,26 @@ export default function InsuranceDashboard() {
   }, [rebuild, address]);
 
   // ── Autosave ─────────────────────────────────────────────────────────────
-  // Debounced 600 ms writer that mirrors the Save button payload so
-  // every editable field (Coverage A, factor dropdowns, policy type,
-  // manual annual premium) round-trips to `insurance_scenarios`
-  // without the user clicking Save. Gated on:
-  //   1. `isAuthenticated` — guests don't have a Supabase user_id
-  //   2. `hydratedRef.current` — first render after address change
-  //      seeds defaults; saving before hydration would clobber the
-  //      saved row with placeholder values (same race-prevention
-  //      pattern used in seller-estimate.tsx).
-  const insuranceHydratedRef = useRef(false);
-  useEffect(() => {
-    // Mark hydrated one tick after the address-change rehydration
-    // effect above has run. That effect updates state synchronously,
-    // so by the time this microtask resolves the new factor/premium
-    // values are in place.
-    insuranceHydratedRef.current = false;
-    const t = window.setTimeout(() => { insuranceHydratedRef.current = true; }, 0);
-    return () => window.clearTimeout(t);
-  }, [addressParam]);
+  // Every answer is saved to this user's own scenario row as soon as it
+  // changes: discrete choices immediately, typed fields after a short
+  // debounce, and any pending save is flushed on page hide / navigation.
+  // The server merges answers into the row (never deleting other rows or
+  // server-owned live_quote_* keys). Autosave waits until this property's
+  // saved answers have been applied so defaults never overwrite them.
+  // Guests keep the anonymous draft.
+  const autosaveIsReady = autosaveReady({
+    authHydrated: isAuthHydrated(),
+    address: address ?? "",
+    addressParam,
+    answersHydratedFor,
+    windHydratedFor,
+  });
+  const autosaveTimerRef = useRef<number | null>(null);
+  const autosavePendingRef = useRef<InsuranceScenario | null>(null);
+  const autosaveTypedRef = useRef<string | null>(null);
+  const autosaveSignatureRef = useRef<{ address: string; signature: string } | null>(null);
 
-  useEffect(() => {
-    if (!insuranceHydratedRef.current) return;
-    const addr = (address ?? "").trim();
-    if (!addr) return;
-    const t = window.setTimeout(() => {
+  function buildAutosaveScenario(addr: string): { updated: InsuranceScenario; isNew: boolean } {
       const existing = getInsuranceScenarios();
       const key = addr.toLowerCase();
       const match = existing.find(s => s.address.trim().toLowerCase() === key);
@@ -1701,12 +1767,17 @@ export default function InsuranceDashboard() {
         // premium MUST be preserved when policy type recomputes Coverage A.
         // Manual input wins, then a prior quote upload (locked dollar
         // value, not just label), else the calculated midpoint.
+        // Manual input wins, then a prior quote upload, then a recent
+        // live carrier quote for this address/policy/occupancy, else the
+        // calculated midpoint.
         annualPremium:
           manualAnnualPremium != null
             ? manualAnnualPremium
             : match?.premiumSource === "quote" && typeof match.annualPremium === "number"
               ? match.annualPremium
-              : Math.round(midNow),
+              : sharedEstimate
+                ? Math.round(sharedEstimate.annual)
+                : Math.round(midNow),
         coverageA: rebuild,
         coverageASource: manualCoverageA.current ? "manual" : "default",
         premiumSource:
@@ -1772,46 +1843,92 @@ export default function InsuranceDashboard() {
           ...(floodZone
             ? { flood_zone: floodZone, flood_zone_source: floodZoneSource || "fema" }
             : {}),
+          premium_estimate_source:
+            manualAnnualPremium == null && match?.premiumSource !== "quote" && sharedEstimate
+              ? "recent_live_quote" : null,
+          premium_estimate_quoted_date:
+            manualAnnualPremium == null && match?.premiumSource !== "quote" && sharedEstimate
+              ? sharedEstimate.quotedDate : null,
         },
       };
-      console.debug("[insurance-user-save] scenario id", updated.id);
-      console.debug("[insurance-user-save] normalized property key", incomingKey);
-      console.debug("[insurance-user-save] changed field", "(autosave snapshot)");
-      console.debug("[insurance-user-save] value", {
-        coverageA: rebuild, policyType, manualAnnualPremium,
-        factors: {
-          roofYear, yearBuilt, openingProtectionIdx, roofShapeIdx, swrIdx,
-          hurrIdx, constIdx,
-        },
-      });
-      console.debug("[insurance-user-save] source", {
-        coverageA: updated.coverageASource, policy: updated.policyTypeSource,
-        premium: updated.premiumSource, discounts: updated.discountsSource,
-      });
-      const next = match
-        ? existing.map(s => (s.id === match.id ? updated : s))
-        : [...existing, updated];
-      if (!getSession()) {
-        rememberAnonymousAccountDraft("insurance", updated);
-        return;
-      }
-      confirmAnonymousAccountDraftSaved("insurance", () => saveInsuranceScenarios(next)).catch(err => {
-        console.debug("[insurance-user-save] upsert error", err?.message ?? err);
-      });
-      // New scenario only (!match fires once): notify the assigned agent
-      // (non-blocking, fire-and-forget).
-      if (!match) notifyNewScenario("Insurance", address, "Saved an insurance scenario");
+    return { updated, isNew: !match };
+  }
+
+  function sendAutosave(updated: InsuranceScenario, flush: boolean) {
+    if (!getSession()) {
+      rememberAnonymousAccountDraft("insurance", updated);
+      return;
+    }
+    confirmAnonymousAccountDraftSaved("insurance", () => saveInsuranceScenarioAnswers(updated, { flush })).catch(err => {
+      console.debug("[insurance-user-save] save error", err?.message ?? err);
+    });
+  }
+
+  function flushPendingAutosave() {
+    if (autosaveTimerRef.current != null) window.clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = null;
+    const pending = autosavePendingRef.current;
+    autosavePendingRef.current = null;
+    if (pending) sendAutosave(pending, true);
+  }
+
+  useEffect(() => {
+    if (!autosaveIsReady) return;
+    const addr = (address ?? "").trim();
+    const { updated, isNew } = buildAutosaveScenario(addr);
+    const { savedAt: _savedAt, ...comparable } = updated;
+    const signature = JSON.stringify(comparable);
+    const previous = autosaveSignatureRef.current;
+    const typed = [rebuild, manualAnnualPremium, roofYear, yearBuilt, squareFeet, purchaseDate,
+      purchasePrice, currentCarrier, currentHome, windAnswers.report ?? null];
+    const delay = autosaveDelay(previous?.address === addr ? autosaveTypedRef.current : null, typed);
+    autosaveTypedRef.current = JSON.stringify(typed);
+    if (previous?.address === addr && previous.signature === signature) return;
+    // The first payload after loading an existing row is that row's saved
+    // state; there is nothing new to write.
+    if (!previous || previous.address !== addr) {
+      autosaveSignatureRef.current = { address: addr, signature };
+      if (!isNew) return;
+    }
+    autosaveSignatureRef.current = { address: addr, signature };
+    autosavePendingRef.current = updated;
+    if (autosaveTimerRef.current != null) window.clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = window.setTimeout(() => {
+      autosaveTimerRef.current = null;
+      const pending = autosavePendingRef.current;
+      autosavePendingRef.current = null;
+      if (!pending) return;
+      console.debug("[insurance-user-save] scenario id", pending.id);
+      sendAutosave(pending, false);
+      // New scenario only: notify the assigned agent (non-blocking).
+      if (isNew && getSession()) notifyNewScenario("Insurance", addr, "Saved an insurance scenario");
       trackEvent("scenario_saved", { type: "insurance" });
-    }, 600);
-    return () => window.clearTimeout(t);
+    }, delay);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    isAuthenticated, address, rebuild, policyType, policyTypeSource,
+    autosaveIsReady, isAuthenticated, address, rebuild, policyType, policyTypeSource,
     manualAnnualPremium, roofYear, yearBuilt, openingProtectionIdx, roofShapeIdx,
     swrIdx, hurrIdx, constIdx, aopDeductible, floodZone, floodZoneSource, roofMaterial,
-     newPurchase, purchaseDate, purchasePrice, purchasePriceSource,
-      ho6ResidenceUse, ho6RentalTerm, squareFeet, currentlyInsured, currentCarrier,
+    newPurchase, purchaseDate, purchasePrice, purchasePriceSource,
+    ho6ResidenceUse, ho6RentalTerm, squareFeet, currentlyInsured, currentCarrier,
+    windAnswers, currentHome, homeMortgage, sqFtConfirmed, floodZoneUnknown,
+    sharedEstimate?.annual, sharedEstimate?.quotedDate,
   ]);
+
+  // Flush a pending save when the page is hidden, the property changes, or
+  // the page unmounts (navigation).
+  useEffect(() => {
+    const onHide = () => { if (document.visibilityState === "hidden") flushPendingAutosave(); };
+    const onPageHide = () => flushPendingAutosave();
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onPageHide);
+      flushPendingAutosave();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addressParam]);
 
   // Quote results belong to an authenticated user AND the complete answer set.
   // Never hydrate an address-only local or shared cache. qr-start alone gates reuse.
@@ -1877,6 +1994,19 @@ export default function InsuranceDashboard() {
     if (typeof data.respondedCarriers === "number" && Number.isInteger(data.respondedCarriers) && data.respondedCarriers >= 0) setQrRespondedCarriers(data.respondedCarriers);
   }
 
+  // After the in-tab window, stop this tab's readers and show the persisted
+  // run status (polled from my-quotes) instead of stopping at a dead end.
+  function handOffToPersistedStatus(epoch: number): void {
+    if (epoch !== quoteEpochRef.current) return;
+    if (qrPollRef.current) clearInterval(qrPollRef.current);
+    if (qrTimerRef.current) clearInterval(qrTimerRef.current);
+    if (qrWaitRef.current) clearTimeout(qrWaitRef.current);
+    if (qrPendingRef.current) clearTimeout(qrPendingRef.current);
+    setQrStillWorking(false);
+    setQrStatus("idle");
+    void queryClient.invalidateQueries({ queryKey: SAVED_QUOTES_QUERY_KEY });
+  }
+
   // Pending starts may be resolved only with the run-scoped secret granted by
   // qr-start, never by an address-only cache read.
   function pollPendingLead(epoch: number, accessToken: string): void {
@@ -1884,17 +2014,11 @@ export default function InsuranceDashboard() {
     const deadline = qrRunStartedAtRef.current + 360000;
     if (epoch !== quoteEpochRef.current || quoteAccessTokenRef.current !== accessToken) return;
     if (Date.now() >= deadline) {
-      setQrStillWorking(true);
-      if (qrTimerRef.current) clearInterval(qrTimerRef.current);
+      handOffToPersistedStatus(epoch);
       return;
     }
     if (qrWaitRef.current) clearTimeout(qrWaitRef.current);
-    qrWaitRef.current = setTimeout(() => {
-      if (epoch !== quoteEpochRef.current) return;
-      setQrStillWorking(true);
-      if (qrPendingRef.current) clearTimeout(qrPendingRef.current);
-      if (qrTimerRef.current) clearInterval(qrTimerRef.current);
-    }, deadline - Date.now());
+    qrWaitRef.current = setTimeout(() => handOffToPersistedStatus(epoch), deadline - Date.now());
     qrPendingRef.current = setTimeout(async () => {
       try {
         if (epoch !== quoteEpochRef.current || quoteAccessTokenRef.current !== accessToken) return;
@@ -1994,12 +2118,7 @@ export default function InsuranceDashboard() {
       setQrElapsed(Math.floor((Date.now() - qrRunStartedAtRef.current) / 1000));
     }, 1000);
     if (qrWaitRef.current) clearTimeout(qrWaitRef.current);
-    qrWaitRef.current = setTimeout(() => {
-      if (epoch !== quoteEpochRef.current) return;
-      if (qrPollRef.current) clearInterval(qrPollRef.current);
-      if (qrTimerRef.current) clearInterval(qrTimerRef.current);
-      setQrStillWorking(true);
-    }, Math.max(0, deadline - Date.now()));
+    qrWaitRef.current = setTimeout(() => handOffToPersistedStatus(epoch), Math.max(0, deadline - Date.now()));
 
     let pollCount = 0;
     const MAX_POLLS = 36; // Ten-second reads, at most six minutes.
@@ -2052,14 +2171,9 @@ export default function InsuranceDashboard() {
           if (qrTimerRef.current)
             clearInterval(qrTimerRef.current);
         } else if (pollCount >= MAX_POLLS) {
-          setQrStillWorking(true);
-          // The server owns the terminal timeout. Stop this reader timer but
-          // leave the durable row untouched so a reconnect can see its final
-          // state.
-          if (qrPollRef.current)
-            clearInterval(qrPollRef.current);
-          if (qrTimerRef.current)
-            clearInterval(qrTimerRef.current);
+          // The server owns the terminal timeout; the persisted run status
+          // takes over from this in-tab reader.
+          handOffToPersistedStatus(epoch);
         }
       } catch (e) {
         console.error("[qr-poll]", e);
@@ -2253,6 +2367,7 @@ export default function InsuranceDashboard() {
       if (!data.leadId) {
         if (data.status === "pending") {
           setQrStatus("pending");
+          void queryClient.invalidateQueries({ queryKey: SAVED_QUOTES_QUERY_KEY });
           pollPendingLead(epoch, data.quoteAccessToken);
         } else {
           setQrStatus("error");
@@ -2298,6 +2413,7 @@ export default function InsuranceDashboard() {
       }
 
       setQrStatus("pending");
+      void queryClient.invalidateQueries({ queryKey: SAVED_QUOTES_QUERY_KEY });
       startPolling(leadId);
     } catch (err) {
       if (epoch !== quoteEpochRef.current) return;
@@ -2334,7 +2450,7 @@ export default function InsuranceDashboard() {
   // A finished run is saved server-side; refresh the saved list now and once
   // more shortly after, since the worker saves alongside the results email.
   useEffect(() => {
-    if (qrStatus !== "success" || !isAuthenticated) return;
+    if ((qrStatus !== "success" && qrStatus !== "error") || !isAuthenticated) return;
     void queryClient.invalidateQueries({ queryKey: SAVED_QUOTES_QUERY_KEY });
     const timer = setTimeout(
       () => void queryClient.invalidateQueries({ queryKey: SAVED_QUOTES_QUERY_KEY }),
@@ -2372,6 +2488,21 @@ export default function InsuranceDashboard() {
     rebuild, roofIdx, openingProtectionIdx, roofShapeIdx, swrIdx,
     hurrIdx, constIdx, yearBuilt,
   ]);
+
+  // General estimate shown on this page: the user's manual premium or own
+  // quote keeps the existing display; otherwise a recent live carrier quote
+  // for this address/policy/occupancy replaces the calculated midpoint.
+  const ownScenarioQuote = getInsuranceScenarios().find(
+    s => (s.address ?? "").trim().toLowerCase() === (address ?? "").trim().toLowerCase(),
+  );
+  const generalEstimate = resolveGeneralInsuranceEstimate({
+    manualAnnual: manualAnnualPremium,
+    ownQuoteAnnual: savedQuote?.quotes[0]?.annualPremium
+      ?? (ownScenarioQuote?.premiumSource === "quote" ? ownScenarioQuote.annualPremium : null),
+    shared: sharedEstimate,
+    calculatedAnnual: calc.mid,
+  });
+  const displayedEstimateAnnual = generalEstimate.source === "recent_live_quote" ? generalEstimate.annual : calc.mid;
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -2556,7 +2687,7 @@ export default function InsuranceDashboard() {
                   const annualPremium =
                     manualAnnualPremium != null
                       ? manualAnnualPremium
-                      : Math.round(calc.mid);
+                      : Math.round(displayedEstimateAnnual);
                   // Occupancy / structure type aren't held in component
                   // state — derive them from the saved source scenarios
                   // for this address, mirroring the default-policy helper.
@@ -2629,7 +2760,7 @@ export default function InsuranceDashboard() {
                         ? manualAnnualPremium
                         : match?.premiumSource === "quote" && typeof match.annualPremium === "number"
                           ? match.annualPremium
-                          : Math.round(calc.mid),
+                          : Math.round(displayedEstimateAnnual),
                     // Persist Coverage A so the Phase 1 cross-tab value
                     // sync can read/protect it. Source carries forward
                     // from the saved scenario; if the user moved the
@@ -2844,7 +2975,8 @@ export default function InsuranceDashboard() {
                      setFloodZone(value);
                      setFloodZoneSource("Manual entry");
                    }}
-                  annualPremium={calc.mid}
+                  annualPremium={displayedEstimateAnnual}
+                  {...(generalEstimate.note ? { premiumNote: generalEstimate.note } : {})}
                 />
                 {rateError && <div className="mt-3 rounded-lg border border-destructive/30 p-3 text-xs" role="alert">{rateError}<button type="button" className="ml-2 text-primary underline" onClick={() => setRateRetry(v => v + 1)}>Retry county rate</button></div>}
               </CardContent>
@@ -2862,8 +2994,11 @@ export default function InsuranceDashboard() {
                           : "Live Carrier Quotes"}
                       </CardTitle>
                       <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
-                        {qrStatus === "idle" &&
+                        {qrStatus === "idle" && persistedRunDisplay === "none" &&
                           "Get real-time rates from your Florida-appointed carriers."}
+                        {qrStatus === "idle" && persistedRunDisplay === "running" &&
+                          `${RUNNING_QUOTES_TITLE} ${RUNNING_QUOTES_DETAIL}`}
+                        {qrStatus === "idle" && persistedRunDisplay === "agent" && AGENT_FOLLOW_UP_MESSAGE}
                         {qrStatus === "starting" &&
                           "Checking county permits and records… Report drafts and permit clues do not confirm credits."}
                         {qrStatus === "pending" &&
@@ -2891,12 +3026,11 @@ export default function InsuranceDashboard() {
                           }`}
                         {qrStatus === "expired" &&
                           "These saved rates are over 30 days old — re-run for current pricing."}
-                        {qrStatus === "error" &&
-                          "An agent will finish your quotes — carrier submission could not be confirmed."}
+                        {qrStatus === "error" && AGENT_FOLLOW_UP_MESSAGE}
                       </p>
                     </div>
                     <div className="shrink-0 flex items-center gap-2">
-                      {qrStatus === "idle" && (
+                      {qrStatus === "idle" && persistedRunDisplay === "none" && (
                         <Button
                           size="sm"
                           onClick={startQuoteRush}
@@ -2910,8 +3044,9 @@ export default function InsuranceDashboard() {
                         </Button>
                       )}
                       {(qrStatus === "starting" ||
-                        qrStatus === "pending") && (
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        qrStatus === "pending" ||
+                        (qrStatus === "idle" && persistedRunDisplay === "running")) && (
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="quote-run-working">
                           <div className="h-2.5 w-2.5 rounded-full bg-primary/50 animate-pulse" />
                           Working…
                         </div>
@@ -2931,7 +3066,7 @@ export default function InsuranceDashboard() {
                         </Button>
                       )}
                       {(qrStatus === "expired" ||
-                        qrStatus === "error") && (
+                        (qrStatus === "error" && persistedRunDisplay === "none")) && (
                         <Button
                           size="sm"
                           onClick={startQuoteRush}
@@ -3118,6 +3253,22 @@ export default function InsuranceDashboard() {
                     </div>
                   )}
 
+                  {/* Persisted run in progress (reload, other tab or device) */}
+                  {qrStatus === "idle" && persistedRunDisplay === "running" && (
+                    <div className="mb-4 space-y-2" data-testid="persisted-quote-run">
+                      <p className="text-sm font-semibold text-primary">{RUNNING_QUOTES_TITLE}</p>
+                      <div className="w-full bg-muted rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className="h-full origin-left bg-primary rounded-full transition-transform duration-1000"
+                          style={{ transform: `scaleX(${quoteRunProgress(persistedElapsed)})` }}
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground text-center">
+                        {Math.floor(persistedElapsed / 60)}:{String(persistedElapsed % 60).padStart(2, "0")} elapsed · {RUNNING_QUOTES_DETAIL}
+                      </p>
+                    </div>
+                  )}
+
                   {/* Not authenticated */}
                   {!isAuthenticated &&
                     qrStatus === "idle" && (
@@ -3138,6 +3289,7 @@ export default function InsuranceDashboard() {
                   {savedQuote &&
                     qrStatus !== "starting" &&
                     qrStatus !== "pending" &&
+                    persistedRunDisplay !== "running" &&
                     !(qrQuotes.length > 0 && qrResultsEpoch === quoteEpochRef.current) && (
                     <div className="mb-4 space-y-2" data-testid="saved-quote-results">
                       <p className="text-xs font-semibold text-primary">
