@@ -80,9 +80,12 @@ import {
   SAVED_QUOTES_QUERY_KEY,
   fetchSavedQuoteResults,
   findSavedQuoteForAddress,
+  hasRealCarrierQuote,
+  insuranceCardHighlightClass,
   insuranceCardSummary,
   type SavedQuoteResult,
 } from "@/lib/saved-insurance-quotes";
+import { cn } from "@/lib/utils";
 
 interface LiveRatesResponse { rates: LiveRate[]; source: string; disclaimer: string; asOf: string; }
 
@@ -1576,8 +1579,15 @@ function InsuranceRowCard({
     carrier: carrierDisplay,
   });
 
+  // Real carrier quotes get the same gold "winner" styling as the #1 ranked
+  // quote on the insurance page; estimate-only cards stay plain.
+  const quoted = hasRealCarrierQuote(summary);
   return (
-    <Card className="hover:shadow-md transition-shadow group">
+    <Card
+      className={cn("hover:shadow-md transition-shadow group", insuranceCardHighlightClass(summary))}
+      data-testid={`insurance-card-${row.key}`}
+      data-quoted={quoted ? "true" : "false"}
+    >
       <CardContent className="py-4">
         <div className="flex flex-col lg:flex-row lg:items-center gap-4">
           {/* Address + meta */}
@@ -1613,6 +1623,18 @@ function InsuranceRowCard({
 
           {/* Insurance stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-sm flex-1">
+            {quoted && summary.carrier && (
+              <div
+                className="col-span-2 sm:col-span-4 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5"
+                data-testid={`insurance-winner-carrier-${row.key}`}
+              >
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-yellow-800">Lowest quote</span>
+                <span className="min-w-0 break-words text-base font-bold">{summary.carrier}</span>
+                <span className="font-mono text-sm font-semibold text-primary">
+                  {formatCurrency(annual!)}/yr · {formatCurrency(monthly!)}/mo
+                </span>
+              </div>
+            )}
             <div>
               <p className="text-xs text-muted-foreground">Annual Premium</p>
               <p className="font-semibold">{annual != null ? `${formatCurrency(annual)}/yr` : "—"}</p>

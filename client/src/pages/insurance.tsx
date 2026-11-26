@@ -25,7 +25,11 @@ import {
   RUNNING_QUOTES_TITLE,
   SAVED_QUOTES_QUERY_KEY,
   STALE_QUOTE_MESSAGE,
+  EDIT_RATING_DETAILS_LABEL,
+  HIDE_RATING_DETAILS_LABEL,
   anyQuoteRunRunning,
+  rankedQuoteClass,
+  savedQuotesLayout,
   fetchSavedQuoteState,
   findQuoteRunForAddress,
   findSavedQuoteForAddress,
@@ -1151,6 +1155,9 @@ function InsuranceQuoteWorkspaceInner({ embedded }: InsuranceQuoteWorkspaceProps
     ? findQuoteRunForAddress(savedQuotesQuery.data?.runs, address, policyType || "HO3")
     : null;
   const persistedRunDisplay = quoteRunDisplay(persistedRun);
+  // Returning with saved quotes: rating details stay collapsed until opened.
+  const [ratingDetailsExpanded, setRatingDetailsExpanded] = useState(false);
+  useEffect(() => { setRatingDetailsExpanded(false); }, [address]);
   const [persistedNow, setPersistedNow] = useState(() => Date.now());
   useEffect(() => {
     if (persistedRunDisplay !== "running") return;
@@ -2747,6 +2754,70 @@ function InsuranceQuoteWorkspaceInner({ embedded }: InsuranceQuoteWorkspaceProps
 
   </>
   );
+  // Saved carrier quotes (with the Tateo & Co. disclosure). A returning user
+  // sees them at the top of the page with the rating details collapsed.
+  const showSavedQuotes = !!savedQuote &&
+    qrStatus !== "starting" &&
+    qrStatus !== "pending" &&
+    persistedRunDisplay !== "running" &&
+    !(qrQuotes.length > 0 && qrResultsEpoch === quoteEpochRef.current);
+  const { savedQuotesOnTop: savedQuotesOnTopLayout, ratingDetailsCollapsed: ratingDetailsCollapsedLayout } =
+    savedQuotesLayout(showSavedQuotes, ratingDetailsExpanded);
+  // The purchase page's embedded quote keeps its existing layout.
+  const savedQuotesOnTop = !embedded && savedQuotesOnTopLayout;
+  const ratingDetailsCollapsed = !embedded && ratingDetailsCollapsedLayout;
+  const savedQuotesBlock = savedQuote ? (
+                  <div className="mb-4 space-y-2" data-testid="saved-quote-results">
+                    <p className="text-xs font-semibold text-primary">
+                      Your saved carrier quotes · Quoted {formatQuotedDate(savedQuote.completedAt)}
+                    </p>
+                    {savedQuote.stale && (
+                      <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-950" data-testid="saved-quote-stale">
+                        {STALE_QUOTE_MESSAGE}
+                      </p>
+                    )}
+                    {savedQuote.quotes.slice(0, 3).map((q, i) => (
+                      <div
+                        key={q.siteName + i}
+                        className={`p-3 rounded-lg border ${rankedQuoteClass(i)}`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-start gap-3">
+                            <span className="text-base mt-0.5">{i + 1}</span>
+                            <div>
+                              <div className="text-sm font-semibold">{q.siteName}</div>
+                              <div className="text-xs text-muted-foreground mt-0.5 space-y-0.5">
+                                <div>Coverage A: {q.coverageA > 0 ? fmt(q.coverageA) : "Unavailable"}</div>
+                                <div>Hurricane deductible: {q.hurricaneDeductible || "—"}</div>
+                                <div>AOP deductible: {q.aop || "—"}</div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0 ml-2">
+                            <div className="text-base font-bold font-mono text-primary">{fmt(q.annualPremium)}/yr</div>
+                            <div className="text-xs text-muted-foreground">{fmt(q.monthlyPremium)}/mo</div>
+                            {q.quoteUrl && (
+                              <a
+                                href={q.quoteUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs text-primary underline mt-1 block"
+                              >
+                                View quote →
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    <p className="text-[10px] text-muted-foreground text-center leading-relaxed pt-1">
+                      Real-time carrier rates via Tateo &amp; Co ·
+                      Tateo Insurance Corp · License #L132640 ·
+                      Not a binding quote. Coverage not effective
+                      until confirmed by a licensed agent.
+                    </p>
+                  </div>
+  ) : null;
   const liveQuotesCard = (
   <>
             {/* ── SECTION 2: Live carrier quotes ── */}
@@ -3053,62 +3124,7 @@ function InsuranceQuoteWorkspaceInner({ embedded }: InsuranceQuoteWorkspaceProps
                   )}
 
                   {/* Saved results from the account (shown when no live run is on screen) */}
-                  {savedQuote &&
-                    qrStatus !== "starting" &&
-                    qrStatus !== "pending" &&
-                    persistedRunDisplay !== "running" &&
-                    !(qrQuotes.length > 0 && qrResultsEpoch === quoteEpochRef.current) && (
-                    <div className="mb-4 space-y-2" data-testid="saved-quote-results">
-                      <p className="text-xs font-semibold text-primary">
-                        Your saved carrier quotes · Quoted {formatQuotedDate(savedQuote.completedAt)}
-                      </p>
-                      {savedQuote.stale && (
-                        <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-950" data-testid="saved-quote-stale">
-                          {STALE_QUOTE_MESSAGE}
-                        </p>
-                      )}
-                      {savedQuote.quotes.slice(0, 3).map((q, i) => (
-                        <div
-                          key={q.siteName + i}
-                          className={`p-3 rounded-lg border ${i === 0 ? "border-yellow-300 bg-yellow-50" : "border-border bg-muted/20"}`}
-                        >
-                          <div className="flex items-start justify-between">
-                            <div className="flex items-start gap-3">
-                              <span className="text-base mt-0.5">{i + 1}</span>
-                              <div>
-                                <div className="text-sm font-semibold">{q.siteName}</div>
-                                <div className="text-xs text-muted-foreground mt-0.5 space-y-0.5">
-                                  <div>Coverage A: {q.coverageA > 0 ? fmt(q.coverageA) : "Unavailable"}</div>
-                                  <div>Hurricane deductible: {q.hurricaneDeductible || "—"}</div>
-                                  <div>AOP deductible: {q.aop || "—"}</div>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="text-right shrink-0 ml-2">
-                              <div className="text-base font-bold font-mono text-primary">{fmt(q.annualPremium)}/yr</div>
-                              <div className="text-xs text-muted-foreground">{fmt(q.monthlyPremium)}/mo</div>
-                              {q.quoteUrl && (
-                                <a
-                                  href={q.quoteUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-xs text-primary underline mt-1 block"
-                                >
-                                  View quote →
-                                </a>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                      <p className="text-[10px] text-muted-foreground text-center leading-relaxed pt-1">
-                        Real-time carrier rates via Tateo &amp; Co ·
-                        Tateo Insurance Corp · License #L132640 ·
-                        Not a binding quote. Coverage not effective
-                        until confirmed by a licensed agent.
-                      </p>
-                    </div>
-                  )}
+                  {showSavedQuotes && !savedQuotesOnTop && savedQuotesBlock}
 
                   {/* Quotes (top 3) */}
                   {qrStatus === "success" && <p className="mb-3 text-xs font-semibold text-primary">Ranking top 3 · Lowest annual premium first</p>}
@@ -3117,11 +3133,7 @@ function InsuranceQuoteWorkspaceInner({ embedded }: InsuranceQuoteWorkspaceProps
                       {qrQuotes.slice(0, 3).map((q, i) => (
                         <div
                           key={q.siteName + i}
-                          className={`p-3 rounded-lg border ${
-                            i === 0
-                              ? "border-yellow-300 bg-yellow-50"
-                              : "border-border bg-muted/20"
-                          }`}
+                          className={`p-3 rounded-lg border ${rankedQuoteClass(i)}`}
                         >
                           <div className="flex items-start justify-between">
                             <div className="flex items-start gap-3">
@@ -3729,10 +3741,40 @@ function InsuranceQuoteWorkspaceInner({ embedded }: InsuranceQuoteWorkspaceProps
             <div className="h-1.5 w-full rounded-full bg-primary" />
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-
+          {savedQuotesOnTop && (
+            <Card className="border shadow-sm" data-testid="saved-quotes-top">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-primary shrink-0" /> Your Carrier Quotes
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {savedQuotesBlock}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-auto w-full max-w-full whitespace-normal py-2 gap-2"
+                  aria-expanded={!ratingDetailsCollapsed}
+                  aria-controls="insurance-rating-details"
+                  onClick={() => setRatingDetailsExpanded(open => !open)}
+                  data-testid="toggle-rating-details"
+                >
+                  <Pencil className="h-3.5 w-3.5 shrink-0" />
+                  {ratingDetailsCollapsed ? EDIT_RATING_DETAILS_LABEL : HIDE_RATING_DETAILS_LABEL}
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+          {/* Kept mounted while collapsed so answers and quote state survive. */}
+          <div
+            id="insurance-rating-details"
+            // `hidden` alone loses to the `grid` utility, so swap the class too.
+            className={ratingDetailsCollapsed ? "hidden" : "grid grid-cols-1 lg:grid-cols-2 gap-6 items-start"}
+            hidden={ratingDetailsCollapsed}
+            data-testid="insurance-rating-details"
+          >
             {estimateCard}
-
             {liveQuotesCard}
           </div>
 

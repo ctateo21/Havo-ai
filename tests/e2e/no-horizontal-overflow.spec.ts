@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "./quote-access-fixture";
 import { officialTaxFixture } from "./official-tax-fixture";
+import { normalizeQuoteAddress } from "../../shared/quote-address";
 
 // Every page must fit the viewport: no horizontal scroll, no sideways wobble,
 // no blank strip on the right. All provider and QuoteRUSH calls are mocked.
@@ -32,10 +33,33 @@ const TEST_USER = {
   updated_at: "2026-01-01T00:00:00.000Z",
 };
 
+// Saved carrier quotes for ADDRESS (synthetic carriers; no live QuoteRUSH).
+const SAVED_QUOTES = {
+  results: [{
+    addressNormalized: normalizeQuoteAddress(ADDRESS),
+    policyType: "HO3",
+    leadId: 1,
+    completedAt: "2026-11-20T12:00:00.000Z",
+    stale: false,
+    bestCarrier: "Example Peninsula Mutual Insurance Company",
+    bestAnnual: 2182,
+    occupancy: "primary",
+    quotes: [
+      ["Example Peninsula Mutual Insurance Company", 2182, 181.83],
+      ["Sample Coastal Casualty", 2410, 200.83],
+      ["Demo Homeowners Exchange", 2675, 222.92],
+    ].map(([siteName, annualPremium, monthlyPremium], i) => ({
+      siteName, annualPremium, monthlyPremium, coverageA: 400_000, hurricaneDeductible: "2%",
+      aop: "$2,500", quoteUrl: `https://quotes.example.test/${i + 1}`, quoteDate: "2026-11-20", rank: i + 1,
+    })),
+  }],
+  runs: [],
+};
+
 const json = (route: Route, body: unknown) =>
   route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
 
-async function installMocks(page: Page, signedIn: boolean): Promise<void> {
+async function installMocks(page: Page, signedIn: boolean, options: { savedQuotes?: boolean } = {}): Promise<void> {
   await page.route("**/*", async route => {
     const url = new URL(route.request().url());
     const method = route.request().method();
@@ -56,7 +80,7 @@ async function installMocks(page: Page, signedIn: boolean): Promise<void> {
         "/api/mortgage-rates": { conventional: 6.5, fha: 6, va: 6, usda: 6, source: "synthetic browser fixture", lastUpdated: null },
         "/api/ami": { annualAMI: 80_000, monthlyAMI: 6_667, areaName: "Synthetic test area" },
         "/api/subscription/status": { active: true, status: "browser-test" },
-        "/api/insurance/my-quotes": { results: [], runs: [] },
+        "/api/insurance/my-quotes": options.savedQuotes ? SAVED_QUOTES : { results: [], runs: [] },
         "/api/insurance/shared-estimate": { estimate: null },
         "/api/profile/status": {},
       };
@@ -69,6 +93,13 @@ async function installMocks(page: Page, signedIn: boolean): Promise<void> {
     if (url.pathname.startsWith("/rest/v1/")) {
       const table = url.pathname.split("/rest/v1/")[1]?.split(/[?/]/)[0];
       const profile = signedIn && table === "profiles" && method === "GET";
+      if (options.savedQuotes && signedIn && table === "insurance_scenarios" && method === "GET") {
+        return json(route, [{
+          id: "quoted-card", user_id: TEST_USER.id, address: ADDRESS, saved_at: "2026-11-20T12:00:00.000Z",
+          annual_premium: 2600, coverage_a: 400_000, policy_type: "HO3", policy_type_source: "default_rule",
+          user_answer_sources: {},
+        }]);
+      }
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -268,6 +299,62 @@ for (const viewport of VIEWPORTS) {
         }
       });
     }
+
+    test("quoted dashboard insurance card is highlighted, names the winner and fits", async ({ page }) => {
+      await installMocks(page, true, { savedQuotes: true });
+      await page.goto("/dashboard?tab=insurance");
+      const card = page.locator('[data-testid^="insurance-card-"][data-quoted="true"]').first();
+      await expect(card).toBeVisible();
+      await expect(card).toHaveClass(/border-yellow-300/);
+      await expect(card).toHaveClass(/bg-yellow-50/);
+      const winner = card.locator('[data-testid^="insurance-winner-carrier-"]');
+      await expect(winner).toContainText("Example Peninsula Mutual Insurance Company");
+      await expect(winner).toContainText("$2,182/yr");
+      await expect(winner).toContainText("$182/mo");
+      await expectFitsViewport(page, "dashboard quoted insurance card");
+    });
+
+    test("estimate-only dashboard insurance card stays plain", async ({ page }) => {
+      await installMocks(page, true, { savedQuotes: true });
+      await page.route("**/api/insurance/my-quotes", route => json(route, { results: [], runs: [] }));
+      await page.goto("/dashboard?tab=insurance");
+      const card = page.locator('[data-testid^="insurance-card-"]').first();
+      await expect(card).toBeVisible();
+      await expect(card).toHaveAttribute("data-quoted", "false");
+      await expect(card).not.toHaveClass(/bg-yellow-50/);
+      await expect(card.locator('[data-testid^="insurance-winner-carrier-"]')).toHaveCount(0);
+    });
+
+    test("returning with saved quotes: quotes first, rating details collapsed, fits", async ({ page }) => {
+      test.setTimeout(60_000);
+      await installMocks(page, true, { savedQuotes: true });
+      await page.goto(`/insurance?address=${encodeURIComponent(ADDRESS)}`);
+      const top = page.getByTestId("saved-quotes-top");
+      await expect(top).toBeVisible();
+      await expect(top.getByTestId("saved-quote-results")).toContainText("Your saved carrier quotes");
+      await expect(top).toContainText("Real-time carrier rates via Tateo & Co");
+      await expect(page.getByTestId("saved-quote-results")).toHaveCount(1);
+      const toggle = page.getByRole("button", { name: "Edit rating details" });
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect(page.getByTestId("insurance-rating-details")).toBeHidden();
+      await expectFitsViewport(page, "insurance returning with saved quotes (collapsed)");
+      await toggle.click();
+      await expect(page.getByRole("button", { name: "Hide rating details" })).toHaveAttribute("aria-expanded", "true");
+      await expect(page.getByTestId("insurance-rating-details")).toBeVisible();
+      await expect(page.getByText("General Insurance Estimate")).toBeVisible();
+      // Re-running is available exactly as before once the details are open.
+      await expect(page.getByRole("button", { name: "Get Live Quotes" })).toBeVisible();
+      await expectFitsViewport(page, "insurance returning with saved quotes (expanded)");
+    });
+
+    test("no saved quotes: insurance details open with no collapse control", async ({ page }) => {
+      await installMocks(page, true);
+      await page.goto(`/insurance?address=${encodeURIComponent(ADDRESS)}`);
+      await expect(page.getByText("General Insurance Estimate")).toBeVisible();
+      await expect(page.getByTestId("insurance-rating-details")).toBeVisible();
+      await expect(page.getByTestId("saved-quotes-top")).toHaveCount(0);
+      await expect(page.getByTestId("toggle-rating-details")).toHaveCount(0);
+    });
 
     test("dashboard tabs fit the screen", async ({ page }) => {
       test.setTimeout(120_000);

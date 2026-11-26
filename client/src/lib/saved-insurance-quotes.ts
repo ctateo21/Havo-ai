@@ -105,6 +105,45 @@ export function insuranceCardSummary(
   };
 }
 
+// ── Winner highlight (shared by the ranked quote lists and dashboard card) ──
+/** Gold "winner" styling of the #1 (lowest) carrier quote. */
+export const WINNER_QUOTE_HIGHLIGHT_CLASS = "border-yellow-300 bg-yellow-50";
+export const RANKED_QUOTE_CLASS = "border-border bg-muted/20";
+
+/** Border/background tokens for a ranked carrier quote row (0 = winner). */
+export function rankedQuoteClass(index: number): string {
+  return index === 0 ? WINNER_QUOTE_HIGHLIGHT_CLASS : RANKED_QUOTE_CLASS;
+}
+
+/** True only when the card shows a real saved carrier quote (not an estimate). */
+export function hasRealCarrierQuote(summary: InsuranceCardSummary): boolean {
+  return summary.status === "Quoted" && summary.annual != null && summary.annual > 0;
+}
+
+/** Dashboard card highlight: winner styling for real quotes, none otherwise. */
+export function insuranceCardHighlightClass(summary: InsuranceCardSummary): string {
+  return hasRealCarrierQuote(summary) ? WINNER_QUOTE_HIGHLIGHT_CLASS : "";
+}
+
+/**
+ * Insurance page layout for a returning user. With saved carrier quotes on
+ * screen, the quotes go first and the rating details start collapsed until
+ * the user opens them; otherwise (first visit, no quotes, a run in progress)
+ * the page is unchanged with the details open.
+ */
+export function savedQuotesLayout(showingSavedQuotes: boolean, detailsExpanded: boolean): {
+  savedQuotesOnTop: boolean;
+  ratingDetailsCollapsed: boolean;
+} {
+  return {
+    savedQuotesOnTop: showingSavedQuotes,
+    ratingDetailsCollapsed: showingSavedQuotes && !detailsExpanded,
+  };
+}
+
+export const EDIT_RATING_DETAILS_LABEL = "Edit rating details";
+export const HIDE_RATING_DETAILS_LABEL = "Hide rating details";
+
 /** Estimate sent with qr-start so the run can be compared to Havo's model. */
 export function quoteEstimatePayload(
   manualAnnualPremium: number | null | undefined,
