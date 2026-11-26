@@ -3043,7 +3043,7 @@ function InsuranceQuoteWorkspaceInner({ embedded }: InsuranceQuoteWorkspaceProps
                       <Button
                         size="sm"
                         variant="outline"
-                        className="h-auto max-w-full whitespace-normal py-2 text-center"
+                        className="h-auto w-full max-w-full whitespace-normal py-2 text-center leading-snug"
                         onClick={() => void requireAccount()}
                         data-testid="guest-live-quote-prompt"
                       >
